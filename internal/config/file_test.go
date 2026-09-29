@@ -18,12 +18,7 @@ func TestLoad_NonExistentFileCreatesDefault(t *testing.T) {
 		t.Fatalf("Load failed for non-existent file: %v", err)
 	}
 
-	check := func(name string, got, want any) {
-		t.Helper()
-		if got != want {
-			t.Errorf("%s = %v, want %v", name, got, want)
-		}
-	}
+	check := newChecker(t)
 
 	check("Port", cfg.Port, 7171)
 	check("BindAddress", cfg.BindAddress, "0.0.0.0")
@@ -54,12 +49,7 @@ func TestLoad_NonExistentFileWithEnvDoesNotPersistEnvToDisk(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	check := func(name string, got, want any) {
-		t.Helper()
-		if got != want {
-			t.Errorf("%s = %v, want %v", name, got, want)
-		}
-	}
+	check := newChecker(t)
 
 	// In-memory config has overrides
 	check("Port", cfg.Port, 9090)
@@ -101,12 +91,7 @@ func TestLoad_ExistingFileWithEnvOverrides(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	check := func(name string, got, want any) {
-		t.Helper()
-		if got != want {
-			t.Errorf("%s = %v, want %v", name, got, want)
-		}
-	}
+	check := newChecker(t)
 
 	// Environment variable should override file setting
 	check("Port", cfg.Port, 8888)
@@ -145,12 +130,7 @@ func TestSave_PreservesElementStructureAndValidates(t *testing.T) {
 		t.Fatalf("failed to load saved config: %v", err)
 	}
 
-	check := func(name string, got, want any) {
-		t.Helper()
-		if got != want {
-			t.Errorf("%s = %v, want %v", name, got, want)
-		}
-	}
+	check := newChecker(t)
 
 	check("Port", loaded.Port, 8081)
 	check("InstanceName", loaded.InstanceName, "Production Node")

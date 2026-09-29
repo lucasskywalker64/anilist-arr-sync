@@ -13,12 +13,7 @@ func TestNewDefault(t *testing.T) {
 		t.Fatal("expected non-nil default config")
 	}
 
-	check := func(name string, got, want any) {
-		t.Helper()
-		if got != want {
-			t.Errorf("%s = %v, want %v", name, got, want)
-		}
-	}
+	check := newChecker(t)
 
 	check("BindAddress", cfg.BindAddress, "0.0.0.0")
 	check("Port", cfg.Port, 7171)

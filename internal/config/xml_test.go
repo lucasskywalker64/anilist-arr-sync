@@ -18,12 +18,7 @@ func TestParseXML_DocumentedDefaults(t *testing.T) {
 		t.Fatalf("unexpected error parsing partial XML: %v", err)
 	}
 
-	check := func(name string, got, want any) {
-		t.Helper()
-		if got != want {
-			t.Errorf("%s = %v, want %v", name, got, want)
-		}
-	}
+	check := newChecker(t)
 
 	check("Port", cfg.Port, 8080)
 	check("BindAddress", cfg.BindAddress, "0.0.0.0")
@@ -82,12 +77,7 @@ func TestParseXML_ServarrSample(t *testing.T) {
 		t.Fatalf("unexpected error parsing Servarr sample XML: %v", err)
 	}
 
-	check := func(name string, got, want any) {
-		t.Helper()
-		if got != want {
-			t.Errorf("%s = %v, want %v", name, got, want)
-		}
-	}
+	check := newChecker(t)
 
 	check("BindAddress", cfg.BindAddress, "127.0.0.1")
 	check("EnableSsl", cfg.EnableSsl, true)
@@ -127,12 +117,7 @@ func TestToXML_RoundTrip(t *testing.T) {
 		t.Fatalf("ParseXML of serialized XML failed: %v", err)
 	}
 
-	check := func(name string, got, want any) {
-		t.Helper()
-		if got != want {
-			t.Errorf("%s = %v, want %v", name, got, want)
-		}
-	}
+	check := newChecker(t)
 
 	check("InstanceName", loaded.InstanceName, orig.InstanceName)
 	check("Port", loaded.Port, orig.Port)
