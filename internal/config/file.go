@@ -12,21 +12,22 @@ import (
 // If the configuration file does not exist, Load creates it with default values
 // and permissions locked to POSIX 0600 on Unix systems.
 func Load(path string, environ []string) (*Config, error) {
-	_, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		if err := Save(path, NewDefault()); err != nil {
+	prepare := func(cfg *Config) (*Config, error) {
+		if err := cfg.ApplyEnv(environ); err != nil {
 			return nil, err
-		}
-		cfg := NewDefault()
-		if len(environ) > 0 {
-			if err := cfg.ApplyEnv(environ); err != nil {
-				return nil, err
-			}
 		}
 		if err := cfg.Validate(); err != nil {
 			return nil, err
 		}
 		return cfg, nil
+	}
+
+	_, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		if err := Save(path, NewDefault()); err != nil {
+			return nil, err
+		}
+		return prepare(NewDefault())
 	} else if err != nil {
 		return nil, fmt.Errorf("failed to inspect config file %s: %w", path, err)
 	}
@@ -45,17 +46,7 @@ func Load(path string, environ []string) (*Config, error) {
 		return nil, err
 	}
 
-	if len(environ) > 0 {
-		if err := cfg.ApplyEnv(environ); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-
-	return cfg, nil
+	return prepare(cfg)
 }
 
 // Save serializes the given Config to XML and writes it to disk with POSIX 0600 permissions.

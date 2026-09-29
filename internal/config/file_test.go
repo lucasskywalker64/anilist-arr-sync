@@ -18,12 +18,15 @@ func TestLoad_NonExistentFileCreatesDefault(t *testing.T) {
 		t.Fatalf("Load failed for non-existent file: %v", err)
 	}
 
-	if cfg.Port != 7171 {
-		t.Errorf("Port = %d, want default 7171", cfg.Port)
+	check := func(name string, got, want any) {
+		t.Helper()
+		if got != want {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
 	}
-	if cfg.BindAddress != "0.0.0.0" {
-		t.Errorf("BindAddress = %q, want default 0.0.0.0", cfg.BindAddress)
-	}
+
+	check("Port", cfg.Port, 7171)
+	check("BindAddress", cfg.BindAddress, "0.0.0.0")
 
 	info, err := os.Stat(configPath)
 	if err != nil {
@@ -51,13 +54,16 @@ func TestLoad_NonExistentFileWithEnvDoesNotPersistEnvToDisk(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
+	check := func(name string, got, want any) {
+		t.Helper()
+		if got != want {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
+	}
+
 	// In-memory config has overrides
-	if cfg.Port != 9090 {
-		t.Errorf("Port = %d, want overridden 9090", cfg.Port)
-	}
-	if cfg.ApiKey != "super-secret-key" {
-		t.Errorf("ApiKey = %q, want overridden super-secret-key", cfg.ApiKey)
-	}
+	check("Port", cfg.Port, 9090)
+	check("ApiKey", cfg.ApiKey, "super-secret-key")
 
 	// File on disk must NOT contain environment overrides, but default values
 	fileData, err := os.ReadFile(configPath)
@@ -70,12 +76,8 @@ func TestLoad_NonExistentFileWithEnvDoesNotPersistEnvToDisk(t *testing.T) {
 		t.Fatalf("failed to parse file on disk: %v", err)
 	}
 
-	if fileCfg.Port != 7171 {
-		t.Errorf("file Port on disk = %d, want default 7171", fileCfg.Port)
-	}
-	if fileCfg.ApiKey != "" {
-		t.Errorf("file ApiKey on disk = %q, want empty default", fileCfg.ApiKey)
-	}
+	check("file Port on disk", fileCfg.Port, 7171)
+	check("file ApiKey on disk", fileCfg.ApiKey, "")
 }
 
 func TestLoad_ExistingFileWithEnvOverrides(t *testing.T) {
@@ -99,18 +101,19 @@ func TestLoad_ExistingFileWithEnvOverrides(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
+	check := func(name string, got, want any) {
+		t.Helper()
+		if got != want {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
+	}
+
 	// Environment variable should override file setting
-	if cfg.Port != 8888 {
-		t.Errorf("Port = %d, want overridden 8888", cfg.Port)
-	}
+	check("Port", cfg.Port, 8888)
 	// File setting preserved
-	if cfg.InstanceName != "Existing Server" {
-		t.Errorf("InstanceName = %q, want Existing Server", cfg.InstanceName)
-	}
+	check("InstanceName", cfg.InstanceName, "Existing Server")
 	// Missing XML fields populated from defaults
-	if cfg.SyncIntervalHours != 4 {
-		t.Errorf("SyncIntervalHours = %d, want default 4", cfg.SyncIntervalHours)
-	}
+	check("SyncIntervalHours", cfg.SyncIntervalHours, 4)
 }
 
 func TestSave_PreservesElementStructureAndValidates(t *testing.T) {
@@ -142,15 +145,16 @@ func TestSave_PreservesElementStructureAndValidates(t *testing.T) {
 		t.Fatalf("failed to load saved config: %v", err)
 	}
 
-	if loaded.Port != 8081 {
-		t.Errorf("Port = %d, want 8081", loaded.Port)
+	check := func(name string, got, want any) {
+		t.Helper()
+		if got != want {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
 	}
-	if loaded.InstanceName != "Production Node" {
-		t.Errorf("InstanceName = %q, want Production Node", loaded.InstanceName)
-	}
-	if loaded.RadarrUrl != "http://radarr:7878" {
-		t.Errorf("RadarrUrl = %q, want http://radarr:7878", loaded.RadarrUrl)
-	}
+
+	check("Port", loaded.Port, 8081)
+	check("InstanceName", loaded.InstanceName, "Production Node")
+	check("RadarrUrl", loaded.RadarrUrl, "http://radarr:7878")
 }
 
 func TestSave_RejectsInvalidConfig(t *testing.T) {

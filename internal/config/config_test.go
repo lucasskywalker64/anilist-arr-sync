@@ -13,99 +13,44 @@ func TestNewDefault(t *testing.T) {
 		t.Fatal("expected non-nil default config")
 	}
 
-	if cfg.BindAddress != "0.0.0.0" {
-		t.Errorf("BindAddress = %q, want %q", cfg.BindAddress, "0.0.0.0")
+	check := func(name string, got, want any) {
+		t.Helper()
+		if got != want {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
 	}
-	if cfg.Port != 7171 {
-		t.Errorf("Port = %d, want %d", cfg.Port, 7171)
-	}
-	if cfg.UrlBase != "" {
-		t.Errorf("UrlBase = %q, want empty", cfg.UrlBase)
-	}
-	if cfg.EnableSsl != false {
-		t.Errorf("EnableSsl = %v, want false", cfg.EnableSsl)
-	}
-	if cfg.SslPort != 7272 {
-		t.Errorf("SslPort = %d, want %d", cfg.SslPort, 7272)
-	}
-	if cfg.AuthenticationMethod != "Forms" {
-		t.Errorf("AuthenticationMethod = %q, want %q", cfg.AuthenticationMethod, "Forms")
-	}
-	if cfg.AuthenticationRequired != "DisabledForLocalAddresses" {
-		t.Errorf("AuthenticationRequired = %q, want %q", cfg.AuthenticationRequired, "DisabledForLocalAddresses")
-	}
-	if cfg.LogLevel != "Info" {
-		t.Errorf("LogLevel = %q, want %q", cfg.LogLevel, "Info")
-	}
-	if cfg.ConsoleLogLevel != "Info" {
-		t.Errorf("ConsoleLogLevel = %q, want %q", cfg.ConsoleLogLevel, "Info")
-	}
-	if cfg.LogSizeLimit != 10 {
-		t.Errorf("LogSizeLimit = %d, want %d", cfg.LogSizeLimit, 10)
-	}
-	if cfg.LogRotate != 5 {
-		t.Errorf("LogRotate = %d, want %d", cfg.LogRotate, 5)
-	}
-	if cfg.InstanceName != "AniList Arr Sync" {
-		t.Errorf("InstanceName = %q, want %q", cfg.InstanceName, "AniList Arr Sync")
-	}
-	if cfg.LaunchBrowser != true {
-		t.Errorf("LaunchBrowser = %v, want true", cfg.LaunchBrowser)
-	}
-	if cfg.EnableDesktopNotifications != false {
-		t.Errorf("EnableDesktopNotifications = %v, want false", cfg.EnableDesktopNotifications)
-	}
-	if cfg.UpdateAutomatically != true {
-		t.Errorf("UpdateAutomatically = %v, want true", cfg.UpdateAutomatically)
-	}
-	if cfg.UpdateMechanism != "BuiltIn" {
-		t.Errorf("UpdateMechanism = %q, want %q", cfg.UpdateMechanism, "BuiltIn")
-	}
-	if cfg.DatabasePath != "sync.db" {
-		t.Errorf("DatabasePath = %q, want %q", cfg.DatabasePath, "sync.db")
-	}
-	if cfg.AniListTvStatus != "CURRENT" {
-		t.Errorf("AniListTvStatus = %q, want %q", cfg.AniListTvStatus, "CURRENT")
-	}
-	if cfg.AniListMovieStatus != "CURRENT" {
-		t.Errorf("AniListMovieStatus = %q, want %q", cfg.AniListMovieStatus, "CURRENT")
-	}
-	if cfg.AniListIncludeUnreleased != false {
-		t.Errorf("AniListIncludeUnreleased = %v, want false", cfg.AniListIncludeUnreleased)
-	}
-	if cfg.RadarrQualityProfileId != 1 {
-		t.Errorf("RadarrQualityProfileId = %d, want 1", cfg.RadarrQualityProfileId)
-	}
-	if cfg.RadarrSearchOnAdd != false {
-		t.Errorf("RadarrSearchOnAdd = %v, want false", cfg.RadarrSearchOnAdd)
-	}
-	if cfg.SonarrQualityProfileId != 1 {
-		t.Errorf("SonarrQualityProfileId = %d, want 1", cfg.SonarrQualityProfileId)
-	}
-	if cfg.SonarrSeriesType != "anime" {
-		t.Errorf("SonarrSeriesType = %q, want %q", cfg.SonarrSeriesType, "anime")
-	}
-	if cfg.SonarrSearchOnAdd != false {
-		t.Errorf("SonarrSearchOnAdd = %v, want false", cfg.SonarrSearchOnAdd)
-	}
-	if cfg.TagName != "anilist-sync" {
-		t.Errorf("TagName = %q, want %q", cfg.TagName, "anilist-sync")
-	}
-	if cfg.SyncIntervalHours != 4 {
-		t.Errorf("SyncIntervalHours = %d, want %d", cfg.SyncIntervalHours, 4)
-	}
-	if cfg.DateToleranceDays != 14 {
-		t.Errorf("DateToleranceDays = %d, want %d", cfg.DateToleranceDays, 14)
-	}
-	if cfg.ConfidenceThreshold != 0.60 {
-		t.Errorf("ConfidenceThreshold = %f, want 0.60", cfg.ConfidenceThreshold)
-	}
-	if cfg.UnmonitorDropped != false {
-		t.Errorf("UnmonitorDropped = %v, want false", cfg.UnmonitorDropped)
-	}
-	if cfg.FirstRunDryRun != true {
-		t.Errorf("FirstRunDryRun = %v, want true", cfg.FirstRunDryRun)
-	}
+
+	check("BindAddress", cfg.BindAddress, "0.0.0.0")
+	check("Port", cfg.Port, 7171)
+	check("UrlBase", cfg.UrlBase, "")
+	check("EnableSsl", cfg.EnableSsl, false)
+	check("SslPort", cfg.SslPort, 7272)
+	check("AuthenticationMethod", cfg.AuthenticationMethod, "Forms")
+	check("AuthenticationRequired", cfg.AuthenticationRequired, "DisabledForLocalAddresses")
+	check("LogLevel", cfg.LogLevel, "Info")
+	check("ConsoleLogLevel", cfg.ConsoleLogLevel, "Info")
+	check("LogSizeLimit", cfg.LogSizeLimit, 10)
+	check("LogRotate", cfg.LogRotate, 5)
+	check("InstanceName", cfg.InstanceName, "AniList Arr Sync")
+	check("LaunchBrowser", cfg.LaunchBrowser, true)
+	check("EnableDesktopNotifications", cfg.EnableDesktopNotifications, false)
+	check("UpdateAutomatically", cfg.UpdateAutomatically, true)
+	check("UpdateMechanism", cfg.UpdateMechanism, "BuiltIn")
+	check("DatabasePath", cfg.DatabasePath, "sync.db")
+	check("AniListTvStatus", cfg.AniListTvStatus, "CURRENT")
+	check("AniListMovieStatus", cfg.AniListMovieStatus, "CURRENT")
+	check("AniListIncludeUnreleased", cfg.AniListIncludeUnreleased, false)
+	check("RadarrQualityProfileId", cfg.RadarrQualityProfileId, 1)
+	check("RadarrSearchOnAdd", cfg.RadarrSearchOnAdd, false)
+	check("SonarrQualityProfileId", cfg.SonarrQualityProfileId, 1)
+	check("SonarrSeriesType", cfg.SonarrSeriesType, "anime")
+	check("SonarrSearchOnAdd", cfg.SonarrSearchOnAdd, false)
+	check("TagName", cfg.TagName, "anilist-sync")
+	check("SyncIntervalHours", cfg.SyncIntervalHours, 4)
+	check("DateToleranceDays", cfg.DateToleranceDays, 14)
+	check("ConfidenceThreshold", cfg.ConfidenceThreshold, 0.60)
+	check("UnmonitorDropped", cfg.UnmonitorDropped, false)
+	check("FirstRunDryRun", cfg.FirstRunDryRun, true)
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("default config failed validation: %v", err)

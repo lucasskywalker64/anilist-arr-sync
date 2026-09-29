@@ -37,66 +37,33 @@ func TestApplyEnv_Overrides(t *testing.T) {
 		t.Fatalf("unexpected error applying env: %v", err)
 	}
 
-	if cfg.Port != 8080 {
-		t.Errorf("Port = %d, want 8080", cfg.Port)
+	check := func(name string, got, want any) {
+		t.Helper()
+		if got != want {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
 	}
-	if cfg.BindAddress != "127.0.0.1" {
-		t.Errorf("BindAddress = %q, want 127.0.0.1", cfg.BindAddress)
-	}
-	if !cfg.EnableSsl {
-		t.Errorf("EnableSsl = %v, want true", cfg.EnableSsl)
-	}
-	if cfg.SslCertPath != "/certs/app.crt" {
-		t.Errorf("SslCertPath = %q, want /certs/app.crt", cfg.SslCertPath)
-	}
-	if cfg.SslKeyPath != "/certs/app.key" {
-		t.Errorf("SslKeyPath = %q, want /certs/app.key", cfg.SslKeyPath)
-	}
-	if cfg.AuthenticationMethod != "External" {
-		t.Errorf("AuthenticationMethod = %q, want External", cfg.AuthenticationMethod)
-	}
-	if cfg.ApiKey != "my-secret-token" {
-		t.Errorf("ApiKey = %q, want my-secret-token", cfg.ApiKey)
-	}
-	if cfg.LogLevel != "Debug" {
-		t.Errorf("LogLevel = %q, want Debug", cfg.LogLevel)
-	}
-	if cfg.LogSizeLimit != 50 {
-		t.Errorf("LogSizeLimit = %d, want 50", cfg.LogSizeLimit)
-	}
-	if cfg.InstanceName != "Docker Anime Sync" {
-		t.Errorf("InstanceName = %q, want Docker Anime Sync", cfg.InstanceName)
-	}
-	if cfg.LaunchBrowser {
-		t.Errorf("LaunchBrowser = %v, want false", cfg.LaunchBrowser)
-	}
-	if cfg.UpdateMechanism != "Docker" {
-		t.Errorf("UpdateMechanism = %q, want Docker", cfg.UpdateMechanism)
-	}
-	if cfg.DatabasePath != "/config/sync.db" {
-		t.Errorf("DatabasePath = %q, want /config/sync.db", cfg.DatabasePath)
-	}
-	if cfg.AniListUsername != "kenshiro" {
-		t.Errorf("AniListUsername = %q, want kenshiro", cfg.AniListUsername)
-	}
-	if cfg.RadarrUrl != "http://radarr:7878" {
-		t.Errorf("RadarrUrl = %q, want http://radarr:7878", cfg.RadarrUrl)
-	}
-	if !cfg.RadarrSearchOnAdd {
-		t.Errorf("RadarrSearchOnAdd = %v, want true", cfg.RadarrSearchOnAdd)
-	}
-	if cfg.SonarrSeriesType != "standard" {
-		t.Errorf("SonarrSeriesType = %q, want standard", cfg.SonarrSeriesType)
-	}
-	if cfg.SyncIntervalHours != 8 {
-		t.Errorf("SyncIntervalHours = %d, want 8", cfg.SyncIntervalHours)
-	}
-	if cfg.ConfidenceThreshold != 0.75 {
-		t.Errorf("ConfidenceThreshold = %f, want 0.75", cfg.ConfidenceThreshold)
-	}
-	if cfg.FirstRunDryRun {
-		t.Errorf("FirstRunDryRun = %v, want false", cfg.FirstRunDryRun)
-	}
+
+	check("Port", cfg.Port, 8080)
+	check("BindAddress", cfg.BindAddress, "127.0.0.1")
+	check("EnableSsl", cfg.EnableSsl, true)
+	check("SslCertPath", cfg.SslCertPath, "/certs/app.crt")
+	check("SslKeyPath", cfg.SslKeyPath, "/certs/app.key")
+	check("AuthenticationMethod", cfg.AuthenticationMethod, "External")
+	check("ApiKey", cfg.ApiKey, "my-secret-token")
+	check("LogLevel", cfg.LogLevel, "Debug")
+	check("LogSizeLimit", cfg.LogSizeLimit, 50)
+	check("InstanceName", cfg.InstanceName, "Docker Anime Sync")
+	check("LaunchBrowser", cfg.LaunchBrowser, false)
+	check("UpdateMechanism", cfg.UpdateMechanism, "Docker")
+	check("DatabasePath", cfg.DatabasePath, "/config/sync.db")
+	check("AniListUsername", cfg.AniListUsername, "kenshiro")
+	check("RadarrUrl", cfg.RadarrUrl, "http://radarr:7878")
+	check("RadarrSearchOnAdd", cfg.RadarrSearchOnAdd, true)
+	check("SonarrSeriesType", cfg.SonarrSeriesType, "standard")
+	check("SyncIntervalHours", cfg.SyncIntervalHours, 8)
+	check("ConfidenceThreshold", cfg.ConfidenceThreshold, 0.75)
+	check("FirstRunDryRun", cfg.FirstRunDryRun, false)
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("config after env overrides failed validation: %v", err)

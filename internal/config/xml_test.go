@@ -18,21 +18,18 @@ func TestParseXML_DocumentedDefaults(t *testing.T) {
 		t.Fatalf("unexpected error parsing partial XML: %v", err)
 	}
 
-	if cfg.Port != 8080 {
-		t.Errorf("Port = %d, want 8080", cfg.Port)
+	check := func(name string, got, want any) {
+		t.Helper()
+		if got != want {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
 	}
-	if cfg.BindAddress != "0.0.0.0" {
-		t.Errorf("BindAddress = %q, want default 0.0.0.0", cfg.BindAddress)
-	}
-	if cfg.LogLevel != "Info" {
-		t.Errorf("LogLevel = %q, want default Info", cfg.LogLevel)
-	}
-	if cfg.SyncIntervalHours != 4 {
-		t.Errorf("SyncIntervalHours = %d, want default 4", cfg.SyncIntervalHours)
-	}
-	if cfg.ConfidenceThreshold != 0.60 {
-		t.Errorf("ConfidenceThreshold = %f, want default 0.60", cfg.ConfidenceThreshold)
-	}
+
+	check("Port", cfg.Port, 8080)
+	check("BindAddress", cfg.BindAddress, "0.0.0.0")
+	check("LogLevel", cfg.LogLevel, "Info")
+	check("SyncIntervalHours", cfg.SyncIntervalHours, 4)
+	check("ConfidenceThreshold", cfg.ConfidenceThreshold, 0.60)
 }
 
 func TestParseXML_ServarrSample(t *testing.T) {
@@ -85,30 +82,21 @@ func TestParseXML_ServarrSample(t *testing.T) {
 		t.Fatalf("unexpected error parsing Servarr sample XML: %v", err)
 	}
 
-	if cfg.BindAddress != "127.0.0.1" {
-		t.Errorf("BindAddress = %q, want 127.0.0.1", cfg.BindAddress)
+	check := func(name string, got, want any) {
+		t.Helper()
+		if got != want {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
 	}
-	if !cfg.EnableSsl {
-		t.Errorf("EnableSsl = %v, want true", cfg.EnableSsl)
-	}
-	if cfg.SslCertPath != "/etc/ssl/cert.pem" {
-		t.Errorf("SslCertPath = %q, want /etc/ssl/cert.pem", cfg.SslCertPath)
-	}
-	if cfg.AniListUsername != "otaku42" {
-		t.Errorf("AniListUsername = %q, want otaku42", cfg.AniListUsername)
-	}
-	if cfg.SonarrSeriesType != "standard" {
-		t.Errorf("SonarrSeriesType = %q, want standard", cfg.SonarrSeriesType)
-	}
-	if cfg.ConfidenceThreshold != 0.85 {
-		t.Errorf("ConfidenceThreshold = %f, want 0.85", cfg.ConfidenceThreshold)
-	}
-	if !cfg.UnmonitorDropped {
-		t.Errorf("UnmonitorDropped = %v, want true", cfg.UnmonitorDropped)
-	}
-	if cfg.FirstRunDryRun {
-		t.Errorf("FirstRunDryRun = %v, want false", cfg.FirstRunDryRun)
-	}
+
+	check("BindAddress", cfg.BindAddress, "127.0.0.1")
+	check("EnableSsl", cfg.EnableSsl, true)
+	check("SslCertPath", cfg.SslCertPath, "/etc/ssl/cert.pem")
+	check("AniListUsername", cfg.AniListUsername, "otaku42")
+	check("SonarrSeriesType", cfg.SonarrSeriesType, "standard")
+	check("ConfidenceThreshold", cfg.ConfidenceThreshold, 0.85)
+	check("UnmonitorDropped", cfg.UnmonitorDropped, true)
+	check("FirstRunDryRun", cfg.FirstRunDryRun, false)
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("parsed config failed validation: %v", err)
@@ -139,18 +127,17 @@ func TestToXML_RoundTrip(t *testing.T) {
 		t.Fatalf("ParseXML of serialized XML failed: %v", err)
 	}
 
-	if loaded.InstanceName != orig.InstanceName {
-		t.Errorf("InstanceName = %q, want %q", loaded.InstanceName, orig.InstanceName)
+	check := func(name string, got, want any) {
+		t.Helper()
+		if got != want {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
 	}
-	if loaded.Port != orig.Port {
-		t.Errorf("Port = %d, want %d", loaded.Port, orig.Port)
-	}
-	if loaded.RadarrUrl != orig.RadarrUrl {
-		t.Errorf("RadarrUrl = %q, want %q", loaded.RadarrUrl, orig.RadarrUrl)
-	}
-	if loaded.LaunchBrowser != orig.LaunchBrowser {
-		t.Errorf("LaunchBrowser = %v, want %v", loaded.LaunchBrowser, orig.LaunchBrowser)
-	}
+
+	check("InstanceName", loaded.InstanceName, orig.InstanceName)
+	check("Port", loaded.Port, orig.Port)
+	check("RadarrUrl", loaded.RadarrUrl, orig.RadarrUrl)
+	check("LaunchBrowser", loaded.LaunchBrowser, orig.LaunchBrowser)
 }
 
 func TestParseXML_InvalidXML(t *testing.T) {
