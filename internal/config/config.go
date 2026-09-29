@@ -1,3 +1,5 @@
+// Package config manages application configuration matching Servarr conventions,
+// environment variable overrides, file persistence, and validation.
 package config
 
 import (
@@ -12,7 +14,7 @@ type Config struct {
 	// Server
 	BindAddress string `xml:"BindAddress"`
 	Port        int    `xml:"Port"`
-	UrlBase     string `xml:"UrlBase"`
+	URLBase     string `xml:"UrlBase"`
 	EnableSsl   bool   `xml:"EnableSsl"`
 	SslPort     int    `xml:"SslPort"`
 	SslCertPath string `xml:"SslCertPath"`
@@ -21,7 +23,7 @@ type Config struct {
 	// Auth
 	AuthenticationMethod   string `xml:"AuthenticationMethod"`
 	AuthenticationRequired string `xml:"AuthenticationRequired"`
-	ApiKey                 string `xml:"ApiKey"`
+	APIKey                 string `xml:"ApiKey"`
 
 	// Log
 	LogLevel        string `xml:"LogLevel"`
@@ -48,16 +50,16 @@ type Config struct {
 	AniListIncludeUnreleased bool   `xml:"AniListIncludeUnreleased"`
 
 	// Radarr
-	RadarrUrl              string `xml:"RadarrUrl"`
-	RadarrApiKey           string `xml:"RadarrApiKey"`
-	RadarrQualityProfileId int    `xml:"RadarrQualityProfileId"`
+	RadarrURL              string `xml:"RadarrUrl"`
+	RadarrAPIKey           string `xml:"RadarrApiKey"`
+	RadarrQualityProfileID int    `xml:"RadarrQualityProfileId"`
 	RadarrRootFolderPath   string `xml:"RadarrRootFolderPath"`
 	RadarrSearchOnAdd      bool   `xml:"RadarrSearchOnAdd"`
 
 	// Sonarr
-	SonarrUrl              string `xml:"SonarrUrl"`
-	SonarrApiKey           string `xml:"SonarrApiKey"`
-	SonarrQualityProfileId int    `xml:"SonarrQualityProfileId"`
+	SonarrURL              string `xml:"SonarrUrl"`
+	SonarrAPIKey           string `xml:"SonarrApiKey"`
+	SonarrQualityProfileID int    `xml:"SonarrQualityProfileId"`
 	SonarrRootFolderPath   string `xml:"SonarrRootFolderPath"`
 	SonarrSeriesType       string `xml:"SonarrSeriesType"`
 	SonarrSearchOnAdd      bool   `xml:"SonarrSearchOnAdd"`
@@ -76,14 +78,14 @@ func NewDefault() *Config {
 	return &Config{
 		BindAddress:                "0.0.0.0",
 		Port:                       7171,
-		UrlBase:                    "",
+		URLBase:                    "",
 		EnableSsl:                  false,
 		SslPort:                    7272,
 		SslCertPath:                "",
 		SslKeyPath:                 "",
 		AuthenticationMethod:       "Forms",
 		AuthenticationRequired:     "DisabledForLocalAddresses",
-		ApiKey:                     "",
+		APIKey:                     "",
 		LogLevel:                   "Info",
 		ConsoleLogLevel:            "Info",
 		LogSizeLimit:               10,
@@ -98,14 +100,14 @@ func NewDefault() *Config {
 		AniListTvStatus:            "CURRENT",
 		AniListMovieStatus:         "CURRENT",
 		AniListIncludeUnreleased:   false,
-		RadarrUrl:                  "",
-		RadarrApiKey:               "",
-		RadarrQualityProfileId:     1,
+		RadarrURL:                  "",
+		RadarrAPIKey:               "",
+		RadarrQualityProfileID:     1,
 		RadarrRootFolderPath:       "",
 		RadarrSearchOnAdd:          false,
-		SonarrUrl:                  "",
-		SonarrApiKey:               "",
-		SonarrQualityProfileId:     1,
+		SonarrURL:                  "",
+		SonarrAPIKey:               "",
+		SonarrQualityProfileID:     1,
 		SonarrRootFolderPath:       "",
 		SonarrSeriesType:           "anime",
 		SonarrSearchOnAdd:          false,

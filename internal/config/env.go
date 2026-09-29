@@ -69,7 +69,7 @@ func (c *Config) applyField(origKey, subKey, val string) error {
 		}
 		c.Port = v
 	case "SERVER__URLBASE":
-		c.UrlBase = val
+		c.URLBase = val
 	case "SERVER__ENABLESSL":
 		v, err := parseBool()
 		if err != nil {
@@ -93,7 +93,7 @@ func (c *Config) applyField(origKey, subKey, val string) error {
 	case "AUTH__AUTHENTICATIONREQUIRED":
 		c.AuthenticationRequired = val
 	case "AUTH__APIKEY":
-		c.ApiKey = val
+		c.APIKey = val
 
 	// Log
 	case "LOG__LEVEL":
@@ -159,15 +159,15 @@ func (c *Config) applyField(origKey, subKey, val string) error {
 
 	// Radarr
 	case "RADARR__URL":
-		c.RadarrUrl = val
+		c.RadarrURL = val
 	case "RADARR__APIKEY":
-		c.RadarrApiKey = val
+		c.RadarrAPIKey = val
 	case "RADARR__QUALITYPROFILEID":
 		v, err := parseInt()
 		if err != nil {
 			return err
 		}
-		c.RadarrQualityProfileId = v
+		c.RadarrQualityProfileID = v
 	case "RADARR__ROOTFOLDERPATH":
 		c.RadarrRootFolderPath = val
 	case "RADARR__SEARCHONADD":
@@ -179,15 +179,15 @@ func (c *Config) applyField(origKey, subKey, val string) error {
 
 	// Sonarr
 	case "SONARR__URL":
-		c.SonarrUrl = val
+		c.SonarrURL = val
 	case "SONARR__APIKEY":
-		c.SonarrApiKey = val
+		c.SonarrAPIKey = val
 	case "SONARR__QUALITYPROFILEID":
 		v, err := parseInt()
 		if err != nil {
 			return err
 		}
-		c.SonarrQualityProfileId = v
+		c.SonarrQualityProfileID = v
 	case "SONARR__ROOTFOLDERPATH":
 		c.SonarrRootFolderPath = val
 	case "SONARR__SERIESTYPE":

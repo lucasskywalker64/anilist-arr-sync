@@ -97,7 +97,7 @@ func TestToXML_RoundTrip(t *testing.T) {
 	orig := config.NewDefault()
 	orig.InstanceName = "Roundtrip Test"
 	orig.Port = 9999
-	orig.RadarrUrl = "http://radarr:7878"
+	orig.RadarrURL = "http://radarr:7878"
 
 	data, err := orig.ToXML()
 	if err != nil {
@@ -121,7 +121,7 @@ func TestToXML_RoundTrip(t *testing.T) {
 
 	check("InstanceName", loaded.InstanceName, orig.InstanceName)
 	check("Port", loaded.Port, orig.Port)
-	check("RadarrUrl", loaded.RadarrUrl, orig.RadarrUrl)
+	check("RadarrUrl", loaded.RadarrURL, orig.RadarrURL)
 	check("LaunchBrowser", loaded.LaunchBrowser, orig.LaunchBrowser)
 }
 

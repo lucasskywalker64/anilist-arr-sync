@@ -11,7 +11,7 @@ type xmlConfig struct {
 
 	BindAddress string `xml:"BindAddress"`
 	Port        int    `xml:"Port"`
-	UrlBase     string `xml:"UrlBase"`
+	URLBase     string `xml:"UrlBase"`
 	EnableSsl   string `xml:"EnableSsl"`
 	SslPort     int    `xml:"SslPort"`
 	SslCertPath string `xml:"SslCertPath"`
@@ -19,7 +19,7 @@ type xmlConfig struct {
 
 	AuthenticationMethod   string `xml:"AuthenticationMethod"`
 	AuthenticationRequired string `xml:"AuthenticationRequired"`
-	ApiKey                 string `xml:"ApiKey"`
+	APIKey                 string `xml:"ApiKey"`
 
 	LogLevel        string `xml:"LogLevel"`
 	ConsoleLogLevel string `xml:"ConsoleLogLevel"`
@@ -40,15 +40,15 @@ type xmlConfig struct {
 	AniListMovieStatus       string `xml:"AniListMovieStatus"`
 	AniListIncludeUnreleased string `xml:"AniListIncludeUnreleased"`
 
-	RadarrUrl              string `xml:"RadarrUrl"`
-	RadarrApiKey           string `xml:"RadarrApiKey"`
-	RadarrQualityProfileId int    `xml:"RadarrQualityProfileId"`
+	RadarrURL              string `xml:"RadarrUrl"`
+	RadarrAPIKey           string `xml:"RadarrApiKey"`
+	RadarrQualityProfileID int    `xml:"RadarrQualityProfileId"`
 	RadarrRootFolderPath   string `xml:"RadarrRootFolderPath"`
 	RadarrSearchOnAdd      string `xml:"RadarrSearchOnAdd"`
 
-	SonarrUrl              string `xml:"SonarrUrl"`
-	SonarrApiKey           string `xml:"SonarrApiKey"`
-	SonarrQualityProfileId int    `xml:"SonarrQualityProfileId"`
+	SonarrURL              string `xml:"SonarrUrl"`
+	SonarrAPIKey           string `xml:"SonarrApiKey"`
+	SonarrQualityProfileID int    `xml:"SonarrQualityProfileId"`
 	SonarrRootFolderPath   string `xml:"SonarrRootFolderPath"`
 	SonarrSeriesType       string `xml:"SonarrSeriesType"`
 	SonarrSearchOnAdd      string `xml:"SonarrSearchOnAdd"`
@@ -87,14 +87,14 @@ func (c *Config) ToXML() ([]byte, error) {
 	xc := xmlConfig{
 		BindAddress:                c.BindAddress,
 		Port:                       c.Port,
-		UrlBase:                    c.UrlBase,
+		URLBase:                    c.URLBase,
 		EnableSsl:                  formatBool(c.EnableSsl),
 		SslPort:                    c.SslPort,
 		SslCertPath:                c.SslCertPath,
 		SslKeyPath:                 c.SslKeyPath,
 		AuthenticationMethod:       c.AuthenticationMethod,
 		AuthenticationRequired:     c.AuthenticationRequired,
-		ApiKey:                     c.ApiKey,
+		APIKey:                     c.APIKey,
 		LogLevel:                   c.LogLevel,
 		ConsoleLogLevel:            c.ConsoleLogLevel,
 		LogSizeLimit:               c.LogSizeLimit,
@@ -109,14 +109,14 @@ func (c *Config) ToXML() ([]byte, error) {
 		AniListTvStatus:            c.AniListTvStatus,
 		AniListMovieStatus:         c.AniListMovieStatus,
 		AniListIncludeUnreleased:   formatBool(c.AniListIncludeUnreleased),
-		RadarrUrl:                  c.RadarrUrl,
-		RadarrApiKey:               c.RadarrApiKey,
-		RadarrQualityProfileId:     c.RadarrQualityProfileId,
+		RadarrURL:                  c.RadarrURL,
+		RadarrAPIKey:               c.RadarrAPIKey,
+		RadarrQualityProfileID:     c.RadarrQualityProfileID,
 		RadarrRootFolderPath:       c.RadarrRootFolderPath,
 		RadarrSearchOnAdd:          formatBool(c.RadarrSearchOnAdd),
-		SonarrUrl:                  c.SonarrUrl,
-		SonarrApiKey:               c.SonarrApiKey,
-		SonarrQualityProfileId:     c.SonarrQualityProfileId,
+		SonarrURL:                  c.SonarrURL,
+		SonarrAPIKey:               c.SonarrAPIKey,
+		SonarrQualityProfileID:     c.SonarrQualityProfileID,
 		SonarrRootFolderPath:       c.SonarrRootFolderPath,
 		SonarrSeriesType:           c.SonarrSeriesType,
 		SonarrSearchOnAdd:          formatBool(c.SonarrSearchOnAdd),
