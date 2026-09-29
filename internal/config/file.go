@@ -85,10 +85,6 @@ func Save(path string, cfg *Config) error {
 		return fmt.Errorf("failed to close config temp file: %w", err)
 	}
 
-	if err := os.Chmod(tmpPath, 0600); err != nil && runtime.GOOS != "windows" {
-		return fmt.Errorf("failed to set 0600 permissions on temp config: %w", err)
-	}
-
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("failed to write config file %s: %w", path, err)
 	}
