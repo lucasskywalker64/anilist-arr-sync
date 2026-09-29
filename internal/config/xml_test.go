@@ -121,7 +121,7 @@ func TestToXML_RoundTrip(t *testing.T) {
 
 	check("InstanceName", loaded.InstanceName, orig.InstanceName)
 	check("Port", loaded.Port, orig.Port)
-	check("RadarrUrl", loaded.RadarrURL, orig.RadarrURL)
+	check("RadarrURL", loaded.RadarrURL, orig.RadarrURL)
 	check("LaunchBrowser", loaded.LaunchBrowser, orig.LaunchBrowser)
 }
 

@@ -53,7 +53,7 @@ func TestLoad_NonExistentFileWithEnvDoesNotPersistEnvToDisk(t *testing.T) {
 
 	// In-memory config has overrides
 	check("Port", cfg.Port, 9090)
-	check("ApiKey", cfg.APIKey, "super-secret-key")
+	check("APIKey", cfg.APIKey, "super-secret-key")
 
 	// File on disk must NOT contain environment overrides, but default values
 	fileData, err := os.ReadFile(configPath)
@@ -67,7 +67,7 @@ func TestLoad_NonExistentFileWithEnvDoesNotPersistEnvToDisk(t *testing.T) {
 	}
 
 	check("file Port on disk", fileCfg.Port, 7171)
-	check("file ApiKey on disk", fileCfg.APIKey, "")
+	check("file APIKey on disk", fileCfg.APIKey, "")
 }
 
 func TestLoad_ExistingFileWithEnvOverrides(t *testing.T) {
@@ -134,7 +134,7 @@ func TestSave_PreservesElementStructureAndValidates(t *testing.T) {
 
 	check("Port", loaded.Port, 8081)
 	check("InstanceName", loaded.InstanceName, "Production Node")
-	check("RadarrUrl", loaded.RadarrURL, "http://radarr:7878")
+	check("RadarrURL", loaded.RadarrURL, "http://radarr:7878")
 }
 
 func TestSave_RejectsInvalidConfig(t *testing.T) {
