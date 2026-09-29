@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -189,7 +190,7 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Sprintf("DateToleranceDays cannot be negative, got %d", c.DateToleranceDays))
 	}
 
-	if c.ConfidenceThreshold < 0.0 || c.ConfidenceThreshold > 1.0 {
+	if math.IsNaN(c.ConfidenceThreshold) || c.ConfidenceThreshold < 0.0 || c.ConfidenceThreshold > 1.0 {
 		errs = append(errs, fmt.Sprintf("ConfidenceThreshold must be between 0.0 and 1.0, got %f", c.ConfidenceThreshold))
 	}
 

@@ -14,6 +14,9 @@ import (
 func Load(path string, environ []string) (*Config, error) {
 	_, err := os.Stat(path)
 	if os.IsNotExist(err) {
+		if err := Save(path, NewDefault()); err != nil {
+			return nil, err
+		}
 		cfg := NewDefault()
 		if len(environ) > 0 {
 			if err := cfg.ApplyEnv(environ); err != nil {
@@ -21,9 +24,6 @@ func Load(path string, environ []string) (*Config, error) {
 			}
 		}
 		if err := cfg.Validate(); err != nil {
-			return nil, err
-		}
-		if err := Save(path, cfg); err != nil {
 			return nil, err
 		}
 		return cfg, nil

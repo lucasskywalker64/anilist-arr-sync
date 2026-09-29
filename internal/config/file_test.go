@@ -37,6 +37,47 @@ func TestLoad_NonExistentFileCreatesDefault(t *testing.T) {
 	}
 }
 
+func TestLoad_NonExistentFileWithEnvDoesNotPersistEnvToDisk(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.xml")
+
+	environ := []string{
+		"ANILIST_SYNC__SERVER__PORT=9090",
+		"ANILIST_SYNC__AUTH__APIKEY=super-secret-key",
+	}
+
+	cfg, err := config.Load(configPath, environ)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// In-memory config has overrides
+	if cfg.Port != 9090 {
+		t.Errorf("Port = %d, want overridden 9090", cfg.Port)
+	}
+	if cfg.ApiKey != "super-secret-key" {
+		t.Errorf("ApiKey = %q, want overridden super-secret-key", cfg.ApiKey)
+	}
+
+	// File on disk must NOT contain environment overrides, but default values
+	fileData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read created config file: %v", err)
+	}
+
+	fileCfg, err := config.ParseXML(fileData)
+	if err != nil {
+		t.Fatalf("failed to parse file on disk: %v", err)
+	}
+
+	if fileCfg.Port != 7171 {
+		t.Errorf("file Port on disk = %d, want default 7171", fileCfg.Port)
+	}
+	if fileCfg.ApiKey != "" {
+		t.Errorf("file ApiKey on disk = %q, want empty default", fileCfg.ApiKey)
+	}
+}
+
 func TestLoad_ExistingFileWithEnvOverrides(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.xml")

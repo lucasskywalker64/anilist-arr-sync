@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"math"
 	"testing"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
@@ -242,6 +243,13 @@ func TestConfigValidation(t *testing.T) {
 			name: "confidence threshold below 0",
 			modify: func(c *config.Config) {
 				c.ConfidenceThreshold = -0.1
+			},
+			wantError: "ConfidenceThreshold must be between 0.0 and 1.0",
+		},
+		{
+			name: "confidence threshold NaN",
+			modify: func(c *config.Config) {
+				c.ConfidenceThreshold = math.NaN()
 			},
 			wantError: "ConfidenceThreshold must be between 0.0 and 1.0",
 		},
