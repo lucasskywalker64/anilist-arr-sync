@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -119,83 +120,59 @@ func NewDefault() *Config {
 
 // Validate verifies that all configuration values fall within allowable ranges and formats.
 func (c *Config) Validate() error {
-	var errs []string
+	var errs []error
 
-	if c.Port < 1 || c.Port > 65535 {
-		errs = append(errs, fmt.Sprintf("Port must be between 1 and 65535, got %d", c.Port))
+	check := func(ok bool, format string, args ...any) {
+		if !ok {
+			errs = append(errs, fmt.Errorf(format, args...))
+		}
 	}
 
-	if c.SslPort < 1 || c.SslPort > 65535 {
-		errs = append(errs, fmt.Sprintf("SslPort must be between 1 and 65535, got %d", c.SslPort))
-	}
+	check(c.Port >= 1 && c.Port <= 65535, "Port must be between 1 and 65535, got %d", c.Port)
+	check(c.SslPort >= 1 && c.SslPort <= 65535, "SslPort must be between 1 and 65535, got %d", c.SslPort)
 
 	if c.EnableSsl {
-		if strings.TrimSpace(c.SslCertPath) == "" {
-			errs = append(errs, "SslCertPath cannot be empty when EnableSsl is true")
-		}
-		if strings.TrimSpace(c.SslKeyPath) == "" {
-			errs = append(errs, "SslKeyPath cannot be empty when EnableSsl is true")
-		}
+		check(strings.TrimSpace(c.SslCertPath) != "", "SslCertPath cannot be empty when EnableSsl is true")
+		check(strings.TrimSpace(c.SslKeyPath) != "", "SslKeyPath cannot be empty when EnableSsl is true")
 	}
 
 	switch c.AuthenticationMethod {
 	case "Forms", "External":
 	default:
-		errs = append(errs, fmt.Sprintf("AuthenticationMethod must be Forms or External, got %q", c.AuthenticationMethod))
+		check(false, "AuthenticationMethod must be Forms or External, got %q", c.AuthenticationMethod)
 	}
 
 	switch c.AuthenticationRequired {
 	case "Enabled", "DisabledForLocalAddresses":
 	default:
-		errs = append(errs, fmt.Sprintf("AuthenticationRequired must be Enabled or DisabledForLocalAddresses, got %q", c.AuthenticationRequired))
+		check(false, "AuthenticationRequired must be Enabled or DisabledForLocalAddresses, got %q", c.AuthenticationRequired)
 	}
 
-	if !isValidLogLevel(c.LogLevel) {
-		errs = append(errs, fmt.Sprintf("LogLevel must be Trace, Debug, Info, Warn, or Error, got %q", c.LogLevel))
-	}
-
-	if !isValidLogLevel(c.ConsoleLogLevel) {
-		errs = append(errs, fmt.Sprintf("ConsoleLogLevel must be Trace, Debug, Info, Warn, or Error, got %q", c.ConsoleLogLevel))
-	}
-
-	if c.LogSizeLimit <= 0 {
-		errs = append(errs, fmt.Sprintf("LogSizeLimit must be greater than 0, got %d", c.LogSizeLimit))
-	}
-
-	if c.LogRotate < 0 {
-		errs = append(errs, fmt.Sprintf("LogRotate cannot be negative, got %d", c.LogRotate))
-	}
+	check(isValidLogLevel(c.LogLevel), "LogLevel must be Trace, Debug, Info, Warn, or Error, got %q", c.LogLevel)
+	check(isValidLogLevel(c.ConsoleLogLevel), "ConsoleLogLevel must be Trace, Debug, Info, Warn, or Error, got %q", c.ConsoleLogLevel)
+	check(c.LogSizeLimit > 0, "LogSizeLimit must be greater than 0, got %d", c.LogSizeLimit)
+	check(c.LogRotate >= 0, "LogRotate cannot be negative, got %d", c.LogRotate)
 
 	switch c.UpdateMechanism {
 	case "BuiltIn", "Docker", "Package":
 	default:
-		errs = append(errs, fmt.Sprintf("UpdateMechanism must be BuiltIn, Docker, or Package, got %q", c.UpdateMechanism))
+		check(false, "UpdateMechanism must be BuiltIn, Docker, or Package, got %q", c.UpdateMechanism)
 	}
 
-	if strings.TrimSpace(c.DatabasePath) == "" {
-		errs = append(errs, "DatabasePath cannot be empty")
-	}
+	check(strings.TrimSpace(c.DatabasePath) != "", "DatabasePath cannot be empty")
 
 	switch c.SonarrSeriesType {
 	case "anime", "standard":
 	default:
-		errs = append(errs, fmt.Sprintf("SonarrSeriesType must be anime or standard, got %q", c.SonarrSeriesType))
+		check(false, "SonarrSeriesType must be anime or standard, got %q", c.SonarrSeriesType)
 	}
 
-	if c.SyncIntervalHours <= 0 {
-		errs = append(errs, fmt.Sprintf("SyncIntervalHours must be greater than 0, got %d", c.SyncIntervalHours))
-	}
+	check(c.SyncIntervalHours > 0, "SyncIntervalHours must be greater than 0, got %d", c.SyncIntervalHours)
+	check(c.DateToleranceDays >= 0, "DateToleranceDays cannot be negative, got %d", c.DateToleranceDays)
+	check(!math.IsNaN(c.ConfidenceThreshold) && c.ConfidenceThreshold >= 0.0 && c.ConfidenceThreshold <= 1.0, "ConfidenceThreshold must be between 0.0 and 1.0, got %f", c.ConfidenceThreshold)
 
-	if c.DateToleranceDays < 0 {
-		errs = append(errs, fmt.Sprintf("DateToleranceDays cannot be negative, got %d", c.DateToleranceDays))
-	}
-
-	if math.IsNaN(c.ConfidenceThreshold) || c.ConfidenceThreshold < 0.0 || c.ConfidenceThreshold > 1.0 {
-		errs = append(errs, fmt.Sprintf("ConfidenceThreshold must be between 0.0 and 1.0, got %f", c.ConfidenceThreshold))
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("configuration validation failed: %s", strings.Join(errs, "; "))
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("configuration validation failed:\n%w", err)
 	}
 
 	return nil
