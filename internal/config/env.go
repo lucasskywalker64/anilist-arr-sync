@@ -33,6 +33,7 @@ func (c *Config) ApplyEnv(environ []string) error {
 	return nil
 }
 
+// applyField parses a single environment variable value into its corresponding Config field.
 func (c *Config) applyField(origKey, subKey, val string) error {
 	parseInt := func() (int, error) {
 		n, err := strconv.Atoi(val)

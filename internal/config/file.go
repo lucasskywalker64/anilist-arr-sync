@@ -90,14 +90,7 @@ func Save(path string, cfg *Config) error {
 	}
 
 	if err := os.Rename(tmpPath, path); err != nil {
-		if runtime.GOOS == "windows" {
-			_ = os.Remove(path)
-			if err := os.Rename(tmpPath, path); err != nil {
-				return fmt.Errorf("failed to write config file %s: %w", path, err)
-			}
-		} else {
-			return fmt.Errorf("failed to write config file %s: %w", path, err)
-		}
+		return fmt.Errorf("failed to write config file %s: %w", path, err)
 	}
 	tmpPath = ""
 

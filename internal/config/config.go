@@ -136,6 +136,7 @@ func (c *Config) Validate() error {
 	if c.EnableSsl {
 		check(strings.TrimSpace(c.SslCertPath) != "", "SslCertPath cannot be empty when EnableSsl is true")
 		check(strings.TrimSpace(c.SslKeyPath) != "", "SslKeyPath cannot be empty when EnableSsl is true")
+		check(c.Port != c.SslPort, "Port and SslPort must differ when EnableSsl is true, both are %d", c.Port)
 	}
 
 	switch c.AuthenticationMethod {
@@ -180,6 +181,7 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// isValidLogLevel checks whether the given log level string is supported.
 func isValidLogLevel(level string) bool {
 	switch strings.ToLower(level) {
 	case "trace", "debug", "info", "warn", "error":

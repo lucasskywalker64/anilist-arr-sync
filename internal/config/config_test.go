@@ -96,6 +96,17 @@ func TestConfigValidation(t *testing.T) {
 			wantError: "SslKeyPath cannot be empty when EnableSsl is true",
 		},
 		{
+			name: "port collision when ssl enabled",
+			modify: func(c *config.Config) {
+				c.EnableSsl = true
+				c.SslCertPath = "server.crt"
+				c.SslKeyPath = "server.key"
+				c.Port = 7171
+				c.SslPort = 7171
+			},
+			wantError: "Port and SslPort must differ when EnableSsl is true",
+		},
+		{
 			name: "invalid authentication method",
 			modify: func(c *config.Config) {
 				c.AuthenticationMethod = "OAuth"

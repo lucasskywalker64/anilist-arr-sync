@@ -61,6 +61,7 @@ type xmlConfig struct {
 	FirstRunDryRun      string  `xml:"FirstRunDryRun"`
 }
 
+// formatBool converts a boolean value to Servarr PascalCase representation ("True" or "False").
 func formatBool(b bool) string {
 	if b {
 		return "True"
