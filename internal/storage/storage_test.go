@@ -288,6 +288,54 @@ func TestWrite_RollbackOnError(t *testing.T) {
 	}
 }
 
+func TestWrite_PanicRecoveryRollsBack(t *testing.T) {
+	t.Parallel()
+
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected panic, got nil")
+			}
+		}()
+
+		_ = db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO users (username, password_hash) VALUES (?, ?);", "panicker", "hash"); err != nil {
+				return err
+			}
+			panic("simulated panic inside write callback")
+		})
+	}()
+
+	// Verify uncommitted rows from panicked callback were rolled back
+	var count int
+	err = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE username = ?;", "panicker").Scan(&count)
+	})
+	if err != nil {
+		t.Fatalf("query count failed: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 users after panic rollback, got %d", count)
+	}
+
+	// Verify write pool connection was returned to pool and subsequent writes succeed
+	err = db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "INSERT INTO users (username, password_hash) VALUES (?, ?);", "next_user", "hash")
+		return err
+	})
+	if err != nil {
+		t.Fatalf("subsequent write after panic failed: %v", err)
+	}
+}
+
 func TestClosedDB(t *testing.T) {
 	t.Parallel()
 

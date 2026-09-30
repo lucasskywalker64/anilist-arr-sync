@@ -182,9 +182,11 @@ func (db *DB) Write(ctx context.Context, fn func(ctx context.Context, tx *sql.Tx
 	if err != nil {
 		return fmt.Errorf("storage: failed to begin write transaction: %w", err)
 	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
 
 	if err := fn(ctx, tx); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 
