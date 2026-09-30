@@ -21,7 +21,11 @@ type migration struct {
 }
 
 func loadMigrations() ([]migration, error) {
-	entries, err := fs.ReadDir(migrationsFS, "migrations")
+	return loadMigrationsFS(migrationsFS)
+}
+
+func loadMigrationsFS(sys fs.FS) ([]migration, error) {
+	entries, err := fs.ReadDir(sys, "migrations")
 	if err != nil {
 		return nil, fmt.Errorf("storage: failed to read embedded migrations directory: %w", err)
 	}
@@ -44,7 +48,7 @@ func loadMigrations() ([]migration, error) {
 			return nil, fmt.Errorf("storage: invalid migration version prefix in %q: %w", filename, err)
 		}
 
-		content, err := fs.ReadFile(migrationsFS, "migrations/"+filename)
+		content, err := fs.ReadFile(sys, "migrations/"+filename)
 		if err != nil {
 			return nil, fmt.Errorf("storage: failed to read migration file %q: %w", filename, err)
 		}
