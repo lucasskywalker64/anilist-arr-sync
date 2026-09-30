@@ -67,7 +67,7 @@ func TestLoadMigrationsFS_Validation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			list, err := loadMigrationsFS(tc.fs)
+			list, err := loadMigrations(tc.fs)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got nil")

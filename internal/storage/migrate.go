@@ -20,11 +20,7 @@ type migration struct {
 	sql     string
 }
 
-func loadMigrations() ([]migration, error) {
-	return loadMigrationsFS(migrationsFS)
-}
-
-func loadMigrationsFS(sys fs.FS) ([]migration, error) {
+func loadMigrations(sys fs.FS) ([]migration, error) {
 	entries, err := fs.ReadDir(sys, "migrations")
 	if err != nil {
 		return nil, fmt.Errorf("storage: failed to read embedded migrations directory: %w", err)
@@ -77,7 +73,7 @@ func loadMigrationsFS(sys fs.FS) ([]migration, error) {
 
 // Migrate executes all pending schema migrations idempotently in a write transaction.
 func (db *DB) Migrate(ctx context.Context) error {
-	migrations, err := loadMigrations()
+	migrations, err := loadMigrations(migrationsFS)
 	if err != nil {
 		return err
 	}
