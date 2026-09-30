@@ -56,6 +56,14 @@ func loadMigrations() ([]migration, error) {
 		})
 	}
 
+	seenVersions := make(map[int]string)
+	for _, m := range list {
+		if prev, exists := seenVersions[m.version]; exists {
+			return nil, fmt.Errorf("storage: duplicate migration version %d between %q and %q", m.version, prev, m.name)
+		}
+		seenVersions[m.version] = m.name
+	}
+
 	sort.Slice(list, func(i, j int) bool {
 		return list[i].version < list[j].version
 	})
@@ -81,14 +89,28 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return fmt.Errorf("storage: failed to create schema_migrations table: %w", err)
 		}
 
-		for _, m := range migrations {
-			var applied int
-			row := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations WHERE version = ?;", m.version)
-			if err := row.Scan(&applied); err != nil {
-				return fmt.Errorf("storage: failed to check migration status for version %d: %w", m.version, err)
-			}
+		rows, err := tx.QueryContext(ctx, "SELECT version FROM schema_migrations;")
+		if err != nil {
+			return fmt.Errorf("storage: failed to read applied migrations: %w", err)
+		}
+		defer func() {
+			_ = rows.Close()
+		}()
 
-			if applied > 0 {
+		applied := make(map[int]struct{})
+		for rows.Next() {
+			var v int
+			if err := rows.Scan(&v); err != nil {
+				return fmt.Errorf("storage: failed to scan applied migration version: %w", err)
+			}
+			applied[v] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("storage: error reading applied migrations: %w", err)
+		}
+
+		for _, m := range migrations {
+			if _, ok := applied[m.version]; ok {
 				continue
 			}
 
