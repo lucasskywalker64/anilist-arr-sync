@@ -15,7 +15,7 @@ import (
 	_ "modernc.org/sqlite" // Register pure-Go SQLite database driver.
 )
 
-var memCounter uint64
+var memCounter atomic.Uint64
 
 // Querier abstracts database query operations across *sql.DB, *sql.Tx, and *sql.Conn.
 type Querier interface {
@@ -46,7 +46,7 @@ func Open(path string) (*DB, error) {
 	isMemory := path == ":memory:" || strings.HasPrefix(path, "file::memory:") || strings.Contains(path, "mode=memory")
 
 	if isMemory {
-		id := atomic.AddUint64(&memCounter, 1)
+		id := memCounter.Add(1)
 		dsn = fmt.Sprintf("file:memdb_%d?mode=memory&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", id)
 	} else {
 		dir := filepath.Dir(path)
