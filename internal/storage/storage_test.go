@@ -191,10 +191,8 @@ func TestConcurrentReadsAndWrites(t *testing.T) {
 		var writersWg sync.WaitGroup
 
 		// Start concurrent readers
-		for i := 0; i < numReaders; i++ {
-			readersWg.Add(1)
-			go func() {
-				defer readersWg.Done()
+		for range numReaders {
+			readersWg.Go(func() {
 				for {
 					select {
 					case <-ctx.Done():
@@ -206,15 +204,13 @@ func TestConcurrentReadsAndWrites(t *testing.T) {
 						})
 					}
 				}
-			}()
+			})
 		}
 
 		// Start concurrent writers
-		for i := 0; i < numWriters; i++ {
-			writersWg.Add(1)
-			go func(workerID int) {
-				defer writersWg.Done()
-				for j := 0; j < writesPerGoroutine; j++ {
+		for workerID := range numWriters {
+			writersWg.Go(func() {
+				for j := range writesPerGoroutine {
 					username := fmt.Sprintf("user_%d_%d", workerID, j)
 					err := db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 						_, err := tx.ExecContext(ctx, "INSERT INTO users (username, password_hash) VALUES (?, ?);", username, "hash")
@@ -225,7 +221,7 @@ func TestConcurrentReadsAndWrites(t *testing.T) {
 						return
 					}
 				}
-			}(i)
+			})
 		}
 
 		writersWg.Wait()
