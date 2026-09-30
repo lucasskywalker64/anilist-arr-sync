@@ -28,8 +28,7 @@ type Querier interface {
 type DB struct {
 	readPool  *sql.DB
 	writePool *sql.DB
-	writeMu   sync.Mutex
-	memMu     sync.RWMutex
+	txMu      sync.RWMutex
 	closeMu   sync.RWMutex
 	isClosed  bool
 	isMemory  bool
@@ -160,8 +159,8 @@ func (db *DB) Read(ctx context.Context, fn func(ctx context.Context, q Querier) 
 	}
 
 	if db.isMemory {
-		db.memMu.RLock()
-		defer db.memMu.RUnlock()
+		db.txMu.RLock()
+		defer db.txMu.RUnlock()
 	}
 
 	return fn(ctx, db.readPool)
@@ -176,13 +175,8 @@ func (db *DB) Write(ctx context.Context, fn func(ctx context.Context, tx *sql.Tx
 		return fmt.Errorf("storage: database is closed")
 	}
 
-	if db.isMemory {
-		db.memMu.Lock()
-		defer db.memMu.Unlock()
-	}
-
-	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	db.txMu.Lock()
+	defer db.txMu.Unlock()
 
 	tx, err := db.writePool.BeginTx(ctx, nil)
 	if err != nil {
