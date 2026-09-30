@@ -29,8 +29,10 @@ type DB struct {
 	readPool  *sql.DB
 	writePool *sql.DB
 	writeMu   sync.Mutex
+	memMu     sync.RWMutex
 	closeMu   sync.RWMutex
 	isClosed  bool
+	isMemory  bool
 	path      string
 }
 
@@ -46,7 +48,7 @@ func Open(path string) (*DB, error) {
 
 	if isMemory {
 		id := atomic.AddUint64(&memCounter, 1)
-		dsn = fmt.Sprintf("file:memdb_%d?mode=memory&cache=shared", id)
+		dsn = fmt.Sprintf("file:memdb_%d?mode=memory&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", id)
 	} else {
 		dir := filepath.Dir(path)
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -85,23 +87,30 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("storage: failed to enable foreign keys: %w", err)
 	}
 
-	// Open read pool with concurrency up to NumCPU.
-	readPool, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		_ = writePool.Close()
-		return nil, fmt.Errorf("storage: failed to open read pool: %w", err)
-	}
+	// For in-memory databases, share the single connection to prevent table-level
+	// lock conflicts from shared-cache mode. For on-disk, open a dedicated read pool.
+	var readPool *sql.DB
+	if isMemory {
+		readPool = writePool
+	} else {
+		readPool, err = sql.Open("sqlite", dsn)
+		if err != nil {
+			_ = writePool.Close()
+			return nil, fmt.Errorf("storage: failed to open read pool: %w", err)
+		}
 
-	numCPU := runtime.NumCPU()
-	if numCPU < 4 {
-		numCPU = 4
+		numCPU := runtime.NumCPU()
+		if numCPU < 4 {
+			numCPU = 4
+		}
+		readPool.SetMaxOpenConns(numCPU)
+		readPool.SetMaxIdleConns(numCPU)
 	}
-	readPool.SetMaxOpenConns(numCPU)
-	readPool.SetMaxIdleConns(numCPU)
 
 	db := &DB{
 		readPool:  readPool,
 		writePool: writePool,
+		isMemory:  isMemory,
 		path:      path,
 	}
 
@@ -124,11 +133,15 @@ func (db *DB) Close() error {
 	db.isClosed = true
 
 	var errs []string
-	if err := db.readPool.Close(); err != nil {
-		errs = append(errs, fmt.Sprintf("read pool: %v", err))
+	if db.readPool != nil && db.readPool != db.writePool {
+		if err := db.readPool.Close(); err != nil {
+			errs = append(errs, fmt.Sprintf("read pool: %v", err))
+		}
 	}
-	if err := db.writePool.Close(); err != nil {
-		errs = append(errs, fmt.Sprintf("write pool: %v", err))
+	if db.writePool != nil {
+		if err := db.writePool.Close(); err != nil {
+			errs = append(errs, fmt.Sprintf("write pool: %v", err))
+		}
 	}
 
 	if len(errs) > 0 {
@@ -146,6 +159,11 @@ func (db *DB) Read(ctx context.Context, fn func(ctx context.Context, q Querier) 
 		return fmt.Errorf("storage: database is closed")
 	}
 
+	if db.isMemory {
+		db.memMu.RLock()
+		defer db.memMu.RUnlock()
+	}
+
 	return fn(ctx, db.readPool)
 }
 
@@ -156,6 +174,11 @@ func (db *DB) Write(ctx context.Context, fn func(ctx context.Context, tx *sql.Tx
 
 	if db.isClosed {
 		return fmt.Errorf("storage: database is closed")
+	}
+
+	if db.isMemory {
+		db.memMu.Lock()
+		defer db.memMu.Unlock()
 	}
 
 	db.writeMu.Lock()
