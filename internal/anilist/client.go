@@ -66,7 +66,7 @@ type MediaTitle struct {
 // Media represents an anime media entity on AniList.
 type Media struct {
 	ID        int         `json:"id"`
-	IDMal     int         `json:"idMal"`
+	IDMal     *int        `json:"idMal"`
 	Title     MediaTitle  `json:"title"`
 	Format    string      `json:"format"`
 	Status    MediaStatus `json:"status"`
@@ -95,6 +95,7 @@ const (
 	defaultRequestsPerMinute = 80
 	defaultBackoffBase       = 1 * time.Second
 	defaultMaxRetries        = 5
+	defaultHTTPTimeout       = 30 * time.Second
 )
 
 type limiter struct {
@@ -126,8 +127,10 @@ func (l *limiter) wait(ctx context.Context) error {
 	l.mu.Unlock()
 
 	if waitDuration > 0 {
+		timer := time.NewTimer(waitDuration)
+		defer timer.Stop()
 		select {
-		case <-time.After(waitDuration):
+		case <-timer.C:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -200,7 +203,7 @@ func NewClient(endpoint string, opts ...ClientOption) *Client {
 	c := &Client{
 		endpoint:    defaultEndpoint,
 		userAgent:   defaultUserAgent,
-		httpClient:  &http.Client{},
+		httpClient:  &http.Client{Timeout: defaultHTTPTimeout},
 		rateLimiter: newLimiter(defaultRequestsPerMinute),
 		backoffBase: defaultBackoffBase,
 		maxRetries:  defaultMaxRetries,
@@ -266,9 +269,16 @@ query ($userName: String, $type: MediaType, $statusIn: [MediaListStatus], $chunk
 }
 `
 
+type watchlistVariables struct {
+	UserName string            `json:"userName"`
+	Type     string            `json:"type"`
+	StatusIn []MediaListStatus `json:"statusIn,omitempty"`
+	Chunk    int               `json:"chunk"`
+}
+
 type graphQLRequest struct {
-	Query     string         `json:"query"`
-	Variables map[string]any `json:"variables"`
+	Query     string             `json:"query"`
+	Variables watchlistVariables `json:"variables"`
 }
 
 type graphQLResponse struct {
@@ -294,21 +304,20 @@ func (c *Client) FetchWatchlist(ctx context.Context, filter WatchlistFilter) ([]
 	}
 
 	var allEntries []MediaListEntry
+	seenMediaIDs := make(map[int]bool)
 	chunk := 1
 
 	for {
-		variables := map[string]any{
-			"userName": filter.Username,
-			"type":     "ANIME",
-			"chunk":    chunk,
-		}
-		if len(filter.Statuses) > 0 {
-			variables["statusIn"] = filter.Statuses
+		vars := watchlistVariables{
+			UserName: filter.Username,
+			Type:     "ANIME",
+			StatusIn: filter.Statuses,
+			Chunk:    chunk,
 		}
 
 		reqBody := graphQLRequest{
 			Query:     watchlistQuery,
-			Variables: variables,
+			Variables: vars,
 		}
 
 		encoded, err := json.Marshal(reqBody)
@@ -343,11 +352,14 @@ func (c *Client) FetchWatchlist(ctx context.Context, filter WatchlistFilter) ([]
 				}
 
 				waitDuration := c.parseRetryAfter(retryAfterHeader, attempt)
+				timer := time.NewTimer(waitDuration)
 
 				select {
-				case <-time.After(waitDuration):
+				case <-timer.C:
+					timer.Stop()
 					continue
 				case <-ctx.Done():
+					timer.Stop()
 					return nil, ctx.Err()
 				}
 			}
@@ -367,7 +379,11 @@ func (c *Client) FetchWatchlist(ctx context.Context, filter WatchlistFilter) ([]
 		}
 
 		if len(gqlResp.Errors) > 0 {
-			return nil, fmt.Errorf("graphql error: %s", gqlResp.Errors[0].Message)
+			errs := make([]error, len(gqlResp.Errors))
+			for i, e := range gqlResp.Errors {
+				errs[i] = errors.New(e.Message)
+			}
+			return nil, fmt.Errorf("graphql error: %w", errors.Join(errs...))
 		}
 
 		if gqlResp.Data.MediaListCollection == nil {
@@ -376,9 +392,13 @@ func (c *Client) FetchWatchlist(ctx context.Context, filter WatchlistFilter) ([]
 
 		for _, l := range gqlResp.Data.MediaListCollection.Lists {
 			for _, entry := range l.Entries {
+				if seenMediaIDs[entry.Media.ID] {
+					continue
+				}
 				if !filter.IncludeUnreleased && entry.Media.Status == MediaStatusNotYetReleased {
 					continue
 				}
+				seenMediaIDs[entry.Media.ID] = true
 				allEntries = append(allEntries, entry)
 			}
 		}

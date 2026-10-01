@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -584,5 +585,159 @@ func TestFetchWatchlist_HTTP429ExhaustsMaxRetries(t *testing.T) {
 	// initial + 3 retries = 4 attempts
 	if attempts != 4 {
 		t.Errorf("expected 4 attempts (1 initial + 3 retries), got %d", attempts)
+	}
+}
+
+func TestFetchWatchlist_DeduplicatesAcrossCustomLists(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := map[string]any{
+			"data": map[string]any{
+				"MediaListCollection": map[string]any{
+					"hasNextChunk": false,
+					"lists": []map[string]any{
+						{
+							"name":   "Watching",
+							"status": "CURRENT",
+							"entries": []map[string]any{
+								{
+									"id":     1,
+									"status": "CURRENT",
+									"media": map[string]any{
+										"id":     42,
+										"format": "TV",
+										"status": "RELEASING",
+										"title":  map[string]any{"romaji": "Duplicate Anime"},
+									},
+								},
+							},
+						},
+						{
+							"name":   "Favorites",
+							"status": "CURRENT",
+							"entries": []map[string]any{
+								{
+									"id":     2,
+									"status": "CURRENT",
+									"media": map[string]any{
+										"id":     42, // same media ID in custom list
+										"format": "TV",
+										"status": "RELEASING",
+										"title":  map[string]any{"romaji": "Duplicate Anime"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := anilist.NewClient(server.URL, anilist.WithRateLimit(60000))
+	entries, err := client.FetchWatchlist(context.Background(), anilist.WatchlistFilter{
+		Username: "testuser",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 deduplicated entry, got %d", len(entries))
+	}
+	if entries[0].Media.ID != 42 {
+		t.Errorf("expected media ID 42, got %d", entries[0].Media.ID)
+	}
+}
+
+func TestFetchWatchlist_NullIDMalPreserved(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := map[string]any{
+			"data": map[string]any{
+				"MediaListCollection": map[string]any{
+					"hasNextChunk": false,
+					"lists": []map[string]any{
+						{
+							"name":   "Watching",
+							"status": "CURRENT",
+							"entries": []map[string]any{
+								{
+									"id":     1,
+									"status": "CURRENT",
+									"media": map[string]any{
+										"id":     101,
+										"idMal":  nil, // explicitly null
+										"format": "TV",
+										"status": "FINISHED",
+										"title":  map[string]any{"romaji": "Anime Without MAL"},
+									},
+								},
+								{
+									"id":     2,
+									"status": "CURRENT",
+									"media": map[string]any{
+										"id":     102,
+										"idMal":  54321,
+										"format": "TV",
+										"status": "FINISHED",
+										"title":  map[string]any{"romaji": "Anime With MAL"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := anilist.NewClient(server.URL, anilist.WithRateLimit(60000))
+	entries, err := client.FetchWatchlist(context.Background(), anilist.WatchlistFilter{
+		Username: "testuser",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if entries[0].Media.IDMal != nil {
+		t.Errorf("expected nil IDMal for entry 0, got %d", *entries[0].Media.IDMal)
+	}
+	if entries[1].Media.IDMal == nil || *entries[1].Media.IDMal != 54321 {
+		t.Errorf("expected IDMal 54321 for entry 1, got %v", entries[1].Media.IDMal)
+	}
+}
+
+func TestFetchWatchlist_MultipleGraphQLErrorsJoined(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := map[string]any{
+			"errors": []map[string]any{
+				{"message": "User not found"},
+				{"message": "Rate limit warning"},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := anilist.NewClient(server.URL, anilist.WithRateLimit(60000))
+	_, err := client.FetchWatchlist(context.Background(), anilist.WatchlistFilter{
+		Username: "missinguser",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "User not found") || !strings.Contains(errMsg, "Rate limit warning") {
+		t.Errorf("expected combined error message to contain both errors, got %q", errMsg)
 	}
 }
