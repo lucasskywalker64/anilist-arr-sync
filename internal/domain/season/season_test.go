@@ -7,7 +7,7 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/domain/season"
 )
 
-func TestParseSeasonNumber(t *testing.T) {
+func TestTitleRegexFallback(t *testing.T) {
 	tests := []struct {
 		name       string
 		titles     []string
@@ -102,12 +102,21 @@ func TestParseSeasonNumber(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotSeason, gotFound := season.ParseSeasonNumber(tt.titles...)
-			if gotFound != tt.wantFound {
-				t.Fatalf("ParseSeasonNumber(%v) found = %v, want %v", tt.titles, gotFound, tt.wantFound)
-			}
-			if gotSeason != tt.wantSeason {
-				t.Errorf("ParseSeasonNumber(%v) season = %d, want %d", tt.titles, gotSeason, tt.wantSeason)
+			res := season.MatchSeason(time.Time{}, tt.titles, nil, 0)
+			if tt.wantFound {
+				if res.Season != tt.wantSeason {
+					t.Errorf("MatchSeason(%v) season = %d, want %d", tt.titles, res.Season, tt.wantSeason)
+				}
+				if res.MatchedBy != season.MatchMethodRegex {
+					t.Errorf("MatchSeason(%v) matchedBy = %s, want %s", tt.titles, res.MatchedBy, season.MatchMethodRegex)
+				}
+			} else {
+				if res.Season != 0 {
+					t.Errorf("MatchSeason(%v) season = %d, want 0", tt.titles, res.Season)
+				}
+				if res.MatchedBy != season.MatchMethodNone {
+					t.Errorf("MatchSeason(%v) matchedBy = %s, want %s", tt.titles, res.MatchedBy, season.MatchMethodNone)
+				}
 			}
 		})
 	}

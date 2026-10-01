@@ -114,14 +114,6 @@ func parseTitleMarkers(titles ...string) (season int, isExplicit bool, found boo
 	return 0, false, false
 }
 
-// ParseSeasonNumber attempts to extract a season number from one or more candidate titles.
-// Returns the extracted season number and true if found, or 0 and false if no pattern matches
-// or if candidate titles contain conflicting season numbers.
-func ParseSeasonNumber(titles ...string) (int, bool) {
-	s, _, found := parseTitleMarkers(titles...)
-	return s, found
-}
-
 // MatchSeasonByAirDate matches an AniList start date against Sonarr episode air dates
 // within a specified tolerance window. It inspects each season's premiere dates,
 // which include the season premiere (earliest aired episode) and any arc or sub-season premiere
