@@ -9,9 +9,9 @@ import (
 
 func TestTitleRegexFallback(t *testing.T) {
 	tests := []struct {
-		name       string
-		titles     []string
-		wantSeason int
+		name         string
+		titles       []string
+		wantSeason   int
 		wantFound    bool
 		wantConflict bool
 	}{
