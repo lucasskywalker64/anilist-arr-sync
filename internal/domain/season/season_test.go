@@ -232,6 +232,43 @@ func TestMatchSeasonByAirDate(t *testing.T) {
 			wantFound:   false,
 			wantErrDiff: true,
 		},
+		{
+			name:      "arc premiere following midseason finale matches season",
+			startDate: time.Date(2024, 10, 12, 0, 0, 0, 0, time.UTC),
+			episodes: []season.Episode{
+				{SeasonNumber: 4, EpisodeNumber: 1, AirDate: time.Date(2024, 1, 5, 0, 0, 0, 0, time.UTC)},
+				{SeasonNumber: 4, EpisodeNumber: 24, AirDate: time.Date(2024, 6, 20, 0, 0, 0, 0, time.UTC), FinaleType: "midseason"},
+				{SeasonNumber: 4, EpisodeNumber: 25, AirDate: time.Date(2024, 10, 10, 0, 0, 0, 0, time.UTC)},
+				{SeasonNumber: 4, EpisodeNumber: 37, AirDate: time.Date(2024, 12, 26, 0, 0, 0, 0, time.UTC), FinaleType: "series"},
+			},
+			tolerance:  14 * 24 * time.Hour,
+			wantSeason: 4,
+			wantFound:  true,
+		},
+		{
+			name:      "arc premiere following midseason finale outside tolerance",
+			startDate: time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC),
+			episodes: []season.Episode{
+				{SeasonNumber: 4, EpisodeNumber: 1, AirDate: time.Date(2024, 1, 5, 0, 0, 0, 0, time.UTC)},
+				{SeasonNumber: 4, EpisodeNumber: 24, AirDate: time.Date(2024, 6, 20, 0, 0, 0, 0, time.UTC), FinaleType: "midseason"},
+				{SeasonNumber: 4, EpisodeNumber: 25, AirDate: time.Date(2024, 10, 10, 0, 0, 0, 0, time.UTC)},
+			},
+			tolerance:  14 * 24 * time.Hour,
+			wantSeason: 0,
+			wantFound:  false,
+		},
+		{
+			name:      "arc premiere with unsorted episodes and case-insensitive finale type",
+			startDate: time.Date(2024, 10, 11, 0, 0, 0, 0, time.UTC),
+			episodes: []season.Episode{
+				{SeasonNumber: 4, EpisodeNumber: 25, AirDate: time.Date(2024, 10, 10, 0, 0, 0, 0, time.UTC)},
+				{SeasonNumber: 4, EpisodeNumber: 1, AirDate: time.Date(2024, 1, 5, 0, 0, 0, 0, time.UTC)},
+				{SeasonNumber: 4, EpisodeNumber: 24, AirDate: time.Date(2024, 6, 20, 0, 0, 0, 0, time.UTC), FinaleType: "MidSeason"},
+			},
+			tolerance:  14 * 24 * time.Hour,
+			wantSeason: 4,
+			wantFound:  true,
+		},
 	}
 
 	for _, tt := range tests {

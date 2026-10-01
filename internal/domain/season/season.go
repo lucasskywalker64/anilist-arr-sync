@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -46,6 +47,7 @@ type Episode struct {
 	SeasonNumber  int
 	EpisodeNumber int
 	AirDate       time.Time
+	FinaleType    string
 }
 
 var seasonPatterns = []*regexp.Regexp{
@@ -86,8 +88,9 @@ func ParseSeasonNumber(titles ...string) (int, bool) {
 }
 
 // MatchSeasonByAirDate matches an AniList start date against Sonarr episode air dates
-// within a specified tolerance window. It inspects each season's premiere date
-// (the earliest non-zero air date of an episode in that season).
+// within a specified tolerance window. It inspects each season's premiere dates,
+// which include the season premiere (earliest aired episode) and any arc or sub-season premiere
+// (the first aired episode following an episode with a midseason finale marker).
 // Returns the matched season number, a boolean indicating whether a match was found,
 // and an error if multiple seasons match within the tolerance window.
 func MatchSeasonByAirDate(startDate time.Time, episodes []Episode, tolerance time.Duration) (int, bool, error) {
@@ -98,24 +101,56 @@ func MatchSeasonByAirDate(startDate time.Time, episodes []Episode, tolerance tim
 		tolerance = DefaultAirDateTolerance
 	}
 
-	premieres := make(map[int]time.Time)
+	bySeason := make(map[int][]Episode)
 	for _, ep := range episodes {
 		if ep.SeasonNumber <= 0 || ep.AirDate.IsZero() {
 			continue
 		}
-		existing, ok := premieres[ep.SeasonNumber]
-		if !ok || ep.AirDate.Before(existing) {
-			premieres[ep.SeasonNumber] = ep.AirDate
+		bySeason[ep.SeasonNumber] = append(bySeason[ep.SeasonNumber], ep)
+	}
+
+	seasonCandidates := make(map[int][]time.Time)
+	for seasonNum, eps := range bySeason {
+		sort.Slice(eps, func(i, j int) bool {
+			return eps[i].EpisodeNumber < eps[j].EpisodeNumber
+		})
+
+		var earliest time.Time
+		for _, ep := range eps {
+			if earliest.IsZero() || ep.AirDate.Before(earliest) {
+				earliest = ep.AirDate
+			}
+		}
+		if !earliest.IsZero() {
+			seasonCandidates[seasonNum] = append(seasonCandidates[seasonNum], earliest)
+		}
+
+		for i, ep := range eps {
+			if strings.EqualFold(strings.TrimSpace(ep.FinaleType), "midseason") {
+				for j := i + 1; j < len(eps); j++ {
+					if !eps[j].AirDate.IsZero() {
+						seasonCandidates[seasonNum] = append(seasonCandidates[seasonNum], eps[j].AirDate)
+						break
+					}
+				}
+			}
 		}
 	}
 
 	var matchedSeasons []int
-	for seasonNum, premiere := range premieres {
-		diff := startDate.Sub(premiere)
-		if diff < 0 {
-			diff = -diff
+	for seasonNum, candidateDates := range seasonCandidates {
+		matched := false
+		for _, candidate := range candidateDates {
+			diff := startDate.Sub(candidate)
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff <= tolerance {
+				matched = true
+				break
+			}
 		}
-		if diff <= tolerance {
+		if matched {
 			matchedSeasons = append(matchedSeasons, seasonNum)
 		}
 	}
