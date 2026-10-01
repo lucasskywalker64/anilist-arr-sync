@@ -12,7 +12,8 @@ func TestTitleRegexFallback(t *testing.T) {
 		name       string
 		titles     []string
 		wantSeason int
-		wantFound  bool
+		wantFound    bool
+		wantConflict bool
 	}{
 		{
 			name:       "season with number",
@@ -93,22 +94,25 @@ func TestTitleRegexFallback(t *testing.T) {
 			wantFound:  true,
 		},
 		{
-			name:       "multiple titles conflicting on season",
-			titles:     []string{"Attack on Titan Season 2", "Attack on Titan Season 3"},
-			wantSeason: 0,
-			wantFound:  false,
+			name:         "multiple titles conflicting on season",
+			titles:       []string{"Attack on Titan Season 2", "Attack on Titan Season 3"},
+			wantSeason:   0,
+			wantFound:    false,
+			wantConflict: true,
 		},
 		{
-			name:       "single title conflicting strong markers same pattern",
-			titles:     []string{"Season 1 vs Season 2"},
-			wantSeason: 0,
-			wantFound:  false,
+			name:         "single title conflicting strong markers same pattern",
+			titles:       []string{"Season 1 vs Season 2"},
+			wantSeason:   0,
+			wantFound:    false,
+			wantConflict: true,
 		},
 		{
-			name:       "single title conflicting strong markers different patterns",
-			titles:     []string{"Season 2 ... 3rd Season"},
-			wantSeason: 0,
-			wantFound:  false,
+			name:         "single title conflicting strong markers different patterns",
+			titles:       []string{"Season 2 ... 3rd Season"},
+			wantSeason:   0,
+			wantFound:    false,
+			wantConflict: true,
 		},
 		{
 			name:       "single title agreeing strong markers repeated",
@@ -123,16 +127,18 @@ func TestTitleRegexFallback(t *testing.T) {
 			wantFound:  true,
 		},
 		{
-			name:       "single title conflicting weak markers same pattern",
-			titles:     []string{"Show Part 1 ... Part 2"},
-			wantSeason: 0,
-			wantFound:  false,
+			name:         "single title conflicting weak markers same pattern",
+			titles:       []string{"Show Part 1 ... Part 2"},
+			wantSeason:   0,
+			wantFound:    false,
+			wantConflict: true,
 		},
 		{
-			name:       "single title conflicting weak markers different patterns",
-			titles:     []string{"Show Part 1 ... Cour 2"},
-			wantSeason: 0,
-			wantFound:  false,
+			name:         "single title conflicting weak markers different patterns",
+			titles:       []string{"Show Part 1 ... Cour 2"},
+			wantSeason:   0,
+			wantFound:    false,
+			wantConflict: true,
 		},
 		{
 			name:       "single title agreeing weak markers repeated",
@@ -145,6 +151,21 @@ func TestTitleRegexFallback(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			res := season.MatchSeason(time.Time{}, tt.titles, nil, 0)
+			if tt.wantConflict {
+				if !res.Conflict {
+					t.Errorf("MatchSeason(%v) conflict = false, want true", tt.titles)
+				}
+				if res.Season != 0 {
+					t.Errorf("MatchSeason(%v) season = %d, want 0", tt.titles, res.Season)
+				}
+				if res.MatchedBy != season.MatchMethodConflict {
+					t.Errorf("MatchSeason(%v) matchedBy = %s, want %s", tt.titles, res.MatchedBy, season.MatchMethodConflict)
+				}
+				return
+			}
+			if res.Conflict {
+				t.Errorf("MatchSeason(%v) conflict = true, want false (reason: %s)", tt.titles, res.Reason)
+			}
 			if tt.wantFound {
 				if res.Season != tt.wantSeason {
 					t.Errorf("MatchSeason(%v) season = %d, want %d", tt.titles, res.Season, tt.wantSeason)
@@ -475,6 +496,28 @@ func TestMatchSeason(t *testing.T) {
 			wantSeason:   3,
 			wantMethod:   season.MatchMethodAirDate,
 			wantConflict: false,
+		},
+		{
+			name:      "conflict when titles contain conflicting season markers even if air date matches",
+			startDate: baseDate,
+			titles:    []string{"Attack on Titan Season 2", "Attack on Titan Season 3"},
+			episodes: []season.Episode{
+				{SeasonNumber: 2, EpisodeNumber: 1, AirDate: baseDate},
+			},
+			tolerance:    14 * 24 * time.Hour,
+			wantSeason:   0,
+			wantMethod:   season.MatchMethodConflict,
+			wantConflict: true,
+		},
+		{
+			name:         "conflict when titles contain conflicting season markers without air dates",
+			startDate:    time.Time{},
+			titles:       []string{"Attack on Titan Season 2", "Attack on Titan Season 3"},
+			episodes:     nil,
+			tolerance:    14 * 24 * time.Hour,
+			wantSeason:   0,
+			wantMethod:   season.MatchMethodConflict,
+			wantConflict: true,
 		},
 	}
 

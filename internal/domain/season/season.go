@@ -61,8 +61,9 @@ var weakSubSeasonPatterns = []*regexp.Regexp{
 }
 
 // parseTitleMarkers extracts season numbers from titles, indicating whether the marker
-// was an explicit season marker (like "Season 2" or "2nd Season") vs a weak sub-season marker (like "Part 2" or "Cour 2").
-func parseTitleMarkers(titles ...string) (season int, isExplicit bool, found bool) {
+// was an explicit season marker (like "Season 2" or "2nd Season") vs a weak sub-season marker (like "Part 2" or "Cour 2"),
+// and whether conflicting markers were detected across or within titles.
+func parseTitleMarkers(titles ...string) (season int, isExplicit bool, found bool, conflict bool) {
 	var strongSeason int
 	for _, title := range titles {
 		clean := strings.TrimSpace(title)
@@ -75,7 +76,7 @@ func parseTitleMarkers(titles ...string) (season int, isExplicit bool, found boo
 					val, err := strconv.Atoi(matches[1])
 					if err == nil && val > 0 {
 						if strongSeason != 0 && strongSeason != val {
-							return 0, false, false
+							return 0, false, false, true
 						}
 						strongSeason = val
 					}
@@ -84,7 +85,7 @@ func parseTitleMarkers(titles ...string) (season int, isExplicit bool, found boo
 		}
 	}
 	if strongSeason > 0 {
-		return strongSeason, true, true
+		return strongSeason, true, true, false
 	}
 
 	var weakSeason int
@@ -99,7 +100,7 @@ func parseTitleMarkers(titles ...string) (season int, isExplicit bool, found boo
 					val, err := strconv.Atoi(matches[1])
 					if err == nil && val > 0 {
 						if weakSeason != 0 && weakSeason != val {
-							return 0, false, false
+							return 0, false, false, true
 						}
 						weakSeason = val
 					}
@@ -108,10 +109,10 @@ func parseTitleMarkers(titles ...string) (season int, isExplicit bool, found boo
 		}
 	}
 	if weakSeason > 0 {
-		return weakSeason, false, true
+		return weakSeason, false, true, false
 	}
 
-	return 0, false, false
+	return 0, false, false, false
 }
 
 // MatchSeasonByAirDate matches an AniList start date against Sonarr episode air dates
@@ -197,7 +198,16 @@ func MatchSeasonByAirDate(startDate time.Time, episodes []Episode, tolerance tim
 // a conflict is flagged.
 func MatchSeason(startDate time.Time, titles []string, episodes []Episode, tolerance time.Duration) MatchResult {
 	dateSeason, dateFound, dateErr := MatchSeasonByAirDate(startDate, episodes, tolerance)
-	regexSeason, isExplicit, regexFound := parseTitleMarkers(titles...)
+	regexSeason, isExplicit, regexFound, titleConflict := parseTitleMarkers(titles...)
+
+	if titleConflict {
+		return MatchResult{
+			Season:    0,
+			MatchedBy: MatchMethodConflict,
+			Conflict:  true,
+			Reason:    "conflicting season markers found in titles",
+		}
+	}
 
 	if dateErr != nil {
 		return MatchResult{
