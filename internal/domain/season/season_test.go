@@ -410,6 +410,21 @@ func TestMatchSeason(t *testing.T) {
 			wantMethod:   season.MatchMethodRegex,
 			wantConflict: false,
 		},
+		{
+			name:      "sub-season Part marker does not conflict with clean air date match",
+			startDate: time.Date(2023, 10, 12, 0, 0, 0, 0, time.UTC),
+			titles:    []string{"Dr. STONE: NEW WORLD Part 2"},
+			episodes: []season.Episode{
+				{SeasonNumber: 3, EpisodeNumber: 1, AirDate: time.Date(2023, 4, 6, 0, 0, 0, 0, time.UTC)},
+				{SeasonNumber: 3, EpisodeNumber: 11, AirDate: time.Date(2023, 6, 15, 0, 0, 0, 0, time.UTC), FinaleType: "midseason"},
+				{SeasonNumber: 3, EpisodeNumber: 12, AirDate: time.Date(2023, 10, 12, 0, 0, 0, 0, time.UTC)},
+				{SeasonNumber: 3, EpisodeNumber: 22, AirDate: time.Date(2023, 12, 21, 0, 0, 0, 0, time.UTC), FinaleType: "season"},
+			},
+			tolerance:    14 * 24 * time.Hour,
+			wantSeason:   3,
+			wantMethod:   season.MatchMethodAirDate,
+			wantConflict: false,
+		},
 	}
 
 	for _, tt := range tests {

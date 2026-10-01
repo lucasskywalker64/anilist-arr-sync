@@ -50,41 +50,76 @@ type Episode struct {
 	FinaleType    string
 }
 
-var seasonPatterns = []*regexp.Regexp{
+var strongSeasonPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bseason\s+(\d+)\b`),
 	regexp.MustCompile(`(?i)\b(\d+)(?:st|nd|rd|th)\s+season\b`),
+}
+
+var weakSubSeasonPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bpart\s+(\d+)\b`),
 	regexp.MustCompile(`(?i)\bcour\s+(\d+)\b`),
+}
+
+// parseTitleMarkers extracts season numbers from titles, indicating whether the marker
+// was an explicit season marker (like "Season 2" or "2nd Season") vs a weak sub-season marker (like "Part 2" or "Cour 2").
+func parseTitleMarkers(titles ...string) (season int, isExplicit bool, found bool) {
+	var strongSeason int
+	for _, title := range titles {
+		clean := strings.TrimSpace(title)
+		if clean == "" {
+			continue
+		}
+		for _, re := range strongSeasonPatterns {
+			matches := re.FindStringSubmatch(clean)
+			if len(matches) >= 2 {
+				val, err := strconv.Atoi(matches[1])
+				if err == nil && val > 0 {
+					if strongSeason != 0 && strongSeason != val {
+						return 0, false, false
+					}
+					strongSeason = val
+					break
+				}
+			}
+		}
+	}
+	if strongSeason > 0 {
+		return strongSeason, true, true
+	}
+
+	var weakSeason int
+	for _, title := range titles {
+		clean := strings.TrimSpace(title)
+		if clean == "" {
+			continue
+		}
+		for _, re := range weakSubSeasonPatterns {
+			matches := re.FindStringSubmatch(clean)
+			if len(matches) >= 2 {
+				val, err := strconv.Atoi(matches[1])
+				if err == nil && val > 0 {
+					if weakSeason != 0 && weakSeason != val {
+						return 0, false, false
+					}
+					weakSeason = val
+					break
+				}
+			}
+		}
+	}
+	if weakSeason > 0 {
+		return weakSeason, false, true
+	}
+
+	return 0, false, false
 }
 
 // ParseSeasonNumber attempts to extract a season number from one or more candidate titles.
 // Returns the extracted season number and true if found, or 0 and false if no pattern matches
 // or if candidate titles contain conflicting season numbers.
 func ParseSeasonNumber(titles ...string) (int, bool) {
-	var foundSeason int
-	for _, title := range titles {
-		clean := strings.TrimSpace(title)
-		if clean == "" {
-			continue
-		}
-		for _, re := range seasonPatterns {
-			matches := re.FindStringSubmatch(clean)
-			if len(matches) >= 2 {
-				val, err := strconv.Atoi(matches[1])
-				if err == nil && val > 0 {
-					if foundSeason != 0 && foundSeason != val {
-						return 0, false
-					}
-					foundSeason = val
-					break
-				}
-			}
-		}
-	}
-	if foundSeason > 0 {
-		return foundSeason, true
-	}
-	return 0, false
+	s, _, found := parseTitleMarkers(titles...)
+	return s, found
 }
 
 // MatchSeasonByAirDate matches an AniList start date against Sonarr episode air dates
@@ -170,7 +205,7 @@ func MatchSeasonByAirDate(startDate time.Time, episodes []Episode, tolerance tim
 // a conflict is flagged.
 func MatchSeason(startDate time.Time, titles []string, episodes []Episode, tolerance time.Duration) MatchResult {
 	dateSeason, dateFound, dateErr := MatchSeasonByAirDate(startDate, episodes, tolerance)
-	regexSeason, regexFound := ParseSeasonNumber(titles...)
+	regexSeason, isExplicit, regexFound := parseTitleMarkers(titles...)
 
 	if dateErr != nil {
 		return MatchResult{
@@ -190,11 +225,25 @@ func MatchSeason(startDate time.Time, titles []string, episodes []Episode, toler
 				Reason:    fmt.Sprintf("both air date and title regex matched season %d", dateSeason),
 			}
 		}
+
+		// If the title explicitly specified a season number (such as "Season 2" or "2nd Season")
+		// that disagrees with the air date match, flag a conflict.
+		if isExplicit {
+			return MatchResult{
+				Season:    0,
+				MatchedBy: MatchMethodConflict,
+				Conflict:  true,
+				Reason:    fmt.Sprintf("air date matched season %d but title explicitly specified season %d", dateSeason, regexSeason),
+			}
+		}
+
+		// The title contained a weak sub-season marker (such as "Part 2" or "Cour 2") without
+		// an explicit season number. The air-date match takes precedence and is not overridden.
 		return MatchResult{
-			Season:    0,
-			MatchedBy: MatchMethodConflict,
-			Conflict:  true,
-			Reason:    fmt.Sprintf("air date matched season %d but title regex matched season %d", dateSeason, regexSeason),
+			Season:    dateSeason,
+			MatchedBy: MatchMethodAirDate,
+			Conflict:  false,
+			Reason:    fmt.Sprintf("air date matched season %d within tolerance (title contains sub-season marker Part/Cour %d)", dateSeason, regexSeason),
 		}
 	}
 
