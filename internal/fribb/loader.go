@@ -138,26 +138,19 @@ func (l *Loader) Sync(ctx context.Context) (*Result, error) {
 	etag := resp.Header.Get("ETag")
 	lastModified := resp.Header.Get("Last-Modified")
 
-	count, err := l.loadStream(ctx, resp.Body)
-	if err != nil {
+	if err := l.initStagingTable(ctx); err != nil {
 		return nil, err
 	}
 
-	err = l.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		query := `
-			INSERT INTO fribb_meta (key, etag, last_modified, last_checked_at, entry_count)
-			VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
-			ON CONFLICT(key) DO UPDATE SET
-				etag = excluded.etag,
-				last_modified = excluded.last_modified,
-				last_checked_at = CURRENT_TIMESTAMP,
-				entry_count = excluded.entry_count;
-		`
-		_, err := tx.ExecContext(ctx, query, l.metaKey, etag, lastModified, count)
-		return err
-	})
+	count, err := l.loadStream(ctx, resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("fribb: failed to save metadata: %w", err)
+		_ = l.clearStaging(ctx)
+		return nil, err
+	}
+
+	if err := l.commitStagedDataset(ctx, etag, lastModified, count); err != nil {
+		_ = l.clearStaging(ctx)
+		return nil, err
 	}
 
 	return &Result{
@@ -167,7 +160,69 @@ func (l *Loader) Sync(ctx context.Context) (*Result, error) {
 	}, nil
 }
 
-// loadStream deserializes the incoming JSON array stream and batch inserts rows into storage.
+// initStagingTable creates the staging table if needed and purges leftover rows.
+func (l *Loader) initStagingTable(ctx context.Context) error {
+	return l.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		query := `
+			CREATE TABLE IF NOT EXISTS fribb_entries_staging (
+				anilist_id       INTEGER PRIMARY KEY,
+				tvdb_id          INTEGER,
+				tmdb_id          INTEGER,
+				mal_id           INTEGER,
+				media_type       TEXT,
+				tvdb_season      INTEGER DEFAULT 1,
+				updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+			);
+			DELETE FROM fribb_entries_staging;
+		`
+		_, err := tx.ExecContext(ctx, query)
+		if err != nil {
+			return fmt.Errorf("fribb: failed to initialize staging table: %w", err)
+		}
+		return nil
+	})
+}
+
+// clearStaging truncates any data in the staging table.
+func (l *Loader) clearStaging(ctx context.Context) error {
+	return l.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "DELETE FROM fribb_entries_staging;")
+		return err
+	})
+}
+
+// commitStagedDataset atomically swaps staged entries into the live table and updates caching metadata.
+func (l *Loader) commitStagedDataset(ctx context.Context, etag, lastModified string, count int) error {
+	return l.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		swapQuery := `
+			DELETE FROM fribb_entries;
+			INSERT INTO fribb_entries (anilist_id, tvdb_id, tmdb_id, mal_id, media_type, tvdb_season, updated_at)
+			SELECT anilist_id, tvdb_id, tmdb_id, mal_id, media_type, tvdb_season, updated_at
+			FROM fribb_entries_staging;
+			DELETE FROM fribb_entries_staging;
+		`
+		if _, err := tx.ExecContext(ctx, swapQuery); err != nil {
+			return fmt.Errorf("fribb: failed to swap staging entries into fribb_entries: %w", err)
+		}
+
+		metaQuery := `
+			INSERT INTO fribb_meta (key, etag, last_modified, last_checked_at, entry_count)
+			VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
+			ON CONFLICT(key) DO UPDATE SET
+				etag = excluded.etag,
+				last_modified = excluded.last_modified,
+				last_checked_at = CURRENT_TIMESTAMP,
+				entry_count = excluded.entry_count;
+		`
+		if _, err := tx.ExecContext(ctx, metaQuery, l.metaKey, etag, lastModified, count); err != nil {
+			return fmt.Errorf("fribb: failed to update metadata: %w", err)
+		}
+
+		return nil
+	})
+}
+
+// loadStream deserializes the incoming JSON array stream and batch inserts rows into staging.
 func (l *Loader) loadStream(ctx context.Context, r io.Reader) (int, error) {
 	dec := json.NewDecoder(r)
 
@@ -209,7 +264,7 @@ func (l *Loader) loadStream(ctx context.Context, r io.Reader) (int, error) {
 
 		batch = append(batch, entry)
 		if len(batch) >= l.batchSize {
-			if err := l.insertBatch(ctx, batch); err != nil {
+			if err := l.insertStagingBatch(ctx, batch); err != nil {
 				return 0, err
 			}
 			totalInserted += len(batch)
@@ -218,7 +273,7 @@ func (l *Loader) loadStream(ctx context.Context, r io.Reader) (int, error) {
 	}
 
 	if len(batch) > 0 {
-		if err := l.insertBatch(ctx, batch); err != nil {
+		if err := l.insertStagingBatch(ctx, batch); err != nil {
 			return 0, err
 		}
 		totalInserted += len(batch)
@@ -236,15 +291,15 @@ func (l *Loader) loadStream(ctx context.Context, r io.Reader) (int, error) {
 	return totalInserted, nil
 }
 
-// insertBatch commits a slice of entries inside a single database transaction.
-func (l *Loader) insertBatch(ctx context.Context, batch []Entry) error {
+// insertStagingBatch commits a slice of entries inside a single database transaction into staging.
+func (l *Loader) insertStagingBatch(ctx context.Context, batch []Entry) error {
 	if len(batch) == 0 {
 		return nil
 	}
 
 	return l.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		query := `
-			INSERT INTO fribb_entries (anilist_id, tvdb_id, tmdb_id, mal_id, media_type, tvdb_season, updated_at)
+			INSERT INTO fribb_entries_staging (anilist_id, tvdb_id, tmdb_id, mal_id, media_type, tvdb_season, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 			ON CONFLICT(anilist_id) DO UPDATE SET
 				tvdb_id = excluded.tvdb_id,

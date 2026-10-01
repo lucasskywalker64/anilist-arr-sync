@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 )
@@ -400,6 +402,176 @@ func TestLoader_Sync_ServerErrorsAndMalformed(t *testing.T) {
 	})
 }
 
+func TestLoader_Sync_DeletesRemovedUpstreamEntries(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "test_delete.db")
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("storage.Open failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	currentPayload := atomic.Pointer[string]{}
+	currentETag := atomic.Pointer[string]{}
+
+	v1Payload := `[
+		{"anilist_id": 1, "tvdb_id": 101, "type": "TV"},
+		{"anilist_id": 2, "tvdb_id": 102, "type": "TV"},
+		{"anilist_id": 3, "tvdb_id": 103, "type": "TV"}
+	]`
+	v1ETag := `"v1"`
+	currentPayload.Store(&v1Payload)
+	currentETag.Store(&v1ETag)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		etag := *currentETag.Load()
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(*currentPayload.Load()))
+	}))
+	defer server.Close()
+
+	loader := NewLoader(db, WithURL(server.URL), WithBatchSize(10))
+
+	// Initial sync with 3 entries
+	res1, err := loader.Sync(ctx)
+	if err != nil {
+		t.Fatalf("initial sync failed: %v", err)
+	}
+	if res1.EntryCount != 3 {
+		t.Fatalf("expected 3 entries, got %d", res1.EntryCount)
+	}
+
+	for _, id := range []int{1, 2, 3} {
+		if _, err := loader.GetEntry(ctx, id); err != nil {
+			t.Fatalf("expected entry %d to exist: %v", id, err)
+		}
+	}
+
+	// Upstream removes entry 3
+	v2Payload := `[
+		{"anilist_id": 1, "tvdb_id": 101, "type": "TV"},
+		{"anilist_id": 2, "tvdb_id": 102, "type": "TV"}
+	]`
+	v2ETag := `"v2"`
+	currentPayload.Store(&v2Payload)
+	currentETag.Store(&v2ETag)
+
+	res2, err := loader.Sync(ctx)
+	if err != nil {
+		t.Fatalf("second sync failed: %v", err)
+	}
+	if res2.EntryCount != 2 {
+		t.Fatalf("expected 2 entries, got %d", res2.EntryCount)
+	}
+
+	// Verify entry 3 is deleted
+	_, err = loader.GetEntry(ctx, 3)
+	if err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound for deleted entry 3, got: %v", err)
+	}
+
+	// Verify entries 1 and 2 still exist
+	for _, id := range []int{1, 2} {
+		if _, err := loader.GetEntry(ctx, id); err != nil {
+			t.Fatalf("expected entry %d to still exist: %v", id, err)
+		}
+	}
+
+	meta, err := loader.GetMeta(ctx)
+	if err != nil {
+		t.Fatalf("GetMeta failed: %v", err)
+	}
+	if meta.EntryCount != 2 {
+		t.Fatalf("expected entry_count 2 in meta, got %d", meta.EntryCount)
+	}
+}
+
+func TestLoader_Sync_PartialFailureLeavesLiveTableIntact(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "test_partial.db")
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("storage.Open failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	currentPayload := atomic.Pointer[string]{}
+	currentETag := atomic.Pointer[string]{}
+
+	v1Payload := `[
+		{"anilist_id": 1, "tvdb_id": 101, "type": "TV"},
+		{"anilist_id": 2, "tvdb_id": 102, "type": "TV"},
+		{"anilist_id": 3, "tvdb_id": 103, "type": "TV"}
+	]`
+	v1ETag := `"v1"`
+	currentPayload.Store(&v1Payload)
+	currentETag.Store(&v1ETag)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		etag := *currentETag.Load()
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(*currentPayload.Load()))
+	}))
+	defer server.Close()
+
+	loader := NewLoader(db, WithURL(server.URL), WithBatchSize(1))
+
+	// Initial sync
+	_, err = loader.Sync(ctx)
+	if err != nil {
+		t.Fatalf("initial sync failed: %v", err)
+	}
+
+	// Update upstream to return corrupt/truncated payload midway through
+	v2Payload := `[
+		{"anilist_id": 10, "tvdb_id": 201, "type": "TV"},
+		{"anilist_id": 11, "tvdb_id": 202, "type": "TV"},
+		{"corrupt_json_line_here
+	`
+	v2ETag := `"v2"`
+	currentPayload.Store(&v2Payload)
+	currentETag.Store(&v2ETag)
+
+	_, err = loader.Sync(ctx)
+	if err == nil {
+		t.Fatalf("expected sync to fail on corrupt payload, got nil")
+	}
+
+	// Verify live table was not modified or corrupted: old entries 1, 2, 3 still intact
+	for _, id := range []int{1, 2, 3} {
+		if _, err := loader.GetEntry(ctx, id); err != nil {
+			t.Fatalf("expected existing entry %d to remain intact: %v", id, err)
+		}
+	}
+
+	// Verify new entry 10 was not partially committed into live table
+	_, err = loader.GetEntry(ctx, 10)
+	if err != ErrNotFound {
+		t.Fatalf("expected entry 10 not to exist in live table, got: %v", err)
+	}
+
+	// Verify ETag was not updated to v2
+	meta, err := loader.GetMeta(ctx)
+	if err != nil {
+		t.Fatalf("GetMeta failed: %v", err)
+	}
+	if meta.ETag != `"v1"` {
+		t.Fatalf("expected meta ETag to remain '\"v1\"', got %q", meta.ETag)
+	}
+}
+
 func TestLoader_MemoryConsumptionUnder15MB(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "test_mem.db")
@@ -439,10 +611,47 @@ func TestLoader_MemoryConsumptionUnder15MB(t *testing.T) {
 	)
 
 	runtime.GC()
-	var mBefore runtime.MemStats
-	runtime.ReadMemStats(&mBefore)
+	var mStart runtime.MemStats
+	runtime.ReadMemStats(&mStart)
+
+	stopSampling := make(chan struct{})
+	var maxLiveAlloc atomic.Uint64
+	var maxHeapInuse atomic.Uint64
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(2 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-stopSampling:
+				return
+			case <-ticker.C:
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				for {
+					cur := maxLiveAlloc.Load()
+					if m.Alloc <= cur || maxLiveAlloc.CompareAndSwap(cur, m.Alloc) {
+						break
+					}
+				}
+				for {
+					cur := maxHeapInuse.Load()
+					if m.HeapInuse <= cur || maxHeapInuse.CompareAndSwap(cur, m.HeapInuse) {
+						break
+					}
+				}
+			}
+		}
+	}()
 
 	res, err := loader.Sync(ctx)
+	close(stopSampling)
+	wg.Wait()
+
 	if err != nil {
 		t.Fatalf("large stream sync failed: %v", err)
 	}
@@ -450,17 +659,22 @@ func TestLoader_MemoryConsumptionUnder15MB(t *testing.T) {
 		t.Fatalf("expected %d entries, got %d", count, res.EntryCount)
 	}
 
-	var mAfter runtime.MemStats
-	runtime.ReadMemStats(&mAfter)
+	peakAlloc := maxLiveAlloc.Load()
+	peakInuse := maxHeapInuse.Load()
+	baseline := mStart.Alloc
 
-	allocDeltaBytes := int64(mAfter.Alloc) - int64(mBefore.Alloc)
-	maxAllowedBytes := int64(15 * 1024 * 1024) // 15MB limit
+	peakDelta := int64(0)
+	if peakAlloc > baseline {
+		peakDelta = int64(peakAlloc - baseline)
+	}
 
-	t.Logf("Memory stats: AllocBefore=%d KB, AllocAfter=%d KB, Delta=%d KB",
-		mBefore.Alloc/1024, mAfter.Alloc/1024, allocDeltaBytes/1024)
+	maxAllowedBytes := int64(15 * 1024 * 1024)
 
-	if allocDeltaBytes > maxAllowedBytes {
-		t.Fatalf("active heap allocation delta %d bytes exceeded 15MB limit", allocDeltaBytes)
+	t.Logf("Memory stats: StartAlloc=%d KB, PeakAlloc=%d KB, PeakInuse=%d KB, PeakDelta=%d KB",
+		baseline/1024, peakAlloc/1024, peakInuse/1024, peakDelta/1024)
+
+	if peakDelta > maxAllowedBytes {
+		t.Fatalf("peak live allocation delta %d bytes exceeded 15MB limit", peakDelta)
 	}
 }
 
