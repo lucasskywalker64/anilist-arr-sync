@@ -230,8 +230,15 @@ func (c *Client) parseRetryAfter(header string, attempt int) time.Duration {
 			return 0
 		}
 	}
-	multiplier := 1 << attempt
-	return c.backoffBase * time.Duration(multiplier)
+	const maxBackoff = 5 * time.Minute
+	d := c.backoffBase
+	for i := 0; i < attempt && d < maxBackoff; i++ {
+		d *= 2
+	}
+	if d > maxBackoff {
+		d = maxBackoff
+	}
+	return d
 }
 
 const watchlistQuery = `
@@ -387,7 +394,7 @@ func (c *Client) FetchWatchlist(ctx context.Context, filter WatchlistFilter) ([]
 		}
 
 		if gqlResp.Data.MediaListCollection == nil {
-			break
+			return nil, errors.New("media list collection not found or inaccessible")
 		}
 
 		for _, l := range gqlResp.Data.MediaListCollection.Lists {

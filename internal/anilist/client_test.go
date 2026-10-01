@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,17 +16,19 @@ import (
 )
 
 func TestFetchWatchlist_QueriesGraphQLWithPOSTAndUserAgent(t *testing.T) {
+	var mu sync.Mutex
 	var capturedMethod string
 	var capturedUserAgent string
 	var capturedContentType string
-	var capturedBody map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		capturedMethod = r.Method
 		capturedUserAgent = r.Header.Get("User-Agent")
 		capturedContentType = r.Header.Get("Content-Type")
-
-		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Unlock()
 
 		resp := map[string]any{
 			"data": map[string]any{
@@ -78,14 +82,20 @@ func TestFetchWatchlist_QueriesGraphQLWithPOSTAndUserAgent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if capturedMethod != http.MethodPost {
-		t.Errorf("expected POST method, got %q", capturedMethod)
+	mu.Lock()
+	method := capturedMethod
+	userAgent := capturedUserAgent
+	contentType := capturedContentType
+	mu.Unlock()
+
+	if method != http.MethodPost {
+		t.Errorf("expected POST method, got %q", method)
 	}
-	if capturedUserAgent != "AniList-Arr-Sync/1.0" {
-		t.Errorf("expected User-Agent %q, got %q", "AniList-Arr-Sync/1.0", capturedUserAgent)
+	if userAgent != "AniList-Arr-Sync/1.0" {
+		t.Errorf("expected User-Agent %q, got %q", "AniList-Arr-Sync/1.0", userAgent)
 	}
-	if capturedContentType != "application/json" {
-		t.Errorf("expected Content-Type application/json, got %q", capturedContentType)
+	if contentType != "application/json" {
+		t.Errorf("expected Content-Type application/json, got %q", contentType)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
@@ -107,12 +117,15 @@ func TestFetchWatchlist_QueriesGraphQLWithPOSTAndUserAgent(t *testing.T) {
 }
 
 func TestFetchWatchlist_FiltersStatusAndUnreleased(t *testing.T) {
+	var mu sync.Mutex
 	var capturedVariables map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
 		capturedVariables, _ = req["variables"].(map[string]any)
+		mu.Unlock()
 
 		resp := map[string]any{
 			"data": map[string]any{
@@ -167,9 +180,13 @@ func TestFetchWatchlist_FiltersStatusAndUnreleased(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		statusesRaw, ok := capturedVariables["statusIn"].([]any)
+		mu.Lock()
+		vars := capturedVariables
+		mu.Unlock()
+
+		statusesRaw, ok := vars["statusIn"].([]any)
 		if !ok || len(statusesRaw) != 2 {
-			t.Fatalf("expected statusIn with 2 elements in variables, got %#v", capturedVariables["statusIn"])
+			t.Fatalf("expected statusIn with 2 elements in variables, got %#v", vars["statusIn"])
 		}
 
 		if len(entries) != 1 {
@@ -196,9 +213,9 @@ func TestFetchWatchlist_FiltersStatusAndUnreleased(t *testing.T) {
 }
 
 func TestFetchWatchlist_PaginationMultiChunk(t *testing.T) {
-	chunkRequests := 0
+	var chunkRequests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		chunkRequests++
+		chunkRequests.Add(1)
 		var req map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		vars := req["variables"].(map[string]any)
@@ -277,8 +294,8 @@ func TestFetchWatchlist_PaginationMultiChunk(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if chunkRequests != 2 {
-		t.Fatalf("expected 2 chunk requests, got %d", chunkRequests)
+	if chunkRequests.Load() != 2 {
+		t.Fatalf("expected 2 chunk requests, got %d", chunkRequests.Load())
 	}
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 entries across chunks, got %d", len(entries))
@@ -289,9 +306,14 @@ func TestFetchWatchlist_PaginationMultiChunk(t *testing.T) {
 }
 
 func TestFetchWatchlist_EnforcesRateLimiting(t *testing.T) {
+	var mu sync.Mutex
 	requestTimes := make([]time.Time, 0, 2)
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		requestTimes = append(requestTimes, time.Now())
+		mu.Unlock()
+
 		var req map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		vars := req["variables"].(map[string]any)
@@ -344,11 +366,17 @@ func TestFetchWatchlist_EnforcesRateLimiting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(requestTimes) != 2 {
-		t.Fatalf("expected 2 requests, got %d", len(requestTimes))
+
+	mu.Lock()
+	times := make([]time.Time, len(requestTimes))
+	copy(times, requestTimes)
+	mu.Unlock()
+
+	if len(times) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(times))
 	}
 
-	gap := requestTimes[1].Sub(requestTimes[0])
+	gap := times[1].Sub(times[0])
 	if gap < 80*time.Millisecond {
 		t.Errorf("expected at least 80ms gap between requests, got %v (total elapsed: %v)", gap, elapsed)
 	}
@@ -377,10 +405,10 @@ func TestFetchWatchlist_RateLimitContextCancellation(t *testing.T) {
 }
 
 func TestFetchWatchlist_HandlesHTTP429WithRetryAfterSeconds(t *testing.T) {
-	attempts := 0
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		attempts++
-		if attempts == 1 {
+		att := attempts.Add(1)
+		if att == 1 {
 			w.Header().Set("Retry-After", "1") // 1 second
 			w.WriteHeader(http.StatusTooManyRequests)
 			_, _ = w.Write([]byte(`{"errors":[{"message":"Too Many Requests"}]}`))
@@ -433,8 +461,8 @@ func TestFetchWatchlist_HandlesHTTP429WithRetryAfterSeconds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if attempts != 2 {
-		t.Fatalf("expected 2 attempts, got %d", attempts)
+	if attempts.Load() != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts.Load())
 	}
 	if len(entries) != 1 || entries[0].Media.ID != 999 {
 		t.Fatalf("unexpected entries: %#v", entries)
@@ -446,10 +474,10 @@ func TestFetchWatchlist_HandlesHTTP429WithRetryAfterSeconds(t *testing.T) {
 }
 
 func TestFetchWatchlist_HandlesHTTP429WithRetryAfterDate(t *testing.T) {
-	attempts := 0
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		attempts++
-		if attempts == 1 {
+		att := attempts.Add(1)
+		if att == 1 {
 			// Set Retry-After to 2 seconds in the future formatted as RFC1123 (integer second resolution)
 			targetDate := time.Now().Add(2 * time.Second).UTC().Format(http.TimeFormat)
 			w.Header().Set("Retry-After", targetDate)
@@ -502,8 +530,8 @@ func TestFetchWatchlist_HandlesHTTP429WithRetryAfterDate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if attempts != 2 {
-		t.Fatalf("expected 2 attempts, got %d", attempts)
+	if attempts.Load() != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts.Load())
 	}
 	if len(entries) != 1 || entries[0].Media.ID != 888 {
 		t.Fatalf("unexpected entries: %#v", entries)
@@ -514,10 +542,10 @@ func TestFetchWatchlist_HandlesHTTP429WithRetryAfterDate(t *testing.T) {
 }
 
 func TestFetchWatchlist_HandlesHTTP429ExponentialBackoffWhenHeaderMissing(t *testing.T) {
-	attempts := 0
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		attempts++
-		if attempts < 3 {
+		att := attempts.Add(1)
+		if att < 3 {
 			// No Retry-After header
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
@@ -551,8 +579,8 @@ func TestFetchWatchlist_HandlesHTTP429ExponentialBackoffWhenHeaderMissing(t *tes
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if attempts != 3 {
-		t.Fatalf("expected 3 attempts, got %d", attempts)
+	if attempts.Load() != 3 {
+		t.Fatalf("expected 3 attempts, got %d", attempts.Load())
 	}
 	// attempt 0: 30ms, attempt 1: 60ms => total >= 90ms
 	if elapsed < 80*time.Millisecond {
@@ -561,9 +589,9 @@ func TestFetchWatchlist_HandlesHTTP429ExponentialBackoffWhenHeaderMissing(t *tes
 }
 
 func TestFetchWatchlist_HTTP429ExhaustsMaxRetries(t *testing.T) {
-	attempts := 0
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		attempts++
+		attempts.Add(1)
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer server.Close()
@@ -583,8 +611,8 @@ func TestFetchWatchlist_HTTP429ExhaustsMaxRetries(t *testing.T) {
 		t.Fatal("expected error when 429 retries exhausted, got nil")
 	}
 	// initial + 3 retries = 4 attempts
-	if attempts != 4 {
-		t.Errorf("expected 4 attempts (1 initial + 3 retries), got %d", attempts)
+	if attempts.Load() != 4 {
+		t.Errorf("expected 4 attempts (1 initial + 3 retries), got %d", attempts.Load())
 	}
 }
 
@@ -739,5 +767,29 @@ func TestFetchWatchlist_MultipleGraphQLErrorsJoined(t *testing.T) {
 	errMsg := err.Error()
 	if !strings.Contains(errMsg, "User not found") || !strings.Contains(errMsg, "Rate limit warning") {
 		t.Errorf("expected combined error message to contain both errors, got %q", errMsg)
+	}
+}
+
+func TestFetchWatchlist_NullMediaListCollectionReturnsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := map[string]any{
+			"data": map[string]any{
+				"MediaListCollection": nil,
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := anilist.NewClient(server.URL, anilist.WithRateLimit(60000))
+	_, err := client.FetchWatchlist(context.Background(), anilist.WatchlistFilter{
+		Username: "testuser",
+	})
+	if err == nil {
+		t.Fatal("expected error when MediaListCollection is null, got nil")
+	}
+	if !strings.Contains(err.Error(), "media list collection not found or inaccessible") {
+		t.Errorf("unexpected error message: %v", err)
 	}
 }
