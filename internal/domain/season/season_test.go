@@ -98,6 +98,48 @@ func TestTitleRegexFallback(t *testing.T) {
 			wantSeason: 0,
 			wantFound:  false,
 		},
+		{
+			name:       "single title conflicting strong markers same pattern",
+			titles:     []string{"Season 1 vs Season 2"},
+			wantSeason: 0,
+			wantFound:  false,
+		},
+		{
+			name:       "single title conflicting strong markers different patterns",
+			titles:     []string{"Season 2 ... 3rd Season"},
+			wantSeason: 0,
+			wantFound:  false,
+		},
+		{
+			name:       "single title agreeing strong markers repeated",
+			titles:     []string{"Attack on Titan Season 2 (Season 2)"},
+			wantSeason: 2,
+			wantFound:  true,
+		},
+		{
+			name:       "single title agreeing strong markers different patterns",
+			titles:     []string{"Show 2nd Season - Season 2"},
+			wantSeason: 2,
+			wantFound:  true,
+		},
+		{
+			name:       "single title conflicting weak markers same pattern",
+			titles:     []string{"Show Part 1 ... Part 2"},
+			wantSeason: 0,
+			wantFound:  false,
+		},
+		{
+			name:       "single title conflicting weak markers different patterns",
+			titles:     []string{"Show Part 1 ... Cour 2"},
+			wantSeason: 0,
+			wantFound:  false,
+		},
+		{
+			name:       "single title agreeing weak markers repeated",
+			titles:     []string{"Show Part 2 ... Part 2"},
+			wantSeason: 2,
+			wantFound:  true,
+		},
 	}
 
 	for _, tt := range tests {

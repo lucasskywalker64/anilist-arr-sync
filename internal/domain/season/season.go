@@ -70,15 +70,15 @@ func parseTitleMarkers(titles ...string) (season int, isExplicit bool, found boo
 			continue
 		}
 		for _, re := range strongSeasonPatterns {
-			matches := re.FindStringSubmatch(clean)
-			if len(matches) >= 2 {
-				val, err := strconv.Atoi(matches[1])
-				if err == nil && val > 0 {
-					if strongSeason != 0 && strongSeason != val {
-						return 0, false, false
+			for _, matches := range re.FindAllStringSubmatch(clean, -1) {
+				if len(matches) >= 2 {
+					val, err := strconv.Atoi(matches[1])
+					if err == nil && val > 0 {
+						if strongSeason != 0 && strongSeason != val {
+							return 0, false, false
+						}
+						strongSeason = val
 					}
-					strongSeason = val
-					break
 				}
 			}
 		}
@@ -94,15 +94,15 @@ func parseTitleMarkers(titles ...string) (season int, isExplicit bool, found boo
 			continue
 		}
 		for _, re := range weakSubSeasonPatterns {
-			matches := re.FindStringSubmatch(clean)
-			if len(matches) >= 2 {
-				val, err := strconv.Atoi(matches[1])
-				if err == nil && val > 0 {
-					if weakSeason != 0 && weakSeason != val {
-						return 0, false, false
+			for _, matches := range re.FindAllStringSubmatch(clean, -1) {
+				if len(matches) >= 2 {
+					val, err := strconv.Atoi(matches[1])
+					if err == nil && val > 0 {
+						if weakSeason != 0 && weakSeason != val {
+							return 0, false, false
+						}
+						weakSeason = val
 					}
-					weakSeason = val
-					break
 				}
 			}
 		}
