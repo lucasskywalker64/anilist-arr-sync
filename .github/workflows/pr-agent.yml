@@ -1,0 +1,45 @@
+name: "PR Reviewer (Vertex AI)"
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr_agent_job:
+    if: |
+      github.event.sender.type != 'Bot' &&
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, '/')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          workload_identity_provider: "projects/${{ secrets.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
+          service_account: "github-pr-reviewer@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com"
+
+      - name: Run PR-Agent
+        uses: the-pr-agent/pr-agent@v0.47.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          config.model: "vertex_ai/gemini-3.8-flash"
+          config.fallback_models: "[]"
+          VERTEXAI.VERTEX_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          VERTEXAI.VERTEX_LOCATION: "us-central1"
+          PR_AGENT_CONFIG_BRANCH: ${{ github.base_ref || 'develop' }}
+          github_action_config.auto_review: "false"
+          github_action_config.auto_describe: "false"
+          github_action_config.auto_improve: "false"
