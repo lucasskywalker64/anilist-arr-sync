@@ -1,0 +1,56 @@
+[config]
+ignore = [
+  # Dependency lock and vendor files
+  "go.sum",
+  "vendor/**",
+
+  # Compiled binaries, test outputs, and coverage
+  "bin/**",
+  "*.exe",
+  "*.test",
+  "*.out",
+  "coverage.txt",
+  "profile.cov",
+
+  # Generated code (Protobuf, gRPC, mocks, SQL, GraphQL, Templ)
+  "*.pb.go",
+  "*_mock.go",
+  "**/mock_*.go",
+  "**/mocks/**",
+  "*_gen.go",
+  "**/generated/**",
+  "**/sqlc/**",
+  "**/*_templ.go",
+  "wire_gen.go",
+  "**/ent/**",
+
+  # Build/packaging artifacts
+  "dist/**"
+]
+
+[pr_reviewer]
+require_score_review = false
+require_tests_review = false
+require_security_review = true
+num_code_suggestions = 0
+inline_code_comments = true
+persistent_comment = true
+enable_help_text = false
+extra_instructions = """
+Act as an adversarial principal engineer auditing this PR:
+1. Prioritize edge cases, nil pointer risks, concurrency/race hazards, goroutine leaks, and unclosed resources (e.g. io.Closer, resp.Body).
+2. Flag breaking signature or contract changes visible within the diff; do not speculate on unedited callers outside the provided context.
+3. Ignore superficial style, formatting, and linting choices handled by standard toolchains.
+4. State findings concisely with clear failure scenarios.
+"""
+
+[pr_code_suggestions]
+focus_only_on_problems = true
+committable_code_suggestions = true
+suggestions_score_threshold = 7
+num_code_suggestions = 4
+rank_suggestions = true
+extra_instructions = """
+Provide only high-confidence bug fixes or edge-case protections.
+Ensure replacement blocks match existing indentation and replace only the necessary lines.
+"""
