@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"sync"
 	"time"
 )
 
@@ -95,11 +94,12 @@ const (
 	defaultRequestsPerMinute = 80
 	defaultBackoffBase       = 1 * time.Second
 	defaultMaxRetries        = 5
+	defaultMaxBackoff        = 5 * time.Minute
 	defaultHTTPTimeout       = 30 * time.Second
 )
 
 type limiter struct {
-	mu           sync.Mutex
+	sem          chan struct{}
 	interval     time.Duration
 	lastExecuted time.Time
 }
@@ -108,23 +108,44 @@ func newLimiter(requestsPerMinute int) *limiter {
 	if requestsPerMinute <= 0 {
 		requestsPerMinute = defaultRequestsPerMinute
 	}
-	return &limiter{
+	l := &limiter{
 		interval: time.Minute / time.Duration(requestsPerMinute),
+		sem:      make(chan struct{}, 1),
 	}
+	l.sem <- struct{}{}
+	return l
 }
 
 func (l *limiter) wait(ctx context.Context) error {
-	l.mu.Lock()
-	now := time.Now()
-	var targetTime time.Time
-	if l.lastExecuted.IsZero() || now.After(l.lastExecuted.Add(l.interval)) {
-		targetTime = now
-	} else {
-		targetTime = l.lastExecuted.Add(l.interval)
+	if l == nil || l.interval <= 0 {
+		return nil
 	}
-	l.lastExecuted = targetTime
-	waitDuration := time.Until(targetTime)
-	l.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	select {
+	case <-l.sem:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	defer func() {
+		l.sem <- struct{}{}
+	}()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	now := time.Now()
+	var waitDuration time.Duration
+	if !l.lastExecuted.IsZero() {
+		elapsed := now.Sub(l.lastExecuted)
+		if elapsed < l.interval {
+			waitDuration = l.interval - elapsed
+		}
+	}
 
 	if waitDuration > 0 {
 		timer := time.NewTimer(waitDuration)
@@ -134,9 +155,9 @@ func (l *limiter) wait(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-	} else if err := ctx.Err(); err != nil {
-		return err
 	}
+
+	l.lastExecuted = time.Now()
 	return nil
 }
 
@@ -220,23 +241,30 @@ func NewClient(endpoint string, opts ...ClientOption) *Client {
 func (c *Client) parseRetryAfter(header string, attempt int) time.Duration {
 	if header != "" {
 		if sec, err := strconv.Atoi(header); err == nil && sec >= 0 {
-			return time.Duration(sec) * time.Second
+			d := time.Duration(sec) * time.Second
+			if d > defaultMaxBackoff {
+				return defaultMaxBackoff
+			}
+			return d
 		}
 		if t, err := http.ParseTime(header); err == nil {
 			d := time.Until(t)
+			if d > defaultMaxBackoff {
+				return defaultMaxBackoff
+			}
 			if d > 0 {
 				return d
 			}
 			return 0
 		}
 	}
-	const maxBackoff = 5 * time.Minute
+
 	d := c.backoffBase
-	for i := 0; i < attempt && d < maxBackoff; i++ {
+	for i := 0; i < attempt && d < defaultMaxBackoff; i++ {
 		d *= 2
 	}
-	if d > maxBackoff {
-		d = maxBackoff
+	if d > defaultMaxBackoff {
+		d = defaultMaxBackoff
 	}
 	return d
 }
