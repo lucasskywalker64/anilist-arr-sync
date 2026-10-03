@@ -24,7 +24,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.base_ref || 'develop' }}
+          ref: refs/pull/${{ github.event.issue.number }}/head
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -39,8 +39,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           config.model: "vertex_ai/gemini-3.8-flash"
           config.fallback_models: "[]"
-          config.ai_timeout: "600"
-          config.reasoning_effort: "high"
           VERTEXAI.VERTEX_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
           VERTEXAI.VERTEX_LOCATION: "global"
           PR_AGENT_CONFIG_BRANCH: ${{ github.base_ref || 'develop' }}
