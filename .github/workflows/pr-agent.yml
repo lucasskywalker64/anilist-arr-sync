@@ -39,6 +39,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           config.model: "vertex_ai/gemini-3.8-flash"
           config.fallback_models: "[]"
+          config.ai_timeout: "600"
           VERTEXAI.VERTEX_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
           VERTEXAI.VERTEX_LOCATION: "global"
           PR_AGENT_CONFIG_BRANCH: ${{ github.base_ref || 'develop' }}

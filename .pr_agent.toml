@@ -1,4 +1,5 @@
 [config]
+ai_timeout = 600
 ignore = [
   # Dependency lock and vendor files
   "go.sum",
