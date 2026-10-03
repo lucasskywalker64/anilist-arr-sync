@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
@@ -67,6 +68,7 @@ type Loader struct {
 	url        string
 	batchSize  int
 	metaKey    string
+	syncMu     sync.Mutex
 }
 
 // NewLoader creates a Loader instance with configured options.
@@ -86,6 +88,11 @@ func NewLoader(db *storage.DB, opts ...Option) *Loader {
 
 // Sync performs conditional HTTP fetch and streaming database ingestion.
 func (l *Loader) Sync(ctx context.Context) (*Result, error) {
+	if !l.syncMu.TryLock() {
+		return nil, ErrSyncInProgress
+	}
+	defer l.syncMu.Unlock()
+
 	var existingMeta *Meta
 	m, err := l.GetMeta(ctx)
 	if err == nil {
@@ -286,6 +293,14 @@ func (l *Loader) loadStream(ctx context.Context, r io.Reader) (int, error) {
 	delim, ok = t.(json.Delim)
 	if !ok || delim != ']' {
 		return 0, fmt.Errorf("fribb: expected JSON array closing delimiter ']'")
+	}
+
+	t, err = dec.Token()
+	if err == nil {
+		return 0, fmt.Errorf("fribb: unexpected token %v after JSON array", t)
+	}
+	if err != io.EOF {
+		return 0, fmt.Errorf("fribb: unexpected data after JSON array: %w", err)
 	}
 
 	return totalInserted, nil

@@ -3,6 +3,7 @@ package fribb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -400,6 +401,56 @@ func TestLoader_Sync_ServerErrorsAndMalformed(t *testing.T) {
 			t.Fatalf("expected error on malformed JSON, got nil")
 		}
 	})
+
+	t.Run("trailing data after array", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "test_trailing.db")
+		db, err := storage.Open(dbPath)
+		if err != nil {
+			t.Fatalf("storage.Open failed: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("ETag", `"etag-trailing"`)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[{"anilist_id": 1, "tvdb_id": 101}] {"unexpected": true}`))
+		}))
+		defer server.Close()
+
+		loader := NewLoader(db, WithURL(server.URL))
+		_, err = loader.Sync(ctx)
+		if err == nil {
+			t.Fatalf("expected error on trailing data, got nil")
+		}
+		if !strings.Contains(err.Error(), "unexpected token") {
+			t.Fatalf("expected 'unexpected token' in error, got %v", err)
+		}
+	})
+
+	t.Run("malformed trailing characters after array", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "test_trailing_malformed.db")
+		db, err := storage.Open(dbPath)
+		if err != nil {
+			t.Fatalf("storage.Open failed: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("ETag", `"etag-trailing-malformed"`)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[{"anilist_id": 1, "tvdb_id": 101}] garbage!`))
+		}))
+		defer server.Close()
+
+		loader := NewLoader(db, WithURL(server.URL))
+		_, err = loader.Sync(ctx)
+		if err == nil {
+			t.Fatalf("expected error on malformed trailing data, got nil")
+		}
+		if !strings.Contains(err.Error(), "unexpected data after JSON array") {
+			t.Fatalf("expected 'unexpected data after JSON array' in error, got %v", err)
+		}
+	})
 }
 
 func TestLoader_Sync_DeletesRemovedUpstreamEntries(t *testing.T) {
@@ -680,4 +731,47 @@ func TestLoader_MemoryConsumptionUnder15MB(t *testing.T) {
 
 func ptr[T any](v T) *T {
 	return &v
+}
+
+func TestLoader_Sync_ConcurrentCallsReturnErrSyncInProgress(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "test_concurrent.db")
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("storage.Open failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		w.Header().Set("ETag", `"etag-concurrent"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[{"anilist_id": 1, "tvdb_id": 101}]`))
+	}))
+	defer server.Close()
+
+	loader := NewLoader(db, WithURL(server.URL))
+
+	errChan := make(chan error, 1)
+	go func() {
+		_, err := loader.Sync(ctx)
+		errChan <- err
+	}()
+
+	<-started
+
+	_, err = loader.Sync(ctx)
+	if !errors.Is(err, ErrSyncInProgress) {
+		t.Fatalf("expected ErrSyncInProgress on concurrent call, got %v", err)
+	}
+
+	close(release)
+	firstErr := <-errChan
+	if firstErr != nil {
+		t.Fatalf("expected first Sync to succeed, got %v", firstErr)
+	}
 }

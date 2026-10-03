@@ -13,6 +13,9 @@ var (
 
 	// ErrMetaNotFound is returned when Fribb cache metadata does not exist.
 	ErrMetaNotFound = errors.New("fribb: meta not found")
+
+	// ErrSyncInProgress is returned when Sync is called while another sync is actively running.
+	ErrSyncInProgress = errors.New("fribb: sync already in progress")
 )
 
 // Entry represents a cached mapping record from the Fribb dataset.
