@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
 )
@@ -106,4 +107,36 @@ func TestClient_EnsureTag(t *testing.T) {
 			t.Fatalf("expected created label 'anilist-sync', got %q", createdTag.Label)
 		}
 	})
+}
+
+func TestClient_WithTimeout_DoesNotMutateCallerClient(t *testing.T) {
+	callerClient := &http.Client{Timeout: 5 * time.Second}
+	_, err := servarr.NewClient("http://localhost:8989", "key",
+		servarr.WithHTTPClient(callerClient),
+		servarr.WithTimeout(15*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+
+	if callerClient.Timeout != 5*time.Second {
+		t.Fatalf("expected caller client timeout to remain 5s, got %v", callerClient.Timeout)
+	}
+}
+
+func TestClient_WithTimeout_OrderIndependence(t *testing.T) {
+	callerClient := &http.Client{Timeout: 5 * time.Second}
+	// WithTimeout passed before WithHTTPClient
+	client, err := servarr.NewClient("http://localhost:8989", "key",
+		servarr.WithTimeout(15*time.Second),
+		servarr.WithHTTPClient(callerClient),
+	)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+
+	if callerClient.Timeout != 5*time.Second {
+		t.Fatalf("expected caller client timeout to remain 5s, got %v", callerClient.Timeout)
+	}
+	_ = client
 }

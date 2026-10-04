@@ -86,17 +86,13 @@ func (c *SonarrClient) LookupSeriesByTVDBID(ctx context.Context, tvdbID int) (*S
 		return nil, fmt.Errorf("lookup series tvdb id %d: %w", tvdbID, err)
 	}
 
-	if len(results) == 0 {
-		return nil, ErrNotFound
-	}
-
-	for _, s := range results {
-		if s.TVDBID == tvdbID {
-			return &s, nil
+	for i := range results {
+		if results[i].TVDBID == tvdbID {
+			return &results[i], nil
 		}
 	}
 
-	return &results[0], nil
+	return nil, ErrNotFound
 }
 
 // AddSeries adds a new series to Sonarr.

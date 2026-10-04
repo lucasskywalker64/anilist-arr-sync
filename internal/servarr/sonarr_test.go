@@ -89,6 +89,34 @@ func TestSonarrClient_LookupSeriesByTVDBID(t *testing.T) {
 			t.Fatalf("expected nil series, got %+v", series)
 		}
 	})
+
+	t.Run("returns ErrNotFound when lookup results do not match tvdb id", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v3/series/lookup" {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode([]servarr.Series{
+					{TVDBID: 11111, Title: "Some Other Show"},
+					{TVDBID: 22222, Title: "Another Show"},
+				})
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer srv.Close()
+
+		client, err := servarr.NewSonarrClient(srv.URL, "sonarr-key")
+		if err != nil {
+			t.Fatalf("NewSonarrClient failed: %v", err)
+		}
+
+		series, err := client.LookupSeriesByTVDBID(context.Background(), 999999)
+		if !errors.Is(err, servarr.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+		if series != nil {
+			t.Fatalf("expected nil series, got %+v", series)
+		}
+	})
 }
 
 func TestSonarrClient_AddSeries(t *testing.T) {

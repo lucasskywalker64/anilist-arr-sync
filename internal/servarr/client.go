@@ -57,6 +57,7 @@ type Client struct {
 	baseURL    string
 	apiKey     string
 	httpClient *http.Client
+	timeout    *time.Duration
 }
 
 // Option configures a Client instance.
@@ -74,7 +75,7 @@ func WithHTTPClient(client *http.Client) Option {
 // WithTimeout configures a custom timeout for the HTTP client.
 func WithTimeout(timeout time.Duration) Option {
 	return func(c *Client) {
-		c.httpClient.Timeout = timeout
+		c.timeout = &timeout
 	}
 }
 
@@ -100,6 +101,12 @@ func NewClient(rawURL, apiKey string, opts ...Option) (*Client, error) {
 
 	for _, opt := range opts {
 		opt(c)
+	}
+
+	if c.timeout != nil {
+		hc := *c.httpClient
+		hc.Timeout = *c.timeout
+		c.httpClient = &hc
 	}
 
 	return c, nil
@@ -144,10 +151,13 @@ func (c *Client) do(req *http.Request, target any) (*http.Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("execute request: %w", err)
 	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if target != nil && resp.StatusCode != http.StatusNoContent {
-			defer func() { _ = resp.Body.Close() }()
 			if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
 				return resp, fmt.Errorf("decode response json: %w", err)
 			}
@@ -155,7 +165,6 @@ func (c *Client) do(req *http.Request, target any) (*http.Response, error) {
 		return resp, nil
 	}
 
-	defer func() { _ = resp.Body.Close() }()
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	bodyStr := strings.TrimSpace(string(bodyBytes))
 

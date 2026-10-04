@@ -76,7 +76,7 @@ func (c *RadarrClient) LookupMovieByTMDBID(ctx context.Context, tmdbID int) (*Mo
 	if err != nil {
 		// If lookup/tmdb returns 404, fallback to /api/v3/movie/lookup?term=tmdb:{id}
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return c.lookupMovieByTerm(ctx, fmt.Sprintf("tmdb:%d", tmdbID))
+			return c.lookupMovieByTerm(ctx, tmdbID)
 		}
 		return nil, fmt.Errorf("lookup movie tmdb id %d: %w", tmdbID, err)
 	}
@@ -88,7 +88,8 @@ func (c *RadarrClient) LookupMovieByTMDBID(ctx context.Context, tmdbID int) (*Mo
 	return &movie, nil
 }
 
-func (c *RadarrClient) lookupMovieByTerm(ctx context.Context, term string) (*Movie, error) {
+func (c *RadarrClient) lookupMovieByTerm(ctx context.Context, tmdbID int) (*Movie, error) {
+	term := fmt.Sprintf("tmdb:%d", tmdbID)
 	endpoint := fmt.Sprintf("/api/v3/movie/lookup?term=%s", url.QueryEscape(term))
 	req, err := c.newRequest(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -101,11 +102,13 @@ func (c *RadarrClient) lookupMovieByTerm(ctx context.Context, term string) (*Mov
 		return nil, fmt.Errorf("lookup movie term %q: %w", term, err)
 	}
 
-	if len(movies) == 0 {
-		return nil, ErrNotFound
+	for i := range movies {
+		if movies[i].TMDBID == tmdbID {
+			return &movies[i], nil
+		}
 	}
 
-	return &movies[0], nil
+	return nil, ErrNotFound
 }
 
 // AddMovie adds a new movie to Radarr.

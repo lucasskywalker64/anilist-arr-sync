@@ -76,6 +76,37 @@ func TestRadarrClient_LookupMovieByTMDBID(t *testing.T) {
 			t.Fatalf("expected nil movie, got %+v", movie)
 		}
 	})
+
+	t.Run("returns ErrNotFound when fallback term search does not match tmdb id", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v3/movie/lookup/tmdb" {
+				http.NotFound(w, r)
+				return
+			}
+			if r.URL.Path == "/api/v3/movie/lookup" {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode([]servarr.Movie{
+					{TMDBID: 11111, Title: "Some Other Movie"},
+				})
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer srv.Close()
+
+		client, err := servarr.NewRadarrClient(srv.URL, "radarr-key")
+		if err != nil {
+			t.Fatalf("NewRadarrClient failed: %v", err)
+		}
+
+		movie, err := client.LookupMovieByTMDBID(context.Background(), 999999)
+		if !errors.Is(err, servarr.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+		if movie != nil {
+			t.Fatalf("expected nil movie, got %+v", movie)
+		}
+	})
 }
 
 func TestRadarrClient_AddMovie(t *testing.T) {
