@@ -280,17 +280,3 @@ func (c *SonarrClient) MonitorEpisodes(ctx context.Context, episodeIDs []int, mo
 
 	return nil
 }
-
-// SearchEpisodes triggers an automatic search in Sonarr for specific episode IDs.
-func (c *SonarrClient) SearchEpisodes(ctx context.Context, episodeIDs ...int) (*Command, error) {
-	if len(episodeIDs) == 0 {
-		return nil, errors.New("at least one episode id is required to search")
-	}
-
-	payload := map[string]any{
-		"name":       "EpisodeSearch",
-		"episodeIds": episodeIDs,
-	}
-
-	return c.ExecuteCommand(ctx, payload)
-}
