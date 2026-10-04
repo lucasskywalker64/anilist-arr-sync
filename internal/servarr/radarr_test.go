@@ -15,10 +15,14 @@ func TestRadarrClient_LookupMovieByTMDBID(t *testing.T) {
 	t.Run("successfully returns movie by tmdb id", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {
-				t.Fatalf("expected GET, got %s", r.Method)
+				t.Errorf("expected GET, got %s", r.Method)
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
 			}
 			if r.Header.Get("X-Api-Key") != "radarr-key" {
-				t.Fatalf("expected X-Api-Key 'radarr-key', got %q", r.Header.Get("X-Api-Key"))
+				t.Errorf("expected X-Api-Key 'radarr-key', got %q", r.Header.Get("X-Api-Key"))
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
 			}
 
 			// Radarr v3 lookup by tmdbId
@@ -114,14 +118,20 @@ func TestRadarrClient_AddMovie(t *testing.T) {
 		var received servarr.AddMovieRequest
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPost || r.URL.Path != "/api/v3/movie" {
-				t.Fatalf("expected POST /api/v3/movie, got %s %s", r.Method, r.URL.Path)
+				t.Errorf("expected POST /api/v3/movie, got %s %s", r.Method, r.URL.Path)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
 			}
 			if r.Header.Get("X-Api-Key") != "radarr-key" {
-				t.Fatalf("expected X-Api-Key 'radarr-key', got %q", r.Header.Get("X-Api-Key"))
+				t.Errorf("expected X-Api-Key 'radarr-key', got %q", r.Header.Get("X-Api-Key"))
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
 			}
 
 			if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
-				t.Fatalf("decode body: %v", err)
+				t.Errorf("decode body: %v", err)
+				http.Error(w, "bad body", http.StatusBadRequest)
+				return
 			}
 
 			w.Header().Set("Content-Type", "application/json")
@@ -180,14 +190,20 @@ func TestRadarrClient_SearchMovies(t *testing.T) {
 		var received map[string]any
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPost || r.URL.Path != "/api/v3/command" {
-				t.Fatalf("expected POST /api/v3/command, got %s %s", r.Method, r.URL.Path)
+				t.Errorf("expected POST /api/v3/command, got %s %s", r.Method, r.URL.Path)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
 			}
 			if r.Header.Get("X-Api-Key") != "radarr-key" {
-				t.Fatalf("expected X-Api-Key 'radarr-key', got %q", r.Header.Get("X-Api-Key"))
+				t.Errorf("expected X-Api-Key 'radarr-key', got %q", r.Header.Get("X-Api-Key"))
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
 			}
 
 			if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
-				t.Fatalf("decode command body: %v", err)
+				t.Errorf("decode command body: %v", err)
+				http.Error(w, "bad body", http.StatusBadRequest)
+				return
 			}
 
 			w.Header().Set("Content-Type", "application/json")

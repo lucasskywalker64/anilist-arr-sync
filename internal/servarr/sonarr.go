@@ -88,7 +88,8 @@ func (c *SonarrClient) LookupSeriesByTVDBID(ctx context.Context, tvdbID int) (*S
 
 	for i := range results {
 		if results[i].TVDBID == tvdbID {
-			return &results[i], nil
+			series := results[i]
+			return &series, nil
 		}
 	}
 
@@ -207,8 +208,8 @@ func (c *SonarrClient) UpdateSeries(ctx context.Context, series *Series) (*Serie
 			}
 
 			// Overlay desired season monitoring onto refreshed model
-			seasonMonitored := make(map[int]bool, len(current.Seasons))
-			for _, s := range current.Seasons {
+			seasonMonitored := make(map[int]bool, len(series.Seasons))
+			for _, s := range series.Seasons {
 				seasonMonitored[s.SeasonNumber] = s.Monitored
 			}
 			for i := range refreshed.Seasons {
@@ -217,20 +218,20 @@ func (c *SonarrClient) UpdateSeries(ctx context.Context, series *Series) (*Serie
 				}
 			}
 
-			refreshed.Monitored = current.Monitored
-			if len(current.Tags) > 0 {
-				refreshed.Tags = current.Tags
+			refreshed.Monitored = series.Monitored
+			if len(series.Tags) > 0 {
+				refreshed.Tags = series.Tags
 			}
-			if current.QualityProfileID > 0 {
-				refreshed.QualityProfileID = current.QualityProfileID
+			if series.QualityProfileID > 0 {
+				refreshed.QualityProfileID = series.QualityProfileID
 			}
-			if current.RootFolderPath != "" {
-				refreshed.RootFolderPath = current.RootFolderPath
+			if series.RootFolderPath != "" {
+				refreshed.RootFolderPath = series.RootFolderPath
 			}
-			if current.SeriesType != "" {
-				refreshed.SeriesType = current.SeriesType
+			if series.SeriesType != "" {
+				refreshed.SeriesType = series.SeriesType
 			}
-			refreshed.SeasonFolder = current.SeasonFolder
+			refreshed.SeasonFolder = series.SeasonFolder
 
 			current = *refreshed
 			continue

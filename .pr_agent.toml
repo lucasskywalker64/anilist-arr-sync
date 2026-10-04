@@ -101,6 +101,9 @@ You are an expert Go (Golang) code review agent. Your objective is to review PRs
 ### 5. Idiomatic Architecture & Design
 - Interface Design: Interfaces should generally be defined by the consumer, not the producer. Encourage minimal interfaces (`io.Reader`, single-method interfaces).
 - Zero-Value Usability: Check if structs can be safely used in their zero-value state where practical.
+
+### 6. Testing & Concurrency in Tests
+- Test Goroutines: Do not call `t.Fatal` or `t.Fatalf` inside goroutines, background workers, or HTTP test handlers (`httptest.Server`, `http.HandlerFunc`). Calling `FailNow` only stops the running goroutine via `runtime.Goexit`, leaving the test hanging or failing with broken connection errors. Call `t.Error`/`t.Errorf` and return instead.
 """
 
 [pr_code_suggestions]
@@ -157,4 +160,7 @@ You are an expert Go (Golang) code improvement agent. Your objective is to provi
 ### 5. Idiomatic Architecture & Design
 - Interface Design: Interfaces should generally be defined by the consumer, not the producer. Encourage minimal interfaces (`io.Reader`, single-method interfaces).
 - Zero-Value Usability: Check if structs can be safely used in their zero-value state where practical.
+
+### 6. Testing & Concurrency in Tests
+- Test Goroutines: Do not call `t.Fatal` or `t.Fatalf` inside goroutines, background workers, or HTTP test handlers (`httptest.Server`, `http.HandlerFunc`). Calling `FailNow` only stops the running goroutine via `runtime.Goexit`, leaving the test hanging or failing with broken connection errors. Call `t.Error`/`t.Errorf` and return instead.
 """

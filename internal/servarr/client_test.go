@@ -50,7 +50,8 @@ func TestClient_EnsureTag(t *testing.T) {
 				})
 				return
 			}
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusBadRequest)
 		}))
 		defer srv.Close()
 
@@ -86,7 +87,8 @@ func TestClient_EnsureTag(t *testing.T) {
 					Label: createdTag.Label,
 				})
 			default:
-				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				http.Error(w, "unexpected request", http.StatusBadRequest)
 			}
 		}))
 		defer srv.Close()

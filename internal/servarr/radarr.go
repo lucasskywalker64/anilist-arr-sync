@@ -72,10 +72,10 @@ func (c *RadarrClient) LookupMovieByTMDBID(ctx context.Context, tmdbID int) (*Mo
 	}
 
 	var movie Movie
-	resp, err := c.do(req, &movie)
+	_, err = c.do(req, &movie)
 	if err != nil {
 		// If lookup/tmdb returns 404, fallback to /api/v3/movie/lookup?term=tmdb:{id}
-		if resp != nil && resp.StatusCode == http.StatusNotFound {
+		if errors.Is(err, ErrNotFound) {
 			return c.lookupMovieByTerm(ctx, tmdbID)
 		}
 		return nil, fmt.Errorf("lookup movie tmdb id %d: %w", tmdbID, err)
@@ -104,7 +104,8 @@ func (c *RadarrClient) lookupMovieByTerm(ctx context.Context, tmdbID int) (*Movi
 
 	for i := range movies {
 		if movies[i].TMDBID == tmdbID {
-			return &movies[i], nil
+			movie := movies[i]
+			return &movie, nil
 		}
 	}
 

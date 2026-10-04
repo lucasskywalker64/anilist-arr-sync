@@ -15,10 +15,14 @@ func TestSonarrClient_LookupSeriesByTVDBID(t *testing.T) {
 	t.Run("successfully returns series by tvdb id", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {
-				t.Fatalf("expected GET, got %s", r.Method)
+				t.Errorf("expected GET, got %s", r.Method)
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
 			}
 			if r.Header.Get("X-Api-Key") != "sonarr-key" {
-				t.Fatalf("expected X-Api-Key 'sonarr-key', got %q", r.Header.Get("X-Api-Key"))
+				t.Errorf("expected X-Api-Key 'sonarr-key', got %q", r.Header.Get("X-Api-Key"))
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
 			}
 
 			if r.URL.Path == "/api/v3/series/lookup" && r.URL.Query().Get("term") == "tvdb:81797" {
@@ -124,14 +128,20 @@ func TestSonarrClient_AddSeries(t *testing.T) {
 		var received servarr.AddSeriesRequest
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPost || r.URL.Path != "/api/v3/series" {
-				t.Fatalf("expected POST /api/v3/series, got %s %s", r.Method, r.URL.Path)
+				t.Errorf("expected POST /api/v3/series, got %s %s", r.Method, r.URL.Path)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
 			}
 			if r.Header.Get("X-Api-Key") != "sonarr-key" {
-				t.Fatalf("expected X-Api-Key 'sonarr-key', got %q", r.Header.Get("X-Api-Key"))
+				t.Errorf("expected X-Api-Key 'sonarr-key', got %q", r.Header.Get("X-Api-Key"))
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
 			}
 
 			if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
-				t.Fatalf("decode body: %v", err)
+				t.Errorf("decode body: %v", err)
+				http.Error(w, "bad body", http.StatusBadRequest)
+				return
 			}
 
 			w.Header().Set("Content-Type", "application/json")
@@ -197,13 +207,19 @@ func TestSonarrClient_GetEpisodes(t *testing.T) {
 	t.Run("successfully queries episode premiere dates", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet || r.URL.Path != "/api/v3/episode" {
-				t.Fatalf("expected GET /api/v3/episode, got %s %s", r.Method, r.URL.Path)
+				t.Errorf("expected GET /api/v3/episode, got %s %s", r.Method, r.URL.Path)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
 			}
 			if r.Header.Get("X-Api-Key") != "sonarr-key" {
-				t.Fatalf("expected X-Api-Key 'sonarr-key', got %q", r.Header.Get("X-Api-Key"))
+				t.Errorf("expected X-Api-Key 'sonarr-key', got %q", r.Header.Get("X-Api-Key"))
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
 			}
 			if r.URL.Query().Get("seriesId") != "202" {
-				t.Fatalf("expected seriesId=202, got %q", r.URL.Query().Get("seriesId"))
+				t.Errorf("expected seriesId=202, got %q", r.URL.Query().Get("seriesId"))
+				http.Error(w, "bad query", http.StatusBadRequest)
+				return
 			}
 
 			w.Header().Set("Content-Type", "application/json")
@@ -261,7 +277,9 @@ func TestSonarrClient_GetSeriesByID(t *testing.T) {
 	t.Run("successfully returns series by id", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet || r.URL.Path != "/api/v3/series/202" {
-				t.Fatalf("expected GET /api/v3/series/202, got %s %s", r.Method, r.URL.Path)
+				t.Errorf("expected GET /api/v3/series/202, got %s %s", r.Method, r.URL.Path)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(servarr.Series{
@@ -312,7 +330,9 @@ func TestSonarrClient_UpdateSeries(t *testing.T) {
 		var received servarr.Series
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPut || r.URL.Path != "/api/v3/series" {
-				t.Fatalf("expected PUT /api/v3/series, got %s %s", r.Method, r.URL.Path)
+				t.Errorf("expected PUT /api/v3/series, got %s %s", r.Method, r.URL.Path)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
 			}
 			_ = json.NewDecoder(r.Body).Decode(&received)
 			w.Header().Set("Content-Type", "application/json")
@@ -375,7 +395,9 @@ func TestSonarrClient_UpdateSeries(t *testing.T) {
 					},
 				})
 			default:
-				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				http.Error(w, "unexpected request", http.StatusBadRequest)
+				return
 			}
 		}))
 		defer srv.Close()
@@ -467,14 +489,20 @@ func TestSonarrClient_SearchSeason(t *testing.T) {
 		var received map[string]any
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPost || r.URL.Path != "/api/v3/command" {
-				t.Fatalf("expected POST /api/v3/command, got %s %s", r.Method, r.URL.Path)
+				t.Errorf("expected POST /api/v3/command, got %s %s", r.Method, r.URL.Path)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
 			}
 			if r.Header.Get("X-Api-Key") != "sonarr-key" {
-				t.Fatalf("expected X-Api-Key 'sonarr-key', got %q", r.Header.Get("X-Api-Key"))
+				t.Errorf("expected X-Api-Key 'sonarr-key', got %q", r.Header.Get("X-Api-Key"))
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
 			}
 
 			if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
-				t.Fatalf("decode command body: %v", err)
+				t.Errorf("decode command body: %v", err)
+				http.Error(w, "bad body", http.StatusBadRequest)
+				return
 			}
 
 			w.Header().Set("Content-Type", "application/json")
@@ -519,14 +547,20 @@ func TestSonarrClient_MonitorEpisodes(t *testing.T) {
 		var received map[string]any
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPut || r.URL.Path != "/api/v3/episode/monitor" {
-				t.Fatalf("expected PUT /api/v3/episode/monitor, got %s %s", r.Method, r.URL.Path)
+				t.Errorf("expected PUT /api/v3/episode/monitor, got %s %s", r.Method, r.URL.Path)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
 			}
 			if r.Header.Get("X-Api-Key") != "sonarr-key" {
-				t.Fatalf("expected X-Api-Key 'sonarr-key', got %q", r.Header.Get("X-Api-Key"))
+				t.Errorf("expected X-Api-Key 'sonarr-key', got %q", r.Header.Get("X-Api-Key"))
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
 			}
 
 			if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
-				t.Fatalf("decode monitor body: %v", err)
+				t.Errorf("decode monitor body: %v", err)
+				http.Error(w, "bad body", http.StatusBadRequest)
+				return
 			}
 
 			w.Header().Set("Content-Type", "application/json")
