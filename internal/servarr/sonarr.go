@@ -256,3 +256,41 @@ func (c *SonarrClient) SearchSeason(ctx context.Context, seriesID int, seasonNum
 
 	return c.ExecuteCommand(ctx, payload)
 }
+
+// MonitorEpisodes updates the monitored state for a specific list of episode IDs.
+func (c *SonarrClient) MonitorEpisodes(ctx context.Context, episodeIDs []int, monitored bool) error {
+	if len(episodeIDs) == 0 {
+		return errors.New("at least one episode id is required to monitor")
+	}
+
+	payload := map[string]any{
+		"episodeIds": episodeIDs,
+		"monitored":  monitored,
+	}
+
+	req, err := c.newRequest(ctx, http.MethodPut, "/api/v3/episode/monitor", payload)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.do(req, nil)
+	if err != nil {
+		return fmt.Errorf("monitor episodes: %w", err)
+	}
+
+	return nil
+}
+
+// SearchEpisodes triggers an automatic search in Sonarr for specific episode IDs.
+func (c *SonarrClient) SearchEpisodes(ctx context.Context, episodeIDs ...int) (*Command, error) {
+	if len(episodeIDs) == 0 {
+		return nil, errors.New("at least one episode id is required to search")
+	}
+
+	payload := map[string]any{
+		"name":       "EpisodeSearch",
+		"episodeIds": episodeIDs,
+	}
+
+	return c.ExecuteCommand(ctx, payload)
+}
