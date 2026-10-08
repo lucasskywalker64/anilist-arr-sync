@@ -270,8 +270,11 @@ func TestResolve_NullOrMissingTargetIDsUnresolved(t *testing.T) {
 		}
 
 		res, err := r.Resolve(ctx, media)
-		if err == nil && res.Resolved {
-			t.Fatalf("expected entry with null target service ID to be unresolved, got resolved")
+		if err != nil {
+			t.Fatalf("Resolve returned unexpected error: %v", err)
+		}
+		if res.Resolved || !res.Diverted {
+			t.Fatalf("expected unresolved and diverted, got Resolved=%v Diverted=%v", res.Resolved, res.Diverted)
 		}
 	})
 }
