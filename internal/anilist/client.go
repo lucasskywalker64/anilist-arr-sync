@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -62,16 +64,53 @@ type MediaTitle struct {
 	UserPreferred string `json:"userPreferred"`
 }
 
+// MediaCoverImage represents the cover image URLs and dominant color of a media item on AniList.
+type MediaCoverImage struct {
+	ExtraLarge string `json:"extraLarge"`
+	Large      string `json:"large"`
+	Medium     string `json:"medium"`
+	Color      string `json:"color"`
+}
+
 // Media represents an anime media entity on AniList.
 type Media struct {
-	ID        int         `json:"id"`
-	IDMal     *int        `json:"idMal"`
-	Title     MediaTitle  `json:"title"`
-	Format    string      `json:"format"`
-	Status    MediaStatus `json:"status"`
-	StartDate Date        `json:"startDate"`
-	Episodes  *int        `json:"episodes"`
-	Synonyms  []string    `json:"synonyms"`
+	ID         int             `json:"id"`
+	IDMal      *int            `json:"idMal"`
+	Title      MediaTitle      `json:"title"`
+	CoverImage MediaCoverImage `json:"coverImage"`
+	Format     string          `json:"format"`
+	Status     MediaStatus     `json:"status"`
+	StartDate  Date            `json:"startDate"`
+	Episodes   *int            `json:"episodes"`
+	Synonyms   []string        `json:"synonyms"`
+}
+
+const defaultCoverPlaceholderURL = "https://dummyimage.com/400x600/2b2d42/2b2d42.png"
+
+var hexColorRegex = regexp.MustCompile(`^[0-9a-fA-F]{6}$`)
+
+// CoverImageURL returns the best available image URL for the media item,
+// prioritizing ExtraLarge, Large, and Medium image URLs.
+// If image URLs are absent, it falls back to a dummyimage.com solid color URL
+// using the sanitized hex color. If Color is null, empty, or invalid, it returns
+// the default placeholder color URL.
+func (m Media) CoverImageURL() string {
+	if m.CoverImage.ExtraLarge != "" {
+		return m.CoverImage.ExtraLarge
+	}
+	if m.CoverImage.Large != "" {
+		return m.CoverImage.Large
+	}
+	if m.CoverImage.Medium != "" {
+		return m.CoverImage.Medium
+	}
+
+	sanitizedColor := strings.TrimPrefix(m.CoverImage.Color, "#")
+	if hexColorRegex.MatchString(sanitizedColor) {
+		return fmt.Sprintf("https://dummyimage.com/400x600/%s/%s.png", sanitizedColor, sanitizedColor)
+	}
+
+	return defaultCoverPlaceholderURL
 }
 
 // MediaListEntry represents an individual entry in a user's AniList media collection.
@@ -297,6 +336,12 @@ query ($userName: String, $type: MediaType, $statusIn: [MediaListStatus], $chunk
           }
           episodes
           synonyms
+          coverImage {
+            extraLarge
+            large
+            medium
+            color
+          }
         }
       }
     }

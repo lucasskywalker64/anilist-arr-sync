@@ -793,3 +793,147 @@ func TestFetchWatchlist_NullMediaListCollectionReturnsError(t *testing.T) {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
+
+func TestFetchWatchlist_QueriesCoverImageAndMapsCoverImagePayloads(t *testing.T) {
+	var mu sync.Mutex
+	var capturedQuery string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+
+		mu.Lock()
+		if q, ok := body["query"].(string); ok {
+			capturedQuery = q
+		}
+		mu.Unlock()
+
+		resp := map[string]any{
+			"data": map[string]any{
+				"MediaListCollection": map[string]any{
+					"hasNextChunk": false,
+					"lists": []map[string]any{
+						{
+							"name":   "Watching",
+							"status": "CURRENT",
+							"entries": []map[string]any{
+								{
+									"id":     1,
+									"status": "CURRENT",
+									"media": map[string]any{
+										"id":     101,
+										"format": "TV",
+										"status": "FINISHED",
+										"title":  map[string]any{"romaji": "Anime With Full Cover"},
+										"coverImage": map[string]any{
+											"extraLarge": "https://img.anilist.co/media/101/extralarge.jpg",
+											"large":      "https://img.anilist.co/media/101/large.jpg",
+											"medium":     "https://img.anilist.co/media/101/medium.jpg",
+											"color":      "#e4a15d",
+										},
+									},
+								},
+								{
+									"id":     2,
+									"status": "CURRENT",
+									"media": map[string]any{
+										"id":     102,
+										"format": "TV",
+										"status": "FINISHED",
+										"title":  map[string]any{"romaji": "Anime With Missing Images But Valid Color"},
+										"coverImage": map[string]any{
+											"extraLarge": nil,
+											"large":      nil,
+											"medium":     nil,
+											"color":      "#43a047",
+										},
+									},
+								},
+								{
+									"id":     3,
+									"status": "CURRENT",
+									"media": map[string]any{
+										"id":     103,
+										"format": "TV",
+										"status": "FINISHED",
+										"title":  map[string]any{"romaji": "Anime With Null Color Payload"},
+										"coverImage": map[string]any{
+											"extraLarge": nil,
+											"large":      nil,
+											"medium":     nil,
+											"color":      nil,
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := anilist.NewClient(server.URL, anilist.WithRateLimit(60000))
+	entries, err := client.FetchWatchlist(context.Background(), anilist.WatchlistFilter{
+		Username: "testuser",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	query := capturedQuery
+	mu.Unlock()
+
+	// Verify coverImage and fields are requested inside query
+	requiredSubstrings := []string{
+		"coverImage",
+		"extraLarge",
+		"large",
+		"medium",
+		"color",
+	}
+	for _, sub := range requiredSubstrings {
+		if !strings.Contains(query, sub) {
+			t.Errorf("expected query to contain %q, but query was:\n%s", sub, query)
+		}
+	}
+
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(entries))
+	}
+
+	// Entry 1: valid image URLs present
+	e1 := entries[0]
+	if e1.Media.CoverImage.ExtraLarge != "https://img.anilist.co/media/101/extralarge.jpg" {
+		t.Errorf("expected ExtraLarge URL, got %q", e1.Media.CoverImage.ExtraLarge)
+	}
+	if e1.Media.CoverImage.Color != "#e4a15d" {
+		t.Errorf("expected Color #e4a15d, got %q", e1.Media.CoverImage.Color)
+	}
+	if gotURL := e1.Media.CoverImageURL(); gotURL != "https://img.anilist.co/media/101/extralarge.jpg" {
+		t.Errorf("expected e1 CoverImageURL %q, got %q", "https://img.anilist.co/media/101/extralarge.jpg", gotURL)
+	}
+
+	// Entry 2: missing images with valid color
+	e2 := entries[1]
+	if e2.Media.CoverImage.Color != "#43a047" {
+		t.Errorf("expected Color #43a047, got %q", e2.Media.CoverImage.Color)
+	}
+	if gotURL := e2.Media.CoverImageURL(); gotURL != "https://dummyimage.com/400x600/43a047/43a047.png" {
+		t.Errorf("expected e2 CoverImageURL %q, got %q", "https://dummyimage.com/400x600/43a047/43a047.png", gotURL)
+	}
+
+	// Entry 3: null color payload
+	e3 := entries[2]
+	if e3.Media.CoverImage.Color != "" {
+		t.Errorf("expected empty Color for null payload, got %q", e3.Media.CoverImage.Color)
+	}
+	if gotURL := e3.Media.CoverImageURL(); gotURL != "https://dummyimage.com/400x600/2b2d42/2b2d42.png" {
+		t.Errorf("expected e3 CoverImageURL default fallback %q, got %q", "https://dummyimage.com/400x600/2b2d42/2b2d42.png", gotURL)
+	}
+}
