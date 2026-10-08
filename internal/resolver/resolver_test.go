@@ -514,25 +514,46 @@ func TestResolve_SpecialWithMappings(t *testing.T) {
 		if res.TargetID != 44444 {
 			t.Errorf("expected TargetID 44444, got %d", res.TargetID)
 		}
+		if res.TVDBSeason != 0 {
+			t.Errorf("expected TVDBSeason 0, got %d", res.TVDBSeason)
+		}
 	})
 
-	t.Run("resolves special with Tier 2 Fribb entry", func(t *testing.T) {
+	t.Run("bypasses Tier 2 Fribb entry for special and diverts to review queue", func(t *testing.T) {
 		media := anilist.Media{
 			ID:     1002,
 			Format: "SPECIAL",
+			Title: anilist.MediaTitle{
+				Romaji: "Special In Fribb",
+			},
 		}
 		res, err := r.Resolve(ctx, media)
 		if err != nil {
 			t.Fatalf("Resolve failed: %v", err)
 		}
-		if !res.Resolved {
-			t.Errorf("expected Resolved true, got false")
+		if res.Resolved {
+			t.Errorf("expected Resolved false for special in Fribb, got true")
 		}
-		if res.Tier != resolver.TierFribb {
-			t.Errorf("expected TierFribb, got %v", res.Tier)
+		if !res.Diverted {
+			t.Errorf("expected Diverted true for special in Fribb, got false")
 		}
-		if res.TargetID != 55555 {
-			t.Errorf("expected TargetID 55555, got %d", res.TargetID)
+		if res.DivertReason != "SPECIAL_WITHOUT_MAPPING" {
+			t.Errorf("expected DivertReason SPECIAL_WITHOUT_MAPPING, got %q", res.DivertReason)
+		}
+
+		var count int
+		err = db.Read(ctx, func(ctx context.Context, q storage.Querier) error {
+			return q.QueryRowContext(ctx, `
+				SELECT COUNT(*)
+				FROM review_queue
+				WHERE anilist_id = 1002 AND reason = 'SPECIAL_WITHOUT_MAPPING' AND status = 'PENDING';
+			`).Scan(&count)
+		})
+		if err != nil {
+			t.Fatalf("query review_queue failed: %v", err)
+		}
+		if count != 1 {
+			t.Errorf("expected 1 record in review_queue, got %d", count)
 		}
 	})
 }

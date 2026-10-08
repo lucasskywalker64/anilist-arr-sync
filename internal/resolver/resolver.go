@@ -93,7 +93,7 @@ func (r *Resolver) Resolve(ctx context.Context, media anilist.Media) (*Result, e
 				return c == ',' || c == ' ' || c == ';'
 			})
 			if len(parts) > 0 {
-				if parsed, parseErr := strconv.Atoi(parts[0]); parseErr == nil && parsed > 0 {
+				if parsed, parseErr := strconv.Atoi(parts[0]); parseErr == nil && parsed >= 0 {
 					seasonNum = parsed
 				}
 			}
@@ -127,48 +127,50 @@ func (r *Resolver) Resolve(ctx context.Context, media anilist.Media) (*Result, e
 		return nil, fmt.Errorf("resolver: query mapping_overrides failed: %w", err)
 	}
 
-	// Tier 2: Fribb community mappings
-	var fribbTVDBID, fribbTMDBID sql.NullInt64
-	var fribbSeason sql.NullInt64
+	// Tier 2: Fribb community mappings (bypassed for specials to prevent inaccurate season 0 assignments)
+	if normalizedFormat != router.FormatSpecial {
+		var fribbTVDBID, fribbTMDBID sql.NullInt64
+		var fribbSeason sql.NullInt64
 
-	err = r.db.Read(ctx, func(ctx context.Context, q storage.Querier) error {
-		row := q.QueryRowContext(ctx, `
-			SELECT tvdb_id, tmdb_id, tvdb_season
-			FROM fribb_entries
-			WHERE anilist_id = ?;
-		`, media.ID)
-		return row.Scan(&fribbTVDBID, &fribbTMDBID, &fribbSeason)
-	})
+		err = r.db.Read(ctx, func(ctx context.Context, q storage.Querier) error {
+			row := q.QueryRowContext(ctx, `
+				SELECT tvdb_id, tmdb_id, tvdb_season
+				FROM fribb_entries
+				WHERE anilist_id = ?;
+			`, media.ID)
+			return row.Scan(&fribbTVDBID, &fribbTMDBID, &fribbSeason)
+		})
 
-	if err == nil {
-		season := 1
-		if fribbSeason.Valid && fribbSeason.Int64 > 0 {
-			season = int(fribbSeason.Int64)
-		}
-
-		if decision == router.RouteRadarr {
-			if fribbTMDBID.Valid && fribbTMDBID.Int64 > 0 {
-				return &Result{
-					Resolved:      true,
-					Tier:          TierFribb,
-					TargetService: "RADARR",
-					TargetID:      int(fribbTMDBID.Int64),
-					TVDBSeason:    season,
-				}, nil
+		if err == nil {
+			season := 1
+			if fribbSeason.Valid && fribbSeason.Int64 >= 0 {
+				season = int(fribbSeason.Int64)
 			}
-		} else {
-			if fribbTVDBID.Valid && fribbTVDBID.Int64 > 0 {
-				return &Result{
-					Resolved:      true,
-					Tier:          TierFribb,
-					TargetService: "SONARR",
-					TargetID:      int(fribbTVDBID.Int64),
-					TVDBSeason:    season,
-				}, nil
+
+			if decision == router.RouteRadarr {
+				if fribbTMDBID.Valid && fribbTMDBID.Int64 > 0 {
+					return &Result{
+						Resolved:      true,
+						Tier:          TierFribb,
+						TargetService: "RADARR",
+						TargetID:      int(fribbTMDBID.Int64),
+						TVDBSeason:    season,
+					}, nil
+				}
+			} else {
+				if fribbTVDBID.Valid && fribbTVDBID.Int64 > 0 {
+					return &Result{
+						Resolved:      true,
+						Tier:          TierFribb,
+						TargetService: "SONARR",
+						TargetID:      int(fribbTVDBID.Int64),
+						TVDBSeason:    season,
+					}, nil
+				}
 			}
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("resolver: query fribb_entries failed: %w", err)
 		}
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("resolver: query fribb_entries failed: %w", err)
 	}
 
 	// Unmapped: divert to review_queue
