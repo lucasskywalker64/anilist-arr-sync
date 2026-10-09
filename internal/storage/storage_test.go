@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 )
@@ -525,5 +527,239 @@ func TestTableConstraintsAndSchema(t *testing.T) {
 	})
 	if err != nil {
 		t.Errorf("inserting valid notification connection failed: %v", err)
+	}
+}
+
+func TestVacuumInto(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	srcDBPath := filepath.Join(dir, "sync.db")
+	dstDBPath := filepath.Join(dir, "snapshot.db")
+
+	db, err := storage.Open(srcDBPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	ctx := context.Background()
+	err = db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "INSERT INTO users (username, password_hash) VALUES (?, ?);", "admin", "hash123")
+		return err
+	})
+	if err != nil {
+		t.Fatalf("insert user failed: %v", err)
+	}
+
+	// VacuumInto snapshot
+	if err := db.VacuumInto(ctx, dstDBPath); err != nil {
+		t.Fatalf("VacuumInto failed: %v", err)
+	}
+
+	// Verify snapshot exists and can be opened
+	snapshotDB, err := storage.Open(dstDBPath)
+	if err != nil {
+		t.Fatalf("Open snapshot DB failed: %v", err)
+	}
+	defer func() {
+		_ = snapshotDB.Close()
+	}()
+
+	var count int
+	err = snapshotDB.Read(ctx, func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE username = 'admin';").Scan(&count)
+	})
+	if err != nil {
+		t.Fatalf("query snapshot failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 user in snapshot, got %d", count)
+	}
+}
+
+func TestVacuumInto_ConcurrentActiveOperations(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	srcDBPath := filepath.Join(dir, "sync.db")
+	dstDBPath := filepath.Join(dir, "snapshot.db")
+
+	db, err := storage.Open(srcDBPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	// Start active writers
+	for i := 0; i < 3; i++ {
+		workerID := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			counter := 0
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					username := fmt.Sprintf("user_%d_%d", workerID, counter)
+					_ = db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+						_, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO users (username, password_hash) VALUES (?, ?);", username, "hash")
+						return err
+					})
+					counter++
+				}
+			}
+		}()
+	}
+
+	// Start active readers
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					var count int
+					_ = db.Read(ctx, func(ctx context.Context, q storage.Querier) error {
+						return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM users;").Scan(&count)
+					})
+				}
+			}
+		}()
+	}
+
+	// Allow concurrent operations to run for a brief moment
+	time.Sleep(20 * time.Millisecond)
+
+	// Execute VacuumInto concurrently with active readers and writers
+	if err := db.VacuumInto(context.Background(), dstDBPath); err != nil {
+		t.Fatalf("VacuumInto during active operations failed: %v", err)
+	}
+
+	// Stop workers
+	cancel()
+	wg.Wait()
+
+	// Verify snapshot file exists and passes integrity check
+	if err := storage.CheckFileIntegrity(context.Background(), dstDBPath); err != nil {
+		t.Fatalf("snapshot database integrity check failed: %v", err)
+	}
+}
+
+func TestDrainAndResume(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "sync.db")
+
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	ctx := context.Background()
+	err = db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "INSERT INTO users (username, password_hash) VALUES (?, ?);", "user1", "hash1")
+		return err
+	})
+	if err != nil {
+		t.Fatalf("initial write failed: %v", err)
+	}
+
+	// Drain connection pools
+	if err := db.Drain(ctx); err != nil {
+		t.Fatalf("Drain failed: %v", err)
+	}
+
+	// Create replacement database in another path
+	replacePath := filepath.Join(dir, "replacement.db")
+	repDB, err := storage.Open(replacePath)
+	if err != nil {
+		t.Fatalf("Open replacement DB failed: %v", err)
+	}
+	err = repDB.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "INSERT INTO users (username, password_hash) VALUES (?, ?);", "restored_user", "restored_hash")
+		return err
+	})
+	if err != nil {
+		_ = repDB.Close()
+		t.Fatalf("write to replacement DB failed: %v", err)
+	}
+	if err := repDB.Close(); err != nil {
+		t.Fatalf("close replacement DB failed: %v", err)
+	}
+
+	// While drained, atomic file swap should succeed without Windows sharing violations
+	if err := os.Remove(dbPath); err != nil {
+		t.Fatalf("failed to remove drained db: %v", err)
+	}
+	// Also clean up any WAL/SHM files
+	_ = os.Remove(dbPath + "-wal")
+	_ = os.Remove(dbPath + "-shm")
+
+	if err := os.Rename(replacePath, dbPath); err != nil {
+		t.Fatalf("failed to swap replacement database file: %v", err)
+	}
+
+	// Resume connection pools
+	if err := db.Resume(ctx); err != nil {
+		t.Fatalf("Resume failed: %v", err)
+	}
+
+	// Verify reads and writes succeed and observe the restored data
+	var count int
+	err = db.Read(ctx, func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE username = 'restored_user';").Scan(&count)
+	})
+	if err != nil {
+		t.Fatalf("read after resume failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 restored_user, got %d", count)
+	}
+
+	// Verify new writes work on resumed connection
+	err = db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "INSERT INTO users (username, password_hash) VALUES (?, ?);", "new_user", "new_hash")
+		return err
+	})
+	if err != nil {
+		t.Fatalf("write after resume failed: %v", err)
+	}
+}
+
+func TestCheckIntegrity(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "sync.db")
+
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	ctx := context.Background()
+	if err := db.CheckIntegrity(ctx); err != nil {
+		t.Fatalf("CheckIntegrity on healthy db failed: %v", err)
 	}
 }
