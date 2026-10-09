@@ -1069,3 +1069,296 @@ func TestGetSyncHistory(t *testing.T) {
 		t.Fatalf("unexpected record: %+v", records[0])
 	}
 }
+
+func TestSync_ActiveModeSonarr_AppendsMissingTargetSeasonOnAdd(t *testing.T) {
+	db := setupTestDB(t)
+
+	err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		_, writeErr := tx.ExecContext(ctx, `
+			INSERT INTO mapping_overrides (anilist_id, media_type, tvdb_id, seasons)
+			VALUES (701, 'SERIES', 99999, '3');
+		`)
+		return writeErr
+	})
+	if err != nil {
+		t.Fatalf("insert mapping failed: %v", err)
+	}
+
+	entries := []anilist.MediaListEntry{
+		{
+			ID:     1,
+			Status: anilist.StatusCurrent,
+			Media: anilist.Media{
+				ID:     701,
+				Format: "TV",
+				Title:  anilist.MediaTitle{Romaji: "Anime Season 3"},
+			},
+		},
+	}
+
+	alSrv := setupMockAniList(t, entries)
+
+	addedSeries := false
+	var capturedSeasons []servarr.Season
+
+	sonarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
+			_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 42, Label: "anilist-sync"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/series/lookup":
+			// Lookup only knows seasons 1 and 2
+			_ = json.NewEncoder(w).Encode([]servarr.Series{
+				{
+					TVDBID: 99999,
+					Title:  "Anime",
+					Seasons: []servarr.Season{
+						{SeasonNumber: 1, Monitored: true},
+						{SeasonNumber: 2, Monitored: true},
+					},
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/series":
+			addedSeries = true
+			var body servarr.AddSeriesRequest
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			capturedSeasons = body.Seasons
+			_ = json.NewEncoder(w).Encode(servarr.Series{
+				ID:     802,
+				TVDBID: 99999,
+				Title:  body.Title,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer sonarrSrv.Close()
+
+	cfg := config.NewDefault()
+	cfg.AniListUsername = "testuser"
+	cfg.FirstRunDryRun = false
+
+	alClient := anilist.NewClient(alSrv.URL)
+	sonarrClient, _ := servarr.NewSonarrClient(sonarrSrv.URL, "key")
+	radarrClient, _ := servarr.NewRadarrClient("http://localhost:1234", "key")
+
+	orc := orchestrator.New(db, cfg, alClient, sonarrClient, radarrClient)
+
+	report, err := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+	if err != nil {
+		t.Fatalf("Sync failed: %v", err)
+	}
+
+	if !addedSeries {
+		t.Fatal("expected Sonarr AddSeries to be called")
+	}
+	if len(capturedSeasons) != 3 {
+		t.Fatalf("expected 3 seasons, got %d: %+v", len(capturedSeasons), capturedSeasons)
+	}
+	// Season 1 & 2 must be false, Season 3 must be true
+	if capturedSeasons[0].Monitored || capturedSeasons[1].Monitored || !capturedSeasons[2].Monitored {
+		t.Fatalf("expected season 3 monitored and seasons 1, 2 unmonitored: %+v", capturedSeasons)
+	}
+	if report.MonitoredSonarr != 1 {
+		t.Fatalf("expected MonitoredSonarr=1, got %d", report.MonitoredSonarr)
+	}
+}
+
+func TestSync_ActiveModeSonarr_SplitCourUnmonitorIdempotent(t *testing.T) {
+	db := setupTestDB(t)
+
+	err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		_, writeErr := tx.ExecContext(ctx, `
+			INSERT INTO mapping_overrides (anilist_id, media_type, tvdb_id, seasons)
+			VALUES (602, 'SERIES', 88889, '1');
+		`)
+		return writeErr
+	})
+	if err != nil {
+		t.Fatalf("insert mapping failed: %v", err)
+	}
+
+	entries := []anilist.MediaListEntry{
+		{
+			ID:     1,
+			Status: anilist.StatusDropped,
+			Media: anilist.Media{
+				ID:     602,
+				Format: "TV",
+				Title:  anilist.MediaTitle{Romaji: "Bleach: Thousand-Year Blood War Part 2"},
+			},
+		},
+	}
+
+	alSrv := setupMockAniList(t, entries)
+
+	episodesUnmonitorCalled := false
+
+	sonarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
+			_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 42, Label: "anilist-sync"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/series/lookup":
+			_ = json.NewEncoder(w).Encode([]servarr.Series{
+				{
+					ID:        902,
+					TVDBID:    88889,
+					Title:     "Bleach: Thousand-Year Blood War",
+					Monitored: true,
+					Tags:      []int{42},
+					Seasons:   []servarr.Season{{SeasonNumber: 1, Monitored: true}},
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
+			// Part 2 episodes (14-26) are ALREADY unmonitored
+			_ = json.NewEncoder(w).Encode([]servarr.Episode{
+				{ID: 2001, SeriesID: 902, SeasonNumber: 1, EpisodeNumber: 1, Monitored: true, AirDate: "2022-10-11"},
+				{ID: 2013, SeriesID: 902, SeasonNumber: 1, EpisodeNumber: 13, Monitored: true, FinaleType: "midseason", AirDate: "2022-12-27"},
+				{ID: 2014, SeriesID: 902, SeasonNumber: 1, EpisodeNumber: 14, Monitored: false, AirDate: "2023-07-08"},
+				{ID: 2026, SeriesID: 902, SeasonNumber: 1, EpisodeNumber: 26, Monitored: false, FinaleType: "season", AirDate: "2023-09-30"},
+			})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v3/episode/monitor":
+			episodesUnmonitorCalled = true
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer sonarrSrv.Close()
+
+	cfg := config.NewDefault()
+	cfg.AniListUsername = "testuser"
+	cfg.FirstRunDryRun = false
+	cfg.UnmonitorDropped = true
+
+	alClient := anilist.NewClient(alSrv.URL)
+	sonarrClient, _ := servarr.NewSonarrClient(sonarrSrv.URL, "key")
+	radarrClient, _ := servarr.NewRadarrClient("http://localhost:1234", "key")
+
+	orc := orchestrator.New(db, cfg, alClient, sonarrClient, radarrClient)
+
+	report, err := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+	if err != nil {
+		t.Fatalf("Sync failed: %v", err)
+	}
+
+	if episodesUnmonitorCalled {
+		t.Fatal("expected MonitorEpisodes not to be called when all slice episodes are already unmonitored")
+	}
+	if report.UnmonitoredSonarr != 0 {
+		t.Fatalf("expected UnmonitoredSonarr=0, got %d", report.UnmonitoredSonarr)
+	}
+}
+
+func TestSync_UnmonitorZeroTagDoesNotMatchUntagged(t *testing.T) {
+	db := setupTestDB(t)
+
+	err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		_, err1 := tx.ExecContext(ctx, `
+			INSERT INTO mapping_overrides (anilist_id, media_type, tvdb_id, seasons)
+			VALUES (881, 'SERIES', 10102, '1');
+		`)
+		if err1 != nil {
+			return err1
+		}
+		_, err2 := tx.ExecContext(ctx, `
+			INSERT INTO fribb_entries (anilist_id, tmdb_id, media_type, tvdb_season)
+			VALUES (882, 20203, 'MOVIE', 1);
+		`)
+		return err2
+	})
+	if err != nil {
+		t.Fatalf("insert mappings failed: %v", err)
+	}
+
+	entries := []anilist.MediaListEntry{
+		{
+			ID:     1,
+			Status: anilist.StatusDropped,
+			Media:  anilist.Media{ID: 881, Format: "TV", Title: anilist.MediaTitle{Romaji: "Series Untagged Zero"}},
+		},
+		{
+			ID:     2,
+			Status: anilist.StatusDropped,
+			Media:  anilist.Media{ID: 882, Format: "MOVIE", Title: anilist.MediaTitle{Romaji: "Movie Untagged Zero"}},
+		},
+	}
+
+	alSrv := setupMockAniList(t, entries)
+
+	sonarrUpdated := false
+	radarrUpdated := false
+
+	sonarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/series/lookup":
+			// Series has tag 0
+			_ = json.NewEncoder(w).Encode([]servarr.Series{
+				{
+					ID: 994, TVDBID: 10102, Title: "Series Untagged Zero", Monitored: true,
+					Tags:    []int{0},
+					Seasons: []servarr.Season{{SeasonNumber: 1, Monitored: true}},
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
+			_ = json.NewEncoder(w).Encode([]servarr.Episode{})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v3/series":
+			sonarrUpdated = true
+			http.Error(w, "should not be updated", http.StatusBadRequest)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer sonarrSrv.Close()
+
+	radarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/lookup/tmdb":
+			// Movie has tag 0
+			_ = json.NewEncoder(w).Encode(servarr.Movie{
+				ID: 995, TMDBID: 20203, Title: "Movie Untagged Zero", Monitored: true,
+				Tags: []int{0},
+			})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v3/movie":
+			radarrUpdated = true
+			http.Error(w, "should not be updated", http.StatusBadRequest)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer radarrSrv.Close()
+
+	cfg := config.NewDefault()
+	cfg.AniListUsername = "testuser"
+	cfg.FirstRunDryRun = false
+	cfg.UnmonitorDropped = true
+	cfg.TagName = "" // Tag tracking disabled -> managedTagID = 0
+
+	alClient := anilist.NewClient(alSrv.URL)
+	sonarrClient, _ := servarr.NewSonarrClient(sonarrSrv.URL, "key")
+	radarrClient, _ := servarr.NewRadarrClient(radarrSrv.URL, "key")
+
+	orc := orchestrator.New(db, cfg, alClient, sonarrClient, radarrClient)
+
+	report, err := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+	if err != nil {
+		t.Fatalf("Sync failed: %v", err)
+	}
+
+	if sonarrUpdated {
+		t.Fatal("expected Sonarr series with tag 0 not to be unmonitored when TagName is empty")
+	}
+	if radarrUpdated {
+		t.Fatal("expected Radarr movie with tag 0 not to be unmonitored when TagName is empty")
+	}
+	if report.UnmonitoredSonarr != 0 {
+		t.Fatalf("expected UnmonitoredSonarr=0, got %d", report.UnmonitoredSonarr)
+	}
+	if report.UnmonitoredRadarr != 0 {
+		t.Fatalf("expected UnmonitoredRadarr=0, got %d", report.UnmonitoredRadarr)
+	}
+}
