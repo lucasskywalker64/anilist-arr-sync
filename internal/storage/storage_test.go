@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -687,6 +688,21 @@ func TestDrainAndResume(t *testing.T) {
 		t.Fatalf("Drain failed: %v", err)
 	}
 
+	// While drained, reads and writes return database is drained error
+	err = db.Read(ctx, func(_ context.Context, _ storage.Querier) error {
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "database is drained") {
+		t.Fatalf("expected 'database is drained' error on read, got %v", err)
+	}
+
+	err = db.Write(ctx, func(_ context.Context, _ *sql.Tx) error {
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "database is drained") {
+		t.Fatalf("expected 'database is drained' error on write, got %v", err)
+	}
+
 	// Create replacement database in another path
 	replacePath := filepath.Join(dir, "replacement.db")
 	repDB, err := storage.Open(replacePath)
@@ -741,6 +757,19 @@ func TestDrainAndResume(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("write after resume failed: %v", err)
+	}
+
+	// In-memory databases are a safe no-op for Drain and Resume
+	memDB, err := storage.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open :memory: failed: %v", err)
+	}
+	defer func() { _ = memDB.Close() }()
+	if err := memDB.Drain(ctx); err != nil {
+		t.Fatalf("Drain on memory DB failed: %v", err)
+	}
+	if err := memDB.Resume(ctx); err != nil {
+		t.Fatalf("Resume on memory DB failed: %v", err)
 	}
 }
 

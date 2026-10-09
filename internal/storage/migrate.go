@@ -73,56 +73,76 @@ func loadMigrations(sys fs.FS) ([]migration, error) {
 
 // Migrate executes all pending schema migrations idempotently in a write transaction.
 func (db *DB) Migrate(ctx context.Context) error {
+	return db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		return applyMigrations(ctx, tx)
+	})
+}
+
+// runMigrations executes migrations directly against the write connection pool.
+func runMigrations(ctx context.Context, pool *sql.DB) error {
+	tx, err := pool.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("storage: failed to begin migration transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := applyMigrations(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func applyMigrations(ctx context.Context, tx *sql.Tx) error {
 	migrations, err := loadMigrations(migrationsFS)
 	if err != nil {
 		return err
 	}
 
-	return db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		const createMigrationsTable = `
+	const createMigrationsTable = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version    INTEGER PRIMARY KEY,
     name       TEXT NOT NULL,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );`
-		if _, err := tx.ExecContext(ctx, createMigrationsTable); err != nil {
-			return fmt.Errorf("storage: failed to create schema_migrations table: %w", err)
+	if _, err := tx.ExecContext(ctx, createMigrationsTable); err != nil {
+		return fmt.Errorf("storage: failed to create schema_migrations table: %w", err)
+	}
+
+	rows, err := tx.QueryContext(ctx, "SELECT version FROM schema_migrations;")
+	if err != nil {
+		return fmt.Errorf("storage: failed to read applied migrations: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	applied := make(map[int]struct{})
+	for rows.Next() {
+		var v int
+		if err := rows.Scan(&v); err != nil {
+			return fmt.Errorf("storage: failed to scan applied migration version: %w", err)
+		}
+		applied[v] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("storage: error reading applied migrations: %w", err)
+	}
+
+	for _, m := range migrations {
+		if _, ok := applied[m.version]; ok {
+			continue
 		}
 
-		rows, err := tx.QueryContext(ctx, "SELECT version FROM schema_migrations;")
-		if err != nil {
-			return fmt.Errorf("storage: failed to read applied migrations: %w", err)
-		}
-		defer func() {
-			_ = rows.Close()
-		}()
-
-		applied := make(map[int]struct{})
-		for rows.Next() {
-			var v int
-			if err := rows.Scan(&v); err != nil {
-				return fmt.Errorf("storage: failed to scan applied migration version: %w", err)
-			}
-			applied[v] = struct{}{}
-		}
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("storage: error reading applied migrations: %w", err)
+		if _, err := tx.ExecContext(ctx, m.sql); err != nil {
+			return fmt.Errorf("storage: failed to apply migration %d (%s): %w", m.version, m.name, err)
 		}
 
-		for _, m := range migrations {
-			if _, ok := applied[m.version]; ok {
-				continue
-			}
-
-			if _, err := tx.ExecContext(ctx, m.sql); err != nil {
-				return fmt.Errorf("storage: failed to apply migration %d (%s): %w", m.version, m.name, err)
-			}
-
-			if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, name) VALUES (?, ?);", m.version, m.name); err != nil {
-				return fmt.Errorf("storage: failed to record migration %d: %w", m.version, err)
-			}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, name) VALUES (?, ?);", m.version, m.name); err != nil {
+			return fmt.Errorf("storage: failed to record migration %d: %w", m.version, err)
 		}
+	}
 
-		return nil
-	})
+	return nil
 }

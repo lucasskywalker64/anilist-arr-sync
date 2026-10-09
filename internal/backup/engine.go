@@ -341,6 +341,11 @@ func (e *Engine) Restore(ctx context.Context, archivePath string) error {
 	return nil
 }
 
+const (
+	maxDBEntrySize     int64 = 2 << 30  // 2 GiB maximum for SQLite database snapshot
+	maxConfigEntrySize int64 = 10 << 20 // 10 MiB maximum for config.xml
+)
+
 // extractArchive unpacks a backup zip into stagingDir, returning the paths to sync.db and config.xml.
 func extractArchive(archivePath, stagingDir string) (string, string, error) {
 	zr, err := zip.OpenReader(archivePath)
@@ -355,6 +360,14 @@ func extractArchive(archivePath, stagingDir string) (string, string, error) {
 
 	for _, file := range zr.File {
 		cleanName := filepath.Base(file.Name)
+		if cleanName != "sync.db" && cleanName != "config.xml" {
+			continue
+		}
+
+		if (cleanName == "sync.db" && stagedDBPath != "") || (cleanName == "config.xml" && stagedConfigPath != "") {
+			return "", "", fmt.Errorf("backup: duplicate %s entry in zip archive", cleanName)
+		}
+
 		// Security check: zip slip prevention
 		destPath := filepath.Join(stagingDir, cleanName)
 		if !strings.HasPrefix(filepath.Clean(destPath), filepath.Clean(stagingDir)) {
@@ -372,11 +385,19 @@ func extractArchive(archivePath, stagingDir string) (string, string, error) {
 			return "", "", fmt.Errorf("backup: failed to create staging file %s: %w", destPath, err)
 		}
 
-		_, err = io.Copy(outFile, rc)
+		maxSize := maxConfigEntrySize
+		if cleanName == "sync.db" {
+			maxSize = maxDBEntrySize
+		}
+
+		n, err := io.Copy(outFile, io.LimitReader(rc, maxSize+1))
 		_ = outFile.Close()
 		_ = rc.Close()
 		if err != nil {
 			return "", "", fmt.Errorf("backup: failed to extract zip entry %s: %w", file.Name, err)
+		}
+		if n > maxSize {
+			return "", "", fmt.Errorf("backup: zip entry %s exceeds maximum allowed size of %d bytes", file.Name, maxSize)
 		}
 
 		switch cleanName {

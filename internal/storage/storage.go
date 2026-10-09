@@ -166,16 +166,18 @@ func (db *DB) Close() error {
 // so the underlying database file can be replaced.
 func (db *DB) Drain(_ context.Context) error {
 	db.drainMu.Lock()
+	defer db.drainMu.Unlock()
+
 	db.closeMu.Lock()
+	defer db.closeMu.Unlock()
 
 	if db.isClosed {
-		db.closeMu.Unlock()
-		db.drainMu.Unlock()
 		return fmt.Errorf("storage: database is closed")
 	}
 	if db.isDrained {
-		db.closeMu.Unlock()
-		db.drainMu.Unlock()
+		return nil
+	}
+	if db.isMemory {
 		return nil
 	}
 
@@ -201,9 +203,13 @@ func (db *DB) Drain(_ context.Context) error {
 	return nil
 }
 
-// Resume re-opens the read and write connection pools and unblocks pending operations.
-func (db *DB) Resume(_ context.Context) error {
+// Resume re-opens the read and write connection pools, executes any pending
+// schema migrations on the new pools, and unblocks pending operations.
+func (db *DB) Resume(ctx context.Context) error {
+	db.drainMu.Lock()
 	defer db.drainMu.Unlock()
+
+	db.closeMu.Lock()
 	defer db.closeMu.Unlock()
 
 	if db.isClosed {
@@ -212,10 +218,21 @@ func (db *DB) Resume(_ context.Context) error {
 	if !db.isDrained {
 		return nil
 	}
+	if db.isMemory {
+		return nil
+	}
 
 	readPool, writePool, err := openPools(db.path, db.isMemory)
 	if err != nil {
 		return fmt.Errorf("storage: failed to resume database pools: %w", err)
+	}
+
+	if err := runMigrations(ctx, writePool); err != nil {
+		_ = writePool.Close()
+		if readPool != writePool {
+			_ = readPool.Close()
+		}
+		return fmt.Errorf("storage: failed to migrate database on resume: %w", err)
 	}
 
 	db.readPool = readPool

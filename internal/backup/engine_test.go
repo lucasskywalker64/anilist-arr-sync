@@ -439,3 +439,78 @@ func TestBackupEngine_List_NonExistentBackupDir(t *testing.T) {
 		t.Fatalf("expected 0 items, got %d", len(list))
 	}
 }
+
+func TestBackupEngine_Restore_RejectsDuplicateEntries(t *testing.T) {
+	t.Parallel()
+
+	db, _, configPath, backupDir := setupTestEnvironment(t)
+	_ = os.MkdirAll(backupDir, 0755)
+	zipPath := filepath.Join(backupDir, "anilist-arr-sync_backup_manual_2026.10.09_23.50.00.zip")
+
+	zipFile, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatalf("failed to create zip file: %v", err)
+	}
+	zw := zip.NewWriter(zipFile)
+	e1, _ := zw.Create("a/sync.db")
+	_, _ = e1.Write([]byte("db1"))
+	e2, _ := zw.Create("b/sync.db")
+	_, _ = e2.Write([]byte("db2"))
+	_ = zw.Close()
+	_ = zipFile.Close()
+
+	engine := backup.NewEngine(db, configPath, backupDir)
+	err = engine.Restore(context.Background(), zipPath)
+	if err == nil {
+		t.Fatal("expected restore to reject archive with duplicate sync.db entries, got nil")
+	}
+	if !strings.Contains(err.Error(), "duplicate sync.db entry") {
+		t.Errorf("expected duplicate error message, got %v", err)
+	}
+}
+
+func TestBackupEngine_Restore_IgnoresExtraneousEntries(t *testing.T) {
+	t.Parallel()
+
+	db, _, configPath, backupDir := setupTestEnvironment(t)
+	engine := backup.NewEngine(db, configPath, backupDir)
+	ctx := context.Background()
+
+	// Create valid backup
+	info, err := engine.Create(ctx, backup.TypeManual)
+	if err != nil {
+		t.Fatalf("Create backup failed: %v", err)
+	}
+
+	// Create a new zip with an extra file added
+	corruptDir := t.TempDir()
+	modZipPath := filepath.Join(corruptDir, "mod_backup.zip")
+	modFile, err := os.Create(modZipPath)
+	if err != nil {
+		t.Fatalf("create mod zip failed: %v", err)
+	}
+	zw := zip.NewWriter(modFile)
+
+	origReader, err := zip.OpenReader(info.Path)
+	if err != nil {
+		t.Fatalf("open original zip failed: %v", err)
+	}
+	for _, f := range origReader.File {
+		w, _ := zw.Create(f.Name)
+		rc, _ := f.Open()
+		_, _ = io.Copy(w, rc)
+		_ = rc.Close()
+	}
+	_ = origReader.Close()
+
+	// Add extraneous file
+	extra, _ := zw.Create("malicious.exe")
+	_, _ = extra.Write([]byte("should not be extracted"))
+	_ = zw.Close()
+	_ = modFile.Close()
+
+	// Restoring the archive should succeed and ignore malicious.exe
+	if err := engine.Restore(ctx, modZipPath); err != nil {
+		t.Fatalf("Restore with extra file failed: %v", err)
+	}
+}
