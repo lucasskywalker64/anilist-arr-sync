@@ -240,3 +240,93 @@ func TestRadarrClient_SearchMovies(t *testing.T) {
 		}
 	})
 }
+
+func TestRadarrClient_GetMovieByID(t *testing.T) {
+	t.Run("successfully returns movie by id", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.URL.Path != "/api/v3/movie/101" {
+				t.Errorf("expected GET /api/v3/movie/101, got %s %s", r.Method, r.URL.Path)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(servarr.Movie{
+				ID:        101,
+				Title:     "Akira",
+				TMDBID:    149,
+				Monitored: true,
+			})
+		}))
+		defer srv.Close()
+
+		client, err := servarr.NewRadarrClient(srv.URL, "radarr-key")
+		if err != nil {
+			t.Fatalf("NewRadarrClient failed: %v", err)
+		}
+
+		movie, err := client.GetMovieByID(context.Background(), 101)
+		if err != nil {
+			t.Fatalf("GetMovieByID failed: %v", err)
+		}
+		if movie.ID != 101 {
+			t.Fatalf("expected ID 101, got %d", movie.ID)
+		}
+	})
+
+	t.Run("returns ErrNotFound when movie does not exist", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.NotFound(w, r)
+		}))
+		defer srv.Close()
+
+		client, err := servarr.NewRadarrClient(srv.URL, "radarr-key")
+		if err != nil {
+			t.Fatalf("NewRadarrClient failed: %v", err)
+		}
+
+		movie, err := client.GetMovieByID(context.Background(), 999)
+		if !errors.Is(err, servarr.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+		if movie != nil {
+			t.Fatalf("expected nil movie, got %+v", movie)
+		}
+	})
+}
+
+func TestRadarrClient_UpdateMovie(t *testing.T) {
+	t.Run("successfully updates movie", func(t *testing.T) {
+		var received servarr.Movie
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPut || r.URL.Path != "/api/v3/movie" {
+				t.Errorf("expected PUT /api/v3/movie, got %s %s", r.Method, r.URL.Path)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			_ = json.NewDecoder(r.Body).Decode(&received)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(received)
+		}))
+		defer srv.Close()
+
+		client, err := servarr.NewRadarrClient(srv.URL, "radarr-key")
+		if err != nil {
+			t.Fatalf("NewRadarrClient failed: %v", err)
+		}
+
+		target := &servarr.Movie{
+			ID:        101,
+			Title:     "Akira",
+			TMDBID:    149,
+			Monitored: false,
+		}
+
+		updated, err := client.UpdateMovie(context.Background(), target)
+		if err != nil {
+			t.Fatalf("UpdateMovie failed: %v", err)
+		}
+		if updated.Monitored {
+			t.Fatal("expected movie to be unmonitored")
+		}
+	})
+}
