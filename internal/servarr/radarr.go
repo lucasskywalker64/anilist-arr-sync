@@ -141,3 +141,40 @@ func (c *RadarrClient) SearchMovies(ctx context.Context, movieIDs ...int) (*Comm
 
 	return c.ExecuteCommand(ctx, payload)
 }
+
+// GetMovieByID retrieves a movie by its internal Radarr ID.
+func (c *RadarrClient) GetMovieByID(ctx context.Context, id int) (*Movie, error) {
+	endpoint := fmt.Sprintf("/api/v3/movie/%d", id)
+	req, err := c.newRequest(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var movie Movie
+	_, err = c.do(req, &movie)
+	if err != nil {
+		return nil, fmt.Errorf("get movie %d: %w", id, err)
+	}
+
+	return &movie, nil
+}
+
+// UpdateMovie updates an existing movie in Radarr.
+func (c *RadarrClient) UpdateMovie(ctx context.Context, movie *Movie) (*Movie, error) {
+	if movie == nil {
+		return nil, errors.New("movie cannot be nil")
+	}
+
+	req, err := c.newRequest(ctx, http.MethodPut, "/api/v3/movie", movie)
+	if err != nil {
+		return nil, err
+	}
+
+	var updated Movie
+	_, err = c.do(req, &updated)
+	if err != nil {
+		return nil, fmt.Errorf("update movie %d: %w", movie.ID, err)
+	}
+
+	return &updated, nil
+}
