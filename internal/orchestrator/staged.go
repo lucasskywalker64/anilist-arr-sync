@@ -72,6 +72,7 @@ type UnmonitorMoviePayload struct {
 }
 
 // stageAction persists a planned Servarr action into staged_sync_actions.
+// It skips duplicate pending actions with identical type, target service, and payload.
 func (o *Orchestrator) stageAction(
 	ctx context.Context,
 	actionType StagedActionType,
@@ -86,6 +87,18 @@ func (o *Orchestrator) stageAction(
 	}
 
 	return o.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		var exists int
+		checkErr := tx.QueryRowContext(ctx, `
+			SELECT 1 FROM staged_sync_actions
+			WHERE action_type = ? AND target_service = ? AND payload_json = ? AND status = 'PENDING'
+			LIMIT 1;
+		`, string(actionType), targetService, string(payloadBytes)).Scan(&exists)
+		if checkErr == nil {
+			return nil
+		} else if !errors.Is(checkErr, sql.ErrNoRows) {
+			return checkErr
+		}
+
 		_, execErr := tx.ExecContext(ctx, `
 			INSERT INTO staged_sync_actions (
 				action_type, media_type, title, target_service, payload_json, status
@@ -170,12 +183,9 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 				req.Tags = []int{tagID}
 			}
 		}
-		created, addErr := o.radarr.AddMovie(ctx, req)
+		_, addErr := o.radarr.AddMovie(ctx, req)
 		if addErr != nil {
 			return fmt.Errorf("execute add movie: %w", addErr)
-		}
-		if o.cfg.RadarrSearchOnAdd && created.ID > 0 {
-			_, _ = o.radarr.SearchMovies(ctx, created.ID)
 		}
 
 	case ActionAddSeries:
@@ -191,16 +201,9 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 				req.Tags = []int{tagID}
 			}
 		}
-		created, addErr := o.sonarr.AddSeries(ctx, req)
+		_, addErr := o.sonarr.AddSeries(ctx, req)
 		if addErr != nil {
 			return fmt.Errorf("execute add series: %w", addErr)
-		}
-		if o.cfg.SonarrSearchOnAdd && created.ID > 0 {
-			for _, s := range req.Seasons {
-				if s.Monitored {
-					_, _ = o.sonarr.SearchSeason(ctx, created.ID, s.SeasonNumber)
-				}
-			}
 		}
 
 	case ActionMonitorSeason:
@@ -292,12 +295,22 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 	}
 
 	return o.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		_, execErr := tx.ExecContext(ctx, `
+		res, execErr := tx.ExecContext(ctx, `
 			UPDATE staged_sync_actions
 			SET status = 'APPLIED', executed_at = CURRENT_TIMESTAMP
-			WHERE id = ?;
+			WHERE id = ? AND status = 'PENDING';
 		`, id)
-		return execErr
+		if execErr != nil {
+			return execErr
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return fmt.Errorf("staged action %d changed state during apply", id)
+		}
+		return nil
 	})
 }
 

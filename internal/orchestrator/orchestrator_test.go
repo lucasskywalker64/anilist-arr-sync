@@ -520,7 +520,6 @@ func TestSync_ActiveModeSonarr_AdditiveAdditionAndSearchDispatch(t *testing.T) {
 	alSrv := setupMockAniList(t, entries)
 
 	addedSeries := false
-	searchedSeason := false
 
 	sonarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -548,18 +547,14 @@ func TestSync_ActiveModeSonarr_AdditiveAdditionAndSearchDispatch(t *testing.T) {
 			if len(body.Seasons) != 2 || body.Seasons[0].Monitored || !body.Seasons[1].Monitored {
 				t.Errorf("expected season 2 monitored and season 1 unmonitored on add, got %v", body.Seasons)
 			}
+			if body.AddOptions == nil || !body.AddOptions.SearchForMissingEpisodes {
+				t.Errorf("expected SearchForMissingEpisodes to be true in AddOptions")
+			}
 			_ = json.NewEncoder(w).Encode(servarr.Series{
 				ID:     801,
 				TVDBID: 77777,
 				Title:  body.Title,
 			})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/command":
-			var cmd map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&cmd)
-			if cmd["name"] == "SeasonSearch" && int(cmd["seasonNumber"].(float64)) == 2 {
-				searchedSeason = true
-			}
-			_ = json.NewEncoder(w).Encode(servarr.Command{ID: 1, Name: "SeasonSearch", Status: "queued"})
 		default:
 			http.NotFound(w, r)
 		}
@@ -584,9 +579,6 @@ func TestSync_ActiveModeSonarr_AdditiveAdditionAndSearchDispatch(t *testing.T) {
 
 	if !addedSeries {
 		t.Fatal("expected Sonarr AddSeries to be called")
-	}
-	if !searchedSeason {
-		t.Fatal("expected Sonarr SearchSeason to be called when SonarrSearchOnAdd is true")
 	}
 	if report.MonitoredSonarr != 1 {
 		t.Fatalf("expected MonitoredSonarr=1, got %d", report.MonitoredSonarr)
@@ -873,7 +865,9 @@ func TestSync_ActiveMode_UnmonitorDroppedOnlyWhenEnabledAndTagged(t *testing.T) 
 			var body servarr.Series
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			if body.Seasons[0].Monitored {
-				t.Fatal("expected Season 1 to be unmonitored")
+				t.Errorf("expected Season 1 to be unmonitored")
+				http.Error(w, "expected Season 1 to be unmonitored", http.StatusBadRequest)
+				return
 			}
 			_ = json.NewEncoder(w).Encode(body)
 		default:
@@ -914,10 +908,14 @@ func TestSync_ActiveMode_UnmonitorDroppedOnlyWhenEnabledAndTagged(t *testing.T) 
 			var body servarr.Movie
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			if body.TMDBID == 30303 {
-				t.Fatal("untagged dropped movie 30303 must NOT be unmonitored")
+				t.Errorf("untagged dropped movie 30303 must NOT be unmonitored")
+				http.Error(w, "untagged dropped movie 30303 must NOT be unmonitored", http.StatusBadRequest)
+				return
 			}
 			if body.Monitored {
-				t.Fatal("expected managed movie 20202 to be unmonitored")
+				t.Errorf("expected managed movie 20202 to be unmonitored")
+				http.Error(w, "expected managed movie 20202 to be unmonitored", http.StatusBadRequest)
+				return
 			}
 			_ = json.NewEncoder(w).Encode(body)
 		default:
@@ -985,7 +983,6 @@ func TestSync_ActiveModeRadarr_AdditiveAdditionAndSearchDispatch(t *testing.T) {
 	alSrv := setupMockAniList(t, entries)
 
 	addedMovie := false
-	searchedMovie := false
 
 	radarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1003,18 +1000,14 @@ func TestSync_ActiveModeRadarr_AdditiveAdditionAndSearchDispatch(t *testing.T) {
 			if len(body.Tags) == 0 || body.Tags[0] != 42 {
 				t.Errorf("expected tag 42, got %v", body.Tags)
 			}
+			if body.AddOptions == nil || !body.AddOptions.SearchForMovie {
+				t.Errorf("expected SearchForMovie in AddOptions to be true")
+			}
 			_ = json.NewEncoder(w).Encode(servarr.Movie{
 				ID:     777,
 				TMDBID: 55555,
 				Title:  body.Title,
 			})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/command":
-			var cmd map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&cmd)
-			if cmd["name"] == "MoviesSearch" {
-				searchedMovie = true
-			}
-			_ = json.NewEncoder(w).Encode(servarr.Command{ID: 1, Name: "MoviesSearch", Status: "queued"})
 		default:
 			http.NotFound(w, r)
 		}
@@ -1039,9 +1032,6 @@ func TestSync_ActiveModeRadarr_AdditiveAdditionAndSearchDispatch(t *testing.T) {
 
 	if !addedMovie {
 		t.Fatal("expected Radarr AddMovie to be called")
-	}
-	if !searchedMovie {
-		t.Fatal("expected Radarr SearchMovies to be called when RadarrSearchOnAdd is true")
 	}
 	if report.AddedRadarr != 1 {
 		t.Fatalf("expected AddedRadarr=1, got %d", report.AddedRadarr)
