@@ -308,7 +308,7 @@ func (e *Engine) Restore(ctx context.Context, archivePath string) error {
 	drained := true
 	defer func() {
 		if drained {
-			_ = e.db.Resume(ctx)
+			_ = e.db.Resume(context.Background())
 		}
 	}()
 
@@ -333,10 +333,10 @@ func (e *Engine) Restore(ctx context.Context, archivePath string) error {
 	}
 
 	// 6. Resume database connections
-	drained = false
 	if err := e.db.Resume(ctx); err != nil {
 		return fmt.Errorf("backup: failed to resume database connection pools: %w", err)
 	}
+	drained = false
 
 	return nil
 }
@@ -422,30 +422,28 @@ func atomicReplace(src, dst string) error {
 		return err
 	}
 
-	bakPath := dst + ".bak"
-	_ = os.Remove(bakPath)
-
-	hasExisting := false
-	if _, err := os.Stat(dst); err == nil {
-		hasExisting = true
-		if err := os.Rename(dst, bakPath); err != nil {
-			return fmt.Errorf("failed to backup existing file %s: %w", dst, err)
-		}
+	// Try atomic rename first (succeeds if on the same filesystem)
+	if err := os.Rename(src, dst); err == nil {
+		return nil
 	}
 
-	// Try atomic rename first
-	if err := os.Rename(src, dst); err != nil {
-		// Fallback to copy across drive or volume boundaries
-		if errCopy := copyFile(src, dst); errCopy != nil {
-			if hasExisting {
-				_ = os.Rename(bakPath, dst)
-			}
-			return fmt.Errorf("failed to replace destination file %s: %w", dst, errCopy)
-		}
+	// Fallback for cross-device moves: copy to a temp file in dstDir, then atomically rename
+	tmpFile, err := os.CreateTemp(dstDir, ".replace-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	_ = tmpFile.Close()
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
+
+	if err := copyFile(src, tmpPath); err != nil {
+		return fmt.Errorf("failed to stage replacement file for %s: %w", dst, err)
 	}
 
-	if hasExisting {
-		_ = os.Remove(bakPath)
+	if err := os.Rename(tmpPath, dst); err != nil {
+		return fmt.Errorf("failed to replace destination file %s: %w", dst, err)
 	}
 	return nil
 }

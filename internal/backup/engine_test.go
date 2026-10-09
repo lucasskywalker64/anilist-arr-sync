@@ -514,3 +514,35 @@ func TestBackupEngine_Restore_IgnoresExtraneousEntries(t *testing.T) {
 		t.Fatalf("Restore with extra file failed: %v", err)
 	}
 }
+
+func TestBackupEngine_Restore_RecoversOnCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	db, _, configPath, backupDir := setupTestEnvironment(t)
+	engine := backup.NewEngine(db, configPath, backupDir)
+
+	ctx := context.Background()
+	info, err := engine.Create(ctx, backup.TypeManual)
+	if err != nil {
+		t.Fatalf("Create backup failed: %v", err)
+	}
+
+	// Create an already-canceled context
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Restore with canceled context should fail, but defer must un-drain the database pools
+	err = engine.Restore(canceledCtx, info.Path)
+	if err == nil {
+		t.Fatal("expected restore with canceled context to fail, got nil")
+	}
+
+	// Live database must not be permanently drained
+	var count int
+	err = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM users;").Scan(&count)
+	})
+	if err != nil {
+		t.Fatalf("database connection pool remained drained after canceled restore: %v", err)
+	}
+}

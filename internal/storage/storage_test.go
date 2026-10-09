@@ -3,6 +3,7 @@ package storage_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -790,5 +791,86 @@ func TestCheckIntegrity(t *testing.T) {
 	ctx := context.Background()
 	if err := db.CheckIntegrity(ctx); err != nil {
 		t.Fatalf("CheckIntegrity on healthy db failed: %v", err)
+	}
+}
+
+func TestDrainAndReplace(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "sync.db")
+
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	ctx := context.Background()
+	_ = db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "INSERT INTO users (username, password_hash) VALUES (?, ?);", "initial_user", "hash")
+		return err
+	})
+
+	// 1. DrainAndReplace executes callback while drained and resumes successfully
+	replacementDBPath := filepath.Join(dir, "replacement.db")
+	repDB, err := storage.Open(replacementDBPath)
+	if err != nil {
+		t.Fatalf("Open replacement failed: %v", err)
+	}
+	_ = repDB.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "INSERT INTO users (username, password_hash) VALUES (?, ?);", "replaced_user", "hash2")
+		return err
+	})
+	_ = repDB.Close()
+
+	err = db.DrainAndReplace(ctx, func() error {
+		// During callback, direct reads on db should fail because it is drained
+		errDrained := db.Read(ctx, func(_ context.Context, _ storage.Querier) error {
+			return nil
+		})
+		if errDrained == nil || !strings.Contains(errDrained.Error(), "database is drained") {
+			return fmt.Errorf("expected db to be drained during callback, got %v", errDrained)
+		}
+
+		_ = os.Remove(dbPath)
+		_ = os.Remove(dbPath + "-wal")
+		_ = os.Remove(dbPath + "-shm")
+		return os.Rename(replacementDBPath, dbPath)
+	})
+	if err != nil {
+		t.Fatalf("DrainAndReplace failed: %v", err)
+	}
+
+	// Verify reads work after resumption and observe the replaced data
+	var count int
+	err = db.Read(ctx, func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE username = 'replaced_user';").Scan(&count)
+	})
+	if err != nil {
+		t.Fatalf("read after DrainAndReplace failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 replaced_user, got %d", count)
+	}
+
+	// 2. DrainAndReplace un-drains even if ctx is canceled during callback
+	cancelingCtx, cancel := context.WithCancel(context.Background())
+	err = db.DrainAndReplace(cancelingCtx, func() error {
+		cancel() // Cancel context during callback
+		return errors.New("simulated callback failure")
+	})
+	if err == nil || !strings.Contains(err.Error(), "simulated callback failure") {
+		t.Fatalf("expected simulated error returned, got %v", err)
+	}
+
+	// Database pools should be resumed despite canceled context, allowing reads with a fresh context
+	err = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM users;").Scan(&count)
+	})
+	if err != nil {
+		t.Fatalf("database remained drained after canceled callback: %v", err)
 	}
 }

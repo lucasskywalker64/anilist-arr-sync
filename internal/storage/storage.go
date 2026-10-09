@@ -242,12 +242,15 @@ func (db *DB) Resume(ctx context.Context) error {
 }
 
 // DrainAndReplace executes a file replacement callback while connection pools are drained.
-func (db *DB) DrainAndReplace(ctx context.Context, replaceFn func() error) error {
-	if err := db.Drain(ctx); err != nil {
-		return err
+func (db *DB) DrainAndReplace(ctx context.Context, replaceFn func() error) (err error) {
+	if drainErr := db.Drain(ctx); drainErr != nil {
+		return drainErr
 	}
 	defer func() {
-		_ = db.Resume(ctx)
+		resumeErr := db.Resume(context.Background())
+		if err == nil && resumeErr != nil {
+			err = resumeErr
+		}
 	}()
 	return replaceFn()
 }
