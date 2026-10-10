@@ -121,10 +121,35 @@ func NewSessionStore(ttl time.Duration) *SessionStore {
 	return store
 }
 
+func (s *SessionStore) cleanupExpiredLocked() {
+	now := time.Now()
+	for token, sess := range s.sessions {
+		if now.After(sess.expiresAt) {
+			delete(s.sessions, token)
+		}
+	}
+}
+
+// CleanExpired purges all expired sessions from memory.
+func (s *SessionStore) CleanExpired() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cleanupExpiredLocked()
+}
+
+// Len returns the count of active sessions.
+func (s *SessionStore) Len() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.sessions)
+}
+
 // Create generates a cryptographically random session token and stores the session.
 func (s *SessionStore) Create(username string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	s.cleanupExpiredLocked()
 
 	b := make([]byte, 32)
 	_, _ = rand.Read(b)
@@ -145,24 +170,42 @@ func (s *SessionStore) Create(username string) string {
 // CSRFToken returns the CSRF token associated with an active session.
 func (s *SessionStore) CSRFToken(token string) string {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	sess, ok := s.sessions[token]
-	if !ok || time.Now().After(sess.expiresAt) {
+	if !ok {
+		s.mu.RUnlock()
 		return ""
 	}
+	if time.Now().After(sess.expiresAt) {
+		s.mu.RUnlock()
+		s.mu.Lock()
+		if sessCheck, okCheck := s.sessions[token]; okCheck && time.Now().After(sessCheck.expiresAt) {
+			delete(s.sessions, token)
+		}
+		s.mu.Unlock()
+		return ""
+	}
+	s.mu.RUnlock()
 	return sess.csrfToken
 }
 
 // ValidateCSRF checks if the provided CSRF token matches the session.
 func (s *SessionStore) ValidateCSRF(token, csrfToken string) bool {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	sess, ok := s.sessions[token]
-	if !ok || time.Now().After(sess.expiresAt) {
+	if !ok {
+		s.mu.RUnlock()
 		return false
 	}
+	if time.Now().After(sess.expiresAt) {
+		s.mu.RUnlock()
+		s.mu.Lock()
+		if sessCheck, okCheck := s.sessions[token]; okCheck && time.Now().After(sessCheck.expiresAt) {
+			delete(s.sessions, token)
+		}
+		s.mu.Unlock()
+		return false
+	}
+	s.mu.RUnlock()
 	if csrfToken == "" || sess.csrfToken == "" {
 		return false
 	}
@@ -172,15 +215,21 @@ func (s *SessionStore) ValidateCSRF(token, csrfToken string) bool {
 // Validate checks if a session token is active and returns the username.
 func (s *SessionStore) Validate(token string) (string, bool) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	sess, ok := s.sessions[token]
 	if !ok {
+		s.mu.RUnlock()
 		return "", false
 	}
 	if time.Now().After(sess.expiresAt) {
+		s.mu.RUnlock()
+		s.mu.Lock()
+		if sessCheck, okCheck := s.sessions[token]; okCheck && time.Now().After(sessCheck.expiresAt) {
+			delete(s.sessions, token)
+		}
+		s.mu.Unlock()
 		return "", false
 	}
+	s.mu.RUnlock()
 	return sess.username, true
 }
 

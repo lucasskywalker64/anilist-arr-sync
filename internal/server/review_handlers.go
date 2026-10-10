@@ -35,8 +35,8 @@ type ReviewQueueItem struct {
 
 type resolveReviewRequest struct {
 	MediaType     string `json:"mediaType"`
-	TVDBID        int    `json:"tvdbId"`
-	TMDBID        int    `json:"tmdbId"`
+	TVDBID        *int   `json:"tvdbId"`
+	TMDBID        *int   `json:"tmdbId"`
 	Seasons       string `json:"seasons"`
 	TitleOverride string `json:"titleOverride"`
 }
@@ -143,7 +143,20 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if req.TVDBID <= 0 && req.TMDBID <= 0 {
+	var tvdbVal, tmdbVal any
+	var resolvedID int
+	if req.TVDBID != nil && *req.TVDBID > 0 {
+		tvdbVal = *req.TVDBID
+		resolvedID = *req.TVDBID
+	}
+	if req.TMDBID != nil && *req.TMDBID > 0 {
+		tmdbVal = *req.TMDBID
+		if resolvedID == 0 {
+			resolvedID = *req.TMDBID
+		}
+	}
+
+	if tvdbVal == nil && tmdbVal == nil {
 		s.writeJSONError(w, http.StatusBadRequest, "tvdbId or tmdbId is required")
 		return
 	}
@@ -176,10 +189,6 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 			seasons = "1"
 		}
 
-		resolvedID := req.TVDBID
-		if resolvedID == 0 {
-			resolvedID = req.TMDBID
-		}
 		var resolvedSeason sql.NullInt64
 		if sNum, parseErr := strconv.Atoi(seasons); parseErr == nil && sNum > 0 {
 			resolvedSeason = sql.NullInt64{Int64: int64(sNum), Valid: true}
@@ -197,7 +206,7 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 				seasons = excluded.seasons,
 				title_override = excluded.title_override,
 				updated_at = CURRENT_TIMESTAMP;
-		`, anilistID, mediaType, req.TVDBID, req.TMDBID, seasons, req.TitleOverride)
+		`, anilistID, mediaType, tvdbVal, tmdbVal, seasons, req.TitleOverride)
 		if overrideErr != nil {
 			return overrideErr
 		}

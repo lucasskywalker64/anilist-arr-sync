@@ -40,16 +40,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		// 2. Local LAN address bypass
-		if s.getAuthRequired() == "DisabledForLocalAddresses" {
-			if IsLocalAddress(r.RemoteAddr) {
-				ctx := context.WithValue(r.Context(), userContextKey, "local_user")
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
-			}
-		}
-
-		// 3. External reverse proxy headers (Authelia / Authentik)
+		// 2. External reverse proxy headers (Authelia / Authentik)
 		if s.getAuthMethod() == "External" {
 			if !IsLocalAddress(r.RemoteAddr) {
 				s.writeJSONError(w, http.StatusUnauthorized, "untrusted client address for external authentication")
@@ -66,6 +57,15 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 			s.writeJSONError(w, http.StatusUnauthorized, "external authentication header missing or invalid")
 			return
+		}
+
+		// 3. Local LAN address bypass (applies to Forms authentication)
+		if s.getAuthRequired() == "DisabledForLocalAddresses" {
+			if IsLocalAddress(r.RemoteAddr) {
+				ctx := context.WithValue(r.Context(), userContextKey, "local_user")
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
 		}
 
 		// 4. Forms session cookie authentication
