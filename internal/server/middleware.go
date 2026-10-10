@@ -42,7 +42,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		// 2. External reverse proxy headers (Authelia / Authentik)
 		if s.getAuthMethod() == "External" {
-			if !IsLocalAddress(r.RemoteAddr) {
+			if !IsLoopbackAddress(r.RemoteAddr) {
 				s.writeJSONError(w, http.StatusUnauthorized, "untrusted client address for external authentication")
 				return
 			}
@@ -116,9 +116,6 @@ func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 		cookie, err := r.Cookie(sessionCookieName)
 		if err == nil && cookie.Value != "" {
 			csrfToken := r.Header.Get("X-CSRF-Token")
-			if csrfToken == "" {
-				csrfToken = reqAPIKey
-			}
 			if csrfToken != "" && s.sessions.ValidateCSRF(cookie.Value, csrfToken) {
 				next.ServeHTTP(w, r)
 				return

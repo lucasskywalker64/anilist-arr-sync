@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -45,6 +46,27 @@ type ignoreReviewRequest struct {
 	Reason string `json:"reason"`
 }
 
+// validateSeasons checks that seasons is a valid single positive integer or delimited list of positive integers.
+func validateSeasons(seasons string) bool {
+	if seasons == "" {
+		return false
+	}
+	parts := strings.FieldsFunc(seasons, func(c rune) bool {
+		return c == ',' || c == ' ' || c == ';'
+	})
+	if len(parts) == 0 {
+		return false
+	}
+	for _, p := range parts {
+		num, err := strconv.Atoi(p)
+		if err != nil || num <= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// handleListReview returns all pending items waiting in review_queue.
 func (s *Server) handleListReview(w http.ResponseWriter, r *http.Request) {
 	if s.db == nil {
 		s.writeJSONError(w, http.StatusInternalServerError, "database not configured")
@@ -109,7 +131,8 @@ func (s *Server) handleListReview(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
-		s.writeJSONError(w, http.StatusInternalServerError, "query review queue failed: "+err.Error())
+		log.Printf("query review queue failed: %v", err)
+		s.writeJSONError(w, http.StatusInternalServerError, "query review queue failed")
 		return
 	}
 
@@ -122,6 +145,7 @@ func (s *Server) handleListReview(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(items)
 }
 
+// handleResolveReview confirms mapping for a queue item and inserts it into mapping_overrides.
 func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 	if s.db == nil {
 		s.writeJSONError(w, http.StatusInternalServerError, "database not configured")
@@ -167,6 +191,20 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	seasons := strings.TrimSpace(req.Seasons)
+	if seasons == "" {
+		seasons = "1"
+	}
+	if !validateSeasons(seasons) {
+		s.writeJSONError(w, http.StatusBadRequest, "invalid seasons format: must be positive integers")
+		return
+	}
+
+	var titleVal any
+	if trimmed := strings.TrimSpace(req.TitleOverride); trimmed != "" {
+		titleVal = trimmed
+	}
+
 	var anilistID int
 	err = s.db.Write(r.Context(), func(ctx context.Context, tx *sql.Tx) error {
 		var queueMediaType, titleRomaji string
@@ -184,15 +222,11 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 			mediaType = queueMediaType
 		}
 
-		seasons := strings.TrimSpace(req.Seasons)
-		if seasons == "" {
-			seasons = "1"
-		}
-
-		var resolvedSeason sql.NullInt64
-		if sNum, parseErr := strconv.Atoi(seasons); parseErr == nil && sNum > 0 {
-			resolvedSeason = sql.NullInt64{Int64: int64(sNum), Valid: true}
-		}
+		parts := strings.FieldsFunc(seasons, func(c rune) bool {
+			return c == ',' || c == ' ' || c == ';'
+		})
+		firstSeason, _ := strconv.Atoi(parts[0])
+		resolvedSeason := sql.NullInt64{Int64: int64(firstSeason), Valid: true}
 
 		_, overrideErr := tx.ExecContext(ctx, `
 			INSERT INTO mapping_overrides (
@@ -206,7 +240,7 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 				seasons = excluded.seasons,
 				title_override = excluded.title_override,
 				updated_at = CURRENT_TIMESTAMP;
-		`, anilistID, mediaType, tvdbVal, tmdbVal, seasons, req.TitleOverride)
+		`, anilistID, mediaType, tvdbVal, tmdbVal, seasons, titleVal)
 		if overrideErr != nil {
 			return overrideErr
 		}
@@ -237,7 +271,8 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 			s.writeJSONError(w, http.StatusNotFound, fmt.Sprintf("review queue item %d not found or already resolved", id))
 			return
 		}
-		s.writeJSONError(w, http.StatusInternalServerError, "resolve review item failed: "+err.Error())
+		log.Printf("resolve review item %d failed: %v", id, err)
+		s.writeJSONError(w, http.StatusInternalServerError, "resolve review item failed")
 		return
 	}
 
@@ -250,6 +285,7 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleIgnoreReview records a title in ignored_titles and resolves the queue item.
 func (s *Server) handleIgnoreReview(w http.ResponseWriter, r *http.Request) {
 	if s.db == nil {
 		s.writeJSONError(w, http.StatusInternalServerError, "database not configured")
@@ -322,7 +358,8 @@ func (s *Server) handleIgnoreReview(w http.ResponseWriter, r *http.Request) {
 			s.writeJSONError(w, http.StatusNotFound, fmt.Sprintf("review queue item %d not found or already resolved", id))
 			return
 		}
-		s.writeJSONError(w, http.StatusInternalServerError, "ignore review item failed: "+err.Error())
+		log.Printf("ignore review item %d failed: %v", id, err)
+		s.writeJSONError(w, http.StatusInternalServerError, "ignore review item failed")
 		return
 	}
 

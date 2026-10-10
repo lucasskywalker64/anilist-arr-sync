@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -38,6 +39,7 @@ type createOverrideRequest struct {
 	TitleOverride string `json:"titleOverride"`
 }
 
+// handleListOverrides returns all custom mapping overrides.
 func (s *Server) handleListOverrides(w http.ResponseWriter, r *http.Request) {
 	if s.db == nil {
 		s.writeJSONError(w, http.StatusInternalServerError, "database not configured")
@@ -81,7 +83,8 @@ func (s *Server) handleListOverrides(w http.ResponseWriter, r *http.Request) {
 		return rows.Err()
 	})
 	if err != nil {
-		s.writeJSONError(w, http.StatusInternalServerError, "query overrides failed: "+err.Error())
+		log.Printf("query overrides failed: %v", err)
+		s.writeJSONError(w, http.StatusInternalServerError, "query overrides failed")
 		return
 	}
 
@@ -94,6 +97,7 @@ func (s *Server) handleListOverrides(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(list)
 }
 
+// handleCreateOverride inserts or updates a mapping override.
 func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 	if s.db == nil {
 		s.writeJSONError(w, http.StatusInternalServerError, "database not configured")
@@ -122,6 +126,11 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 		seasons = "1"
 	}
 
+	var titleVal any
+	if trimmed := strings.TrimSpace(req.TitleOverride); trimmed != "" {
+		titleVal = trimmed
+	}
+
 	err := s.db.Write(r.Context(), func(ctx context.Context, tx *sql.Tx) error {
 		_, execErr := tx.ExecContext(ctx, `
 			INSERT INTO mapping_overrides (
@@ -135,11 +144,12 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 				seasons = excluded.seasons,
 				title_override = excluded.title_override,
 				updated_at = CURRENT_TIMESTAMP;
-		`, req.AniListID, req.MediaType, req.TVDBID, req.TMDBID, seasons, req.TitleOverride)
+		`, req.AniListID, req.MediaType, req.TVDBID, req.TMDBID, seasons, titleVal)
 		return execErr
 	})
 	if err != nil {
-		s.writeJSONError(w, http.StatusInternalServerError, "save override failed: "+err.Error())
+		log.Printf("save override failed: %v", err)
+		s.writeJSONError(w, http.StatusInternalServerError, "save override failed")
 		return
 	}
 
@@ -151,6 +161,7 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleDeleteOverride removes a mapping override by AniList ID.
 func (s *Server) handleDeleteOverride(w http.ResponseWriter, r *http.Request) {
 	if s.db == nil {
 		s.writeJSONError(w, http.StatusInternalServerError, "database not configured")
@@ -169,7 +180,8 @@ func (s *Server) handleDeleteOverride(w http.ResponseWriter, r *http.Request) {
 		return execErr
 	})
 	if err != nil {
-		s.writeJSONError(w, http.StatusInternalServerError, "delete override failed: "+err.Error())
+		log.Printf("delete override failed: %v", err)
+		s.writeJSONError(w, http.StatusInternalServerError, "delete override failed")
 		return
 	}
 
@@ -181,6 +193,7 @@ func (s *Server) handleDeleteOverride(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleGetConfig returns the sanitized runtime configuration.
 func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 	sanitized := s.Config()
 	if sanitized.APIKey != "" {
@@ -223,6 +236,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(m)
 }
 
+// handleUpdateConfig validates, persists, and hot-reloads configuration changes.
 func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	var updates map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
@@ -300,7 +314,8 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 	if s.configPath != "" {
 		if err := config.Save(s.configPath, &next); err != nil {
-			s.writeJSONError(w, http.StatusInternalServerError, "save config failed: "+err.Error())
+			log.Printf("save config failed: %v", err)
+			s.writeJSONError(w, http.StatusInternalServerError, "save config failed")
 			return
 		}
 	}
@@ -315,6 +330,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleStartSync triggers a manual sync run in the background.
 func (s *Server) handleStartSync(w http.ResponseWriter, _ *http.Request) {
 	if s.orch == nil {
 		s.writeJSONError(w, http.StatusBadRequest, "orchestrator not configured")
@@ -353,6 +369,7 @@ func (s *Server) handleStartSync(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// handleGetSyncStatus returns orchestrator progress and active sync state.
 func (s *Server) handleGetSyncStatus(w http.ResponseWriter, _ *http.Request) {
 	s.syncMu.Lock()
 	running := s.isSyncing
@@ -383,6 +400,7 @@ type SyncHistoryRecord struct {
 	TriggerType       string    `json:"triggerType"`
 }
 
+// handleGetSyncHistory returns recent sync run logs and execution summaries.
 func (s *Server) handleGetSyncHistory(w http.ResponseWriter, r *http.Request) {
 	if s.db == nil {
 		s.writeJSONError(w, http.StatusInternalServerError, "database not configured")
@@ -422,7 +440,8 @@ func (s *Server) handleGetSyncHistory(w http.ResponseWriter, r *http.Request) {
 		return rows.Err()
 	})
 	if err != nil {
-		s.writeJSONError(w, http.StatusInternalServerError, "query sync history failed: "+err.Error())
+		log.Printf("query sync history failed: %v", err)
+		s.writeJSONError(w, http.StatusInternalServerError, "query sync history failed")
 		return
 	}
 
@@ -435,11 +454,13 @@ func (s *Server) handleGetSyncHistory(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(history)
 }
 
+// handleListStaged returns pending sync actions requiring manual confirmation.
 func (s *Server) handleListStaged(w http.ResponseWriter, r *http.Request) {
 	if s.orch != nil {
 		actions, err := s.orch.GetStagedActions(r.Context(), orchestrator.StagedStatusPending)
 		if err != nil {
-			s.writeJSONError(w, http.StatusInternalServerError, "query staged actions failed: "+err.Error())
+			log.Printf("query staged actions failed: %v", err)
+			s.writeJSONError(w, http.StatusInternalServerError, "query staged actions failed")
 			return
 		}
 		if actions == nil {
@@ -491,7 +512,8 @@ func (s *Server) handleListStaged(w http.ResponseWriter, r *http.Request) {
 		return rows.Err()
 	})
 	if err != nil {
-		s.writeJSONError(w, http.StatusInternalServerError, "query staged actions failed: "+err.Error())
+		log.Printf("query staged actions failed: %v", err)
+		s.writeJSONError(w, http.StatusInternalServerError, "query staged actions failed")
 		return
 	}
 
@@ -508,6 +530,7 @@ type batchStagedRequest struct {
 	IDs []int `json:"ids"`
 }
 
+// handleApplyStaged executes pending staged sync actions.
 func (s *Server) handleApplyStaged(w http.ResponseWriter, r *http.Request) {
 	if s.orch == nil {
 		s.writeJSONError(w, http.StatusBadRequest, "orchestrator unavailable")
@@ -523,7 +546,8 @@ func (s *Server) handleApplyStaged(w http.ResponseWriter, r *http.Request) {
 	applied := []int{}
 	for _, id := range req.IDs {
 		if err := s.orch.ApplyStagedAction(r.Context(), id); err != nil {
-			s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("apply staged action %d failed: %v", id, err))
+			log.Printf("apply staged action %d failed: %v", id, err)
+			s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("apply staged action %d failed", id))
 			return
 		}
 		applied = append(applied, id)
@@ -537,6 +561,7 @@ func (s *Server) handleApplyStaged(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleRejectStaged marks staged sync actions as rejected.
 func (s *Server) handleRejectStaged(w http.ResponseWriter, r *http.Request) {
 	var req batchStagedRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -548,7 +573,8 @@ func (s *Server) handleRejectStaged(w http.ResponseWriter, r *http.Request) {
 	for _, id := range req.IDs {
 		if s.orch != nil {
 			if err := s.orch.RejectStagedAction(r.Context(), id); err != nil {
-				s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("reject staged action %d failed: %v", id, err))
+				log.Printf("reject staged action %d failed: %v", id, err)
+				s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("reject staged action %d failed", id))
 				return
 			}
 			rejected = append(rejected, id)
@@ -568,7 +594,8 @@ func (s *Server) handleRejectStaged(w http.ResponseWriter, r *http.Request) {
 				return nil
 			})
 			if err != nil {
-				s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("reject staged action %d failed: %v", id, err))
+				log.Printf("reject staged action %d failed: %v", id, err)
+				s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("reject staged action %d failed", id))
 				return
 			}
 		}
@@ -582,6 +609,7 @@ func (s *Server) handleRejectStaged(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleListBackups enumerates available backup archives.
 func (s *Server) handleListBackups(w http.ResponseWriter, _ *http.Request) {
 	if s.backup == nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -592,7 +620,8 @@ func (s *Server) handleListBackups(w http.ResponseWriter, _ *http.Request) {
 
 	backups, err := s.backup.List()
 	if err != nil {
-		s.writeJSONError(w, http.StatusInternalServerError, "list backups failed: "+err.Error())
+		log.Printf("list backups failed: %v", err)
+		s.writeJSONError(w, http.StatusInternalServerError, "list backups failed")
 		return
 	}
 	if backups == nil {
@@ -604,6 +633,7 @@ func (s *Server) handleListBackups(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(backups)
 }
 
+// handleCreateBackup produces a new manual backup archive.
 func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 	if s.backup == nil {
 		s.writeJSONError(w, http.StatusBadRequest, "backup engine not configured")
@@ -612,7 +642,8 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 
 	info, err := s.backup.Create(r.Context(), backup.TypeManual)
 	if err != nil {
-		s.writeJSONError(w, http.StatusInternalServerError, "create backup failed: "+err.Error())
+		log.Printf("create backup failed: %v", err)
+		s.writeJSONError(w, http.StatusInternalServerError, "create backup failed")
 		return
 	}
 
@@ -626,6 +657,7 @@ type restoreBackupRequest struct {
 	ArchivePath string `json:"archivePath"`
 }
 
+// handleRestoreBackup validates and applies a backup archive.
 func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
 	if s.backup == nil {
 		s.writeJSONError(w, http.StatusBadRequest, "backup engine not configured")
@@ -650,7 +682,8 @@ func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
 
 	backups, err := s.backup.List()
 	if err != nil {
-		s.writeJSONError(w, http.StatusInternalServerError, "failed to locate backup: "+err.Error())
+		log.Printf("failed to locate backup: %v", err)
+		s.writeJSONError(w, http.StatusInternalServerError, "failed to locate backup")
 		return
 	}
 
@@ -668,7 +701,8 @@ func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.backup.Restore(r.Context(), targetPath); err != nil {
-		s.writeJSONError(w, http.StatusInternalServerError, "restore failed: "+err.Error())
+		log.Printf("restore backup failed: %v", err)
+		s.writeJSONError(w, http.StatusInternalServerError, "restore failed")
 		return
 	}
 
@@ -680,6 +714,7 @@ func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleGetUpdateStatus returns current application version and update availability.
 func (s *Server) handleGetUpdateStatus(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -690,6 +725,7 @@ func (s *Server) handleGetUpdateStatus(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// handleApplyUpdate downloads and applies the latest application update.
 func (s *Server) handleApplyUpdate(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

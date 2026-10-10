@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ type credentialsRequest struct {
 	Password string `json:"password"`
 }
 
+// handleSetup creates the initial administrator user when no users exist.
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	if s.db == nil {
 		s.writeJSONError(w, http.StatusInternalServerError, "database not configured")
@@ -37,7 +39,8 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 
 	hash, err := HashPassword(req.Password, "pbkdf2")
 	if err != nil {
-		s.writeJSONError(w, http.StatusInternalServerError, "failed to hash password: "+err.Error())
+		log.Printf("failed to hash password: %v", err)
+		s.writeJSONError(w, http.StatusInternalServerError, "failed to hash password")
 		return
 	}
 
@@ -58,13 +61,14 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 			s.writeJSONError(w, http.StatusBadRequest, "setup already completed")
 			return
 		}
-		s.writeJSONError(w, http.StatusInternalServerError, "failed to create user: "+err.Error())
+		log.Printf("failed to create user: %v", err)
+		s.writeJSONError(w, http.StatusInternalServerError, "failed to create user")
 		return
 	}
 
 	token := s.sessions.Create(req.Username)
 	csrfToken := s.sessions.CSRFToken(token)
-	s.setSessionCookie(w, token, csrfToken)
+	s.setSessionCookie(w, r, token, csrfToken)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -75,6 +79,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleLogin validates credentials and creates an authenticated session.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if s.db == nil {
 		s.writeJSONError(w, http.StatusInternalServerError, "database not configured")
@@ -102,7 +107,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			s.writeJSONError(w, http.StatusUnauthorized, "invalid username or password")
 			return
 		}
-		s.writeJSONError(w, http.StatusInternalServerError, "database error: "+err.Error())
+		log.Printf("database query failed during login: %v", err)
+		s.writeJSONError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 
@@ -113,7 +119,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	token := s.sessions.Create(req.Username)
 	csrfToken := s.sessions.CSRFToken(token)
-	s.setSessionCookie(w, token, csrfToken)
+	s.setSessionCookie(w, r, token, csrfToken)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -124,13 +130,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleLogout clears the authenticated session token and invalidates cookies.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(sessionCookieName)
 	if err == nil && cookie.Value != "" {
 		s.sessions.Delete(cookie.Value)
 	}
 
-	s.clearSessionCookie(w)
+	s.clearSessionCookie(w, r)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -139,6 +146,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleCurrentUser returns authentication status and session details for the requesting user.
 func (s *Server) handleCurrentUser(w http.ResponseWriter, r *http.Request) {
 	username, _ := r.Context().Value(userContextKey).(string)
 
@@ -156,13 +164,14 @@ func (s *Server) handleCurrentUser(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) setSessionCookie(w http.ResponseWriter, token, csrfToken string) {
+// setSessionCookie configures HTTP-only session and CSRF cookies, honoring TLS and reverse proxy HTTPS.
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token, csrfToken string) {
 	path := "/"
 	if s.cleanURLBase != "" {
 		path = s.cleanURLBase + "/"
 	}
 
-	ssl := s.isSslEnabled()
+	ssl := s.isSslEnabled() || r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
@@ -187,13 +196,14 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, token, csrfToken string
 	}
 }
 
-func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+// clearSessionCookie removes active session and CSRF cookies.
+func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	path := "/"
 	if s.cleanURLBase != "" {
 		path = s.cleanURLBase + "/"
 	}
 
-	ssl := s.isSslEnabled()
+	ssl := s.isSslEnabled() || r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,

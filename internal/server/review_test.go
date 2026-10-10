@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -77,7 +78,7 @@ func TestReviewQueueEndpoints(t *testing.T) {
 			"seasons":       "1",
 			"titleOverride": "Frieren",
 		})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/review/1/resolve", bytes.NewReader(resolvePayload))
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/review/%d/resolve", item1ID), bytes.NewReader(resolvePayload))
 		req.RemoteAddr = "127.0.0.1:12345"
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Api-Key", "test-api-key")
@@ -128,7 +129,7 @@ func TestReviewQueueEndpoints(t *testing.T) {
 		ignorePayload, _ := json.Marshal(map[string]string{
 			"reason": "Not interested in watching",
 		})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/review/2/ignore", bytes.NewReader(ignorePayload))
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/review/%d/ignore", item2ID), bytes.NewReader(ignorePayload))
 		req.RemoteAddr = "127.0.0.1:12345"
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Api-Key", "test-api-key")

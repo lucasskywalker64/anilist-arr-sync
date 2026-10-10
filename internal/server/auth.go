@@ -98,6 +98,24 @@ func IsLocalAddress(addr string) bool {
 	return false
 }
 
+// IsLoopbackAddress checks if the given host or host:port string is a loopback address.
+func IsLoopbackAddress(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+
+	host = strings.TrimPrefix(host, "[")
+	host = strings.TrimSuffix(host, "]")
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+
+	return ip.IsLoopback()
+}
+
 // session holds authenticated session data.
 type session struct {
 	username  string
@@ -152,11 +170,15 @@ func (s *SessionStore) Create(username string) string {
 	s.cleanupExpiredLocked()
 
 	b := make([]byte, 32)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand: failed to generate session token: " + err.Error())
+	}
 	token := hex.EncodeToString(b)
 
 	cb := make([]byte, 32)
-	_, _ = rand.Read(cb)
+	if _, err := rand.Read(cb); err != nil {
+		panic("crypto/rand: failed to generate csrf token: " + err.Error())
+	}
 	csrfToken := hex.EncodeToString(cb)
 
 	s.sessions[token] = session{
