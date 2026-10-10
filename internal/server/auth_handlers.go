@@ -35,19 +35,6 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var userCount int
-	err := s.db.Read(r.Context(), func(ctx context.Context, q storage.Querier) error {
-		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM users;").Scan(&userCount)
-	})
-	if err != nil {
-		s.writeJSONError(w, http.StatusInternalServerError, "failed to query users: "+err.Error())
-		return
-	}
-	if userCount > 0 {
-		s.writeJSONError(w, http.StatusBadRequest, "setup already completed")
-		return
-	}
-
 	hash, err := HashPassword(req.Password, "pbkdf2")
 	if err != nil {
 		s.writeJSONError(w, http.StatusInternalServerError, "failed to hash password: "+err.Error())
@@ -55,22 +42,36 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = s.db.Write(r.Context(), func(ctx context.Context, tx *sql.Tx) error {
+		var userCount int
+		if queryErr := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users;").Scan(&userCount); queryErr != nil {
+			return queryErr
+		}
+		if userCount > 0 {
+			return errors.New("setup already completed")
+		}
+
 		_, execErr := tx.ExecContext(ctx, "INSERT INTO users (username, password_hash) VALUES (?, ?);", req.Username, hash)
 		return execErr
 	})
 	if err != nil {
+		if err.Error() == "setup already completed" {
+			s.writeJSONError(w, http.StatusBadRequest, "setup already completed")
+			return
+		}
 		s.writeJSONError(w, http.StatusInternalServerError, "failed to create user: "+err.Error())
 		return
 	}
 
 	token := s.sessions.Create(req.Username)
-	s.setSessionCookie(w, token)
+	csrfToken := s.sessions.CSRFToken(token)
+	s.setSessionCookie(w, token, csrfToken)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status":   "ok",
-		"username": req.Username,
+		"status":    "ok",
+		"username":  req.Username,
+		"csrfToken": csrfToken,
 	})
 }
 
@@ -111,13 +112,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token := s.sessions.Create(req.Username)
-	s.setSessionCookie(w, token)
+	csrfToken := s.sessions.CSRFToken(token)
+	s.setSessionCookie(w, token, csrfToken)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status":   "ok",
-		"username": req.Username,
+		"status":    "ok",
+		"username":  req.Username,
+		"csrfToken": csrfToken,
 	})
 }
 
@@ -139,29 +142,49 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCurrentUser(w http.ResponseWriter, r *http.Request) {
 	username, _ := r.Context().Value(userContextKey).(string)
 
+	var csrfToken string
+	if cookie, err := r.Cookie(sessionCookieName); err == nil && cookie.Value != "" {
+		csrfToken = s.sessions.CSRFToken(cookie.Value)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"username":      username,
 		"authenticated": username != "",
+		"csrfToken":     csrfToken,
 	})
 }
 
-func (s *Server) setSessionCookie(w http.ResponseWriter, token string) {
+func (s *Server) setSessionCookie(w http.ResponseWriter, token, csrfToken string) {
 	path := "/"
 	if s.cleanURLBase != "" {
 		path = s.cleanURLBase + "/"
 	}
+
+	ssl := s.isSslEnabled()
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,
 		Path:     path,
 		HttpOnly: true,
-		Secure:   s.cfg.EnableSsl,
+		Secure:   ssl,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  time.Now().Add(24 * time.Hour),
 	})
+
+	if csrfToken != "" {
+		http.SetCookie(w, &http.Cookie{
+			Name:     csrfCookieName,
+			Value:    csrfToken,
+			Path:     path,
+			HttpOnly: false,
+			Secure:   ssl,
+			SameSite: http.SameSiteLaxMode,
+			Expires:  time.Now().Add(24 * time.Hour),
+		})
+	}
 }
 
 func (s *Server) clearSessionCookie(w http.ResponseWriter) {
@@ -170,12 +193,25 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 		path = s.cleanURLBase + "/"
 	}
 
+	ssl := s.isSslEnabled()
+
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
 		Path:     path,
 		HttpOnly: true,
-		Secure:   s.cfg.EnableSsl,
+		Secure:   ssl,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+		Expires:  time.Unix(0, 0),
+	})
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     csrfCookieName,
+		Value:    "",
+		Path:     path,
+		HttpOnly: false,
+		Secure:   ssl,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 		Expires:  time.Unix(0, 0),

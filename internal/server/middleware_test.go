@@ -124,9 +124,10 @@ func TestExternalAuthHeaders(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// Authelia Remote-User header
+	// Authelia Remote-User header from trusted local proxy
 	{
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
+		req.RemoteAddr = "127.0.0.1:54321"
 		req.Header.Set("Remote-User", "authelia_user")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -135,9 +136,10 @@ func TestExternalAuthHeaders(t *testing.T) {
 		}
 	}
 
-	// Authentik X-authentik-username header
+	// Authentik X-authentik-username header from trusted local proxy
 	{
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
+		req.RemoteAddr = "127.0.0.1:54321"
 		req.Header.Set("X-authentik-username", "authentik_user")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -146,9 +148,22 @@ func TestExternalAuthHeaders(t *testing.T) {
 		}
 	}
 
+	// External header from untrusted public IP is rejected
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
+		req.RemoteAddr = "198.51.100.1:1234"
+		req.Header.Set("Remote-User", "hacker")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("expected spoofed external header from untrusted IP to return 401, got %d", rec.Code)
+		}
+	}
+
 	// Missing external headers
 	{
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
+		req.RemoteAddr = "127.0.0.1:54321"
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnauthorized {

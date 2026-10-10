@@ -22,6 +22,7 @@ import (
 
 // Server coordinates the HTTP/HTTPS listeners and REST API routes.
 type Server struct {
+	cfgMu        sync.RWMutex
 	cfg          *config.Config
 	configPath   string
 	db           *storage.DB
@@ -29,6 +30,7 @@ type Server struct {
 	backup       *backup.Engine
 	sessions     *SessionStore
 	cleanURLBase string
+	errChan      chan error
 
 	httpServer  *http.Server
 	httpsServer *http.Server
@@ -56,7 +58,44 @@ func NewServer(
 		backup:       backupEngine,
 		sessions:     NewSessionStore(24 * time.Hour),
 		cleanURLBase: cleanBase,
+		errChan:      make(chan error, 2),
 	}
+}
+
+// Errors returns a receive-only channel for background listener errors.
+func (s *Server) Errors() <-chan error {
+	return s.errChan
+}
+
+// Config returns a copy of current configuration under a read lock.
+func (s *Server) Config() config.Config {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return *s.cfg
+}
+
+func (s *Server) getAPIKey() string {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.APIKey
+}
+
+func (s *Server) getAuthMethod() string {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.AuthenticationMethod
+}
+
+func (s *Server) getAuthRequired() string {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.AuthenticationRequired
+}
+
+func (s *Server) isSslEnabled() bool {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.EnableSsl
 }
 
 // normalizeURLBase strips trailing slashes and ensures a leading slash unless empty.
@@ -108,14 +147,16 @@ func (s *Server) Start() error {
 		return fmt.Errorf("server: failed to bind HTTP listener on %s: %w", httpAddr, err)
 	}
 
-	errChan := make(chan error, 2)
 	go func() {
 		if serveErr := s.httpServer.Serve(httpListener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			errChan <- fmt.Errorf("http serve error: %w", serveErr)
+			select {
+			case s.errChan <- fmt.Errorf("http serve error: %w", serveErr):
+			default:
+			}
 		}
 	}()
 
-	if s.cfg.EnableSsl {
+	if s.isSslEnabled() {
 		httpsAddr := fmt.Sprintf("%s:%d", s.cfg.BindAddress, s.cfg.SslPort)
 		cert, certErr := tls.LoadX509KeyPair(s.cfg.SslCertPath, s.cfg.SslKeyPath)
 		if certErr != nil {
@@ -144,7 +185,10 @@ func (s *Server) Start() error {
 
 		go func() {
 			if serveErr := s.httpsServer.Serve(httpsListener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-				errChan <- fmt.Errorf("https serve error: %w", serveErr)
+				select {
+				case s.errChan <- fmt.Errorf("https serve error: %w", serveErr):
+				default:
+				}
 			}
 		}()
 	}

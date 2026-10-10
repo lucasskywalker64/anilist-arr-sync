@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/backup"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/orchestrator"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 )
@@ -181,7 +182,7 @@ func (s *Server) handleDeleteOverride(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
-	sanitized := *s.cfg
+	sanitized := s.Config()
 	if sanitized.APIKey != "" {
 		sanitized.APIKey = "******"
 	}
@@ -229,68 +230,82 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply known fields
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+
+	next := *s.cfg
+
+	// Apply known fields to copy
 	for k, v := range updates {
 		switch strings.ToLower(k) {
 		case "instancename":
 			if str, ok := v.(string); ok {
-				s.cfg.InstanceName = str
+				next.InstanceName = str
 			}
 		case "syncintervalhours":
-			if num, ok := v.(float64); ok && num > 0 {
-				s.cfg.SyncIntervalHours = int(num)
+			if num, ok := v.(float64); ok {
+				next.SyncIntervalHours = int(num)
 			}
 		case "datetolerancedays":
-			if num, ok := v.(float64); ok && num >= 0 {
-				s.cfg.DateToleranceDays = int(num)
+			if num, ok := v.(float64); ok {
+				next.DateToleranceDays = int(num)
 			}
 		case "confidencethreshold":
-			if num, ok := v.(float64); ok && num >= 0 && num <= 1 {
-				s.cfg.ConfidenceThreshold = num
+			if num, ok := v.(float64); ok {
+				next.ConfidenceThreshold = num
 			}
 		case "unmonitordropped":
 			if b, ok := v.(bool); ok {
-				s.cfg.UnmonitorDropped = b
+				next.UnmonitorDropped = b
 			}
 		case "firstrundryrun":
 			if b, ok := v.(bool); ok {
-				s.cfg.FirstRunDryRun = b
+				next.FirstRunDryRun = b
 			}
 		case "tagname":
 			if str, ok := v.(string); ok {
-				s.cfg.TagName = str
+				next.TagName = str
 			}
 		case "anilistusername":
 			if str, ok := v.(string); ok {
-				s.cfg.AniListUsername = str
+				next.AniListUsername = str
 			}
 		case "radarrurl":
 			if str, ok := v.(string); ok {
-				s.cfg.RadarrURL = str
+				next.RadarrURL = str
 			}
 		case "sonarrurl":
 			if str, ok := v.(string); ok {
-				s.cfg.SonarrURL = str
+				next.SonarrURL = str
 			}
 		case "radarrapikey":
 			if str, ok := v.(string); ok && str != "******" {
-				s.cfg.RadarrAPIKey = str
+				next.RadarrAPIKey = str
 			}
 		case "sonarrapikey":
 			if str, ok := v.(string); ok && str != "******" {
-				s.cfg.SonarrAPIKey = str
+				next.SonarrAPIKey = str
 			}
 		case "apikey":
 			if str, ok := v.(string); ok && str != "******" {
-				s.cfg.APIKey = str
+				next.APIKey = str
 			}
 		}
 	}
 
-	if err := s.cfg.Validate(); err != nil {
+	if err := next.Validate(); err != nil {
 		s.writeJSONError(w, http.StatusBadRequest, "invalid configuration: "+err.Error())
 		return
 	}
+
+	if s.configPath != "" {
+		if err := config.Save(s.configPath, &next); err != nil {
+			s.writeJSONError(w, http.StatusInternalServerError, "save config failed: "+err.Error())
+			return
+		}
+	}
+
+	*s.cfg = next
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -494,31 +509,24 @@ type batchStagedRequest struct {
 }
 
 func (s *Server) handleApplyStaged(w http.ResponseWriter, r *http.Request) {
+	if s.orch == nil {
+		s.writeJSONError(w, http.StatusBadRequest, "orchestrator unavailable")
+		return
+	}
+
 	var req batchStagedRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeJSONError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	var applied []int
+	applied := []int{}
 	for _, id := range req.IDs {
-		if s.orch != nil {
-			if err := s.orch.ApplyStagedAction(r.Context(), id); err != nil {
-				s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("apply staged action %d failed: %v", id, err))
-				return
-			}
-			applied = append(applied, id)
-		} else if s.db != nil {
-			err := s.db.Write(r.Context(), func(ctx context.Context, tx *sql.Tx) error {
-				_, execErr := tx.ExecContext(ctx, "UPDATE staged_sync_actions SET status = 'APPLIED', executed_at = CURRENT_TIMESTAMP WHERE id = ?;", id)
-				return execErr
-			})
-			if err != nil {
-				s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("apply staged action %d failed: %v", id, err))
-				return
-			}
-			applied = append(applied, id)
+		if err := s.orch.ApplyStagedAction(r.Context(), id); err != nil {
+			s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("apply staged action %d failed: %v", id, err))
+			return
 		}
+		applied = append(applied, id)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -536,7 +544,7 @@ func (s *Server) handleRejectStaged(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var rejected []int
+	rejected := []int{}
 	for _, id := range req.IDs {
 		if s.orch != nil {
 			if err := s.orch.RejectStagedAction(r.Context(), id); err != nil {
@@ -546,14 +554,23 @@ func (s *Server) handleRejectStaged(w http.ResponseWriter, r *http.Request) {
 			rejected = append(rejected, id)
 		} else if s.db != nil {
 			err := s.db.Write(r.Context(), func(ctx context.Context, tx *sql.Tx) error {
-				_, execErr := tx.ExecContext(ctx, "UPDATE staged_sync_actions SET status = 'REJECTED' WHERE id = ?;", id)
-				return execErr
+				res, execErr := tx.ExecContext(ctx, "UPDATE staged_sync_actions SET status = 'REJECTED' WHERE id = ? AND status = 'PENDING';", id)
+				if execErr != nil {
+					return execErr
+				}
+				rows, rowsErr := res.RowsAffected()
+				if rowsErr != nil {
+					return rowsErr
+				}
+				if rows > 0 {
+					rejected = append(rejected, id)
+				}
+				return nil
 			})
 			if err != nil {
 				s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("reject staged action %d failed: %v", id, err))
 				return
 			}
-			rejected = append(rejected, id)
 		}
 	}
 
@@ -621,27 +638,36 @@ func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	archivePath := req.ArchivePath
-	if archivePath == "" && req.Filename != "" {
-		backups, err := s.backup.List()
-		if err != nil {
-			s.writeJSONError(w, http.StatusInternalServerError, "failed to locate backup: "+err.Error())
-			return
-		}
-		for _, b := range backups {
-			if b.Filename == req.Filename || filepath.Base(b.Path) == req.Filename {
-				archivePath = b.Path
-				break
-			}
-		}
+	name := strings.TrimSpace(req.Filename)
+	if name == "" && req.ArchivePath != "" {
+		name = filepath.Base(req.ArchivePath)
 	}
 
-	if archivePath == "" {
-		s.writeJSONError(w, http.StatusBadRequest, "backup archive not found")
+	if name == "" {
+		s.writeJSONError(w, http.StatusBadRequest, "filename or archivePath required")
 		return
 	}
 
-	if err := s.backup.Restore(r.Context(), archivePath); err != nil {
+	backups, err := s.backup.List()
+	if err != nil {
+		s.writeJSONError(w, http.StatusInternalServerError, "failed to locate backup: "+err.Error())
+		return
+	}
+
+	var targetPath string
+	for _, b := range backups {
+		if b.Filename == name || filepath.Base(b.Path) == name {
+			targetPath = b.Path
+			break
+		}
+	}
+
+	if targetPath == "" {
+		s.writeJSONError(w, http.StatusNotFound, "backup archive not found")
+		return
+	}
+
+	if err := s.backup.Restore(r.Context(), targetPath); err != nil {
 		s.writeJSONError(w, http.StatusInternalServerError, "restore failed: "+err.Error())
 		return
 	}

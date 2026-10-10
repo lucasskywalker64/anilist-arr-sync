@@ -9,6 +9,7 @@ import (
 )
 
 const sessionCookieName = "anilist_sync_session"
+const csrfCookieName = "anilist_sync_csrf"
 
 type contextKey string
 
@@ -30,8 +31,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		// 1. API Key authentication via X-Api-Key header
 		reqAPIKey := r.Header.Get("X-Api-Key")
-		if reqAPIKey != "" && s.cfg.APIKey != "" {
-			if subtle.ConstantTimeCompare([]byte(reqAPIKey), []byte(s.cfg.APIKey)) == 1 {
+		apiKey := s.getAPIKey()
+		if reqAPIKey != "" && apiKey != "" {
+			if subtle.ConstantTimeCompare([]byte(reqAPIKey), []byte(apiKey)) == 1 {
 				ctx := context.WithValue(r.Context(), userContextKey, "apikey_user")
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
@@ -39,7 +41,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// 2. Local LAN address bypass
-		if s.cfg.AuthenticationRequired == "DisabledForLocalAddresses" {
+		if s.getAuthRequired() == "DisabledForLocalAddresses" {
 			if IsLocalAddress(r.RemoteAddr) {
 				ctx := context.WithValue(r.Context(), userContextKey, "local_user")
 				next.ServeHTTP(w, r.WithContext(ctx))
@@ -48,7 +50,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// 3. External reverse proxy headers (Authelia / Authentik)
-		if s.cfg.AuthenticationMethod == "External" {
+		if s.getAuthMethod() == "External" {
+			if !IsLocalAddress(r.RemoteAddr) {
+				s.writeJSONError(w, http.StatusUnauthorized, "untrusted client address for external authentication")
+				return
+			}
 			remoteUser := r.Header.Get("Remote-User")
 			if remoteUser == "" {
 				remoteUser = r.Header.Get("X-authentik-username")
@@ -63,7 +69,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// 4. Forms session cookie authentication
-		if s.cfg.AuthenticationMethod == "Forms" {
+		if s.getAuthMethod() == "Forms" {
 			cookie, err := r.Cookie(sessionCookieName)
 			if err == nil && cookie.Value != "" {
 				if username, ok := s.sessions.Validate(cookie.Value); ok {
@@ -78,7 +84,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// csrfMiddleware verifies X-Api-Key on all state-mutating requests to protect against CSRF attacks.
+// csrfMiddleware verifies X-Api-Key or session CSRF token on all state-mutating requests to protect against CSRF attacks.
 func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -92,19 +98,34 @@ func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 			path = strings.TrimPrefix(path, s.cleanURLBase)
 		}
 
-		// Login and initial setup endpoints are exempt from CSRF api-key validation
+		// Login and initial setup endpoints are exempt from CSRF validation
 		if path == "/api/v1/auth/login" || path == "/api/v1/auth/setup" {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		apiKey := r.Header.Get("X-Api-Key")
-		if apiKey == "" || s.cfg.APIKey == "" || subtle.ConstantTimeCompare([]byte(apiKey), []byte(s.cfg.APIKey)) != 1 {
-			s.writeJSONError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key header")
+		// 1. Check API Key header
+		reqAPIKey := r.Header.Get("X-Api-Key")
+		serverAPIKey := s.getAPIKey()
+		if reqAPIKey != "" && serverAPIKey != "" && subtle.ConstantTimeCompare([]byte(reqAPIKey), []byte(serverAPIKey)) == 1 {
+			next.ServeHTTP(w, r)
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		// 2. Check session CSRF token (for Forms browser users)
+		cookie, err := r.Cookie(sessionCookieName)
+		if err == nil && cookie.Value != "" {
+			csrfToken := r.Header.Get("X-CSRF-Token")
+			if csrfToken == "" {
+				csrfToken = reqAPIKey
+			}
+			if csrfToken != "" && s.sessions.ValidateCSRF(cookie.Value, csrfToken) {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		s.writeJSONError(w, http.StatusUnauthorized, "missing or invalid X-Api-Key or X-CSRF-Token header")
 	})
 }
 

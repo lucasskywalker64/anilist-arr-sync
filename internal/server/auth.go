@@ -101,6 +101,7 @@ func IsLocalAddress(addr string) bool {
 // session holds authenticated session data.
 type session struct {
 	username  string
+	csrfToken string
 	expiresAt time.Time
 }
 
@@ -129,11 +130,43 @@ func (s *SessionStore) Create(username string) string {
 	_, _ = rand.Read(b)
 	token := hex.EncodeToString(b)
 
+	cb := make([]byte, 32)
+	_, _ = rand.Read(cb)
+	csrfToken := hex.EncodeToString(cb)
+
 	s.sessions[token] = session{
 		username:  username,
+		csrfToken: csrfToken,
 		expiresAt: time.Now().Add(s.ttl),
 	}
 	return token
+}
+
+// CSRFToken returns the CSRF token associated with an active session.
+func (s *SessionStore) CSRFToken(token string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	sess, ok := s.sessions[token]
+	if !ok || time.Now().After(sess.expiresAt) {
+		return ""
+	}
+	return sess.csrfToken
+}
+
+// ValidateCSRF checks if the provided CSRF token matches the session.
+func (s *SessionStore) ValidateCSRF(token, csrfToken string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	sess, ok := s.sessions[token]
+	if !ok || time.Now().After(sess.expiresAt) {
+		return false
+	}
+	if csrfToken == "" || sess.csrfToken == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(csrfToken), []byte(sess.csrfToken)) == 1
 }
 
 // Validate checks if a session token is active and returns the username.
