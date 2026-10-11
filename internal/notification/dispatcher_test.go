@@ -13,7 +13,7 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/notification"
 )
 
-func TestEngine_Dispatch_Asynchronous(t *testing.T) {
+func TestDispatcher_Dispatch_Asynchronous(t *testing.T) {
 	db := setupTestDB(t)
 	store := notification.NewStore(db)
 
@@ -64,7 +64,7 @@ func TestEngine_Dispatch_Asynchronous(t *testing.T) {
 		t.Fatalf("failed to insert webhook connection: %v", err)
 	}
 
-	engine := notification.NewEngine(store, http.DefaultClient)
+	dispatcher := notification.NewDispatcher(store, http.DefaultClient)
 
 	event := notification.SyncEvent{
 		Type:          notification.EventMediaAdded,
@@ -75,14 +75,14 @@ func TestEngine_Dispatch_Asynchronous(t *testing.T) {
 
 	// Dispatch is non-blocking
 	start := time.Now()
-	engine.Dispatch(event)
+	dispatcher.Dispatch(event)
 	duration := time.Since(start)
 	if duration > 100*time.Millisecond {
 		t.Fatalf("Dispatch took %v, expected non-blocking execution", duration)
 	}
 
 	// Wait for background delivery to complete
-	engine.Wait()
+	dispatcher.Wait()
 
 	if discordCalls.Load() != 1 {
 		t.Fatalf("expected 1 discord call, got %d", discordCalls.Load())
@@ -92,7 +92,7 @@ func TestEngine_Dispatch_Asynchronous(t *testing.T) {
 	}
 }
 
-func TestEngine_TestConnection(t *testing.T) {
+func TestDispatcher_TestConnection(t *testing.T) {
 	db := setupTestDB(t)
 	store := notification.NewStore(db)
 
@@ -106,7 +106,7 @@ func TestEngine_TestConnection(t *testing.T) {
 	}))
 	defer server.Close()
 
-	engine := notification.NewEngine(store, server.Client())
+	dispatcher := notification.NewDispatcher(store, server.Client())
 
 	conn := notification.Connection{
 		Name:       "Test Alert",
@@ -117,7 +117,7 @@ func TestEngine_TestConnection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := engine.TestConnection(ctx, conn); err != nil {
+	if err := dispatcher.TestConnection(ctx, conn); err != nil {
 		t.Fatalf("unexpected error in TestConnection: %v", err)
 	}
 	if !called {

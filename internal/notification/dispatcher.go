@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-// Engine manages asynchronous dispatching of notification events across
+// Dispatcher manages asynchronous dispatching of notification events across
 // configured destinations.
-type Engine struct {
+type Dispatcher struct {
 	store   *Store
 	client  *http.Client
 	wg      sync.WaitGroup
@@ -19,13 +19,13 @@ type Engine struct {
 	closed  bool
 }
 
-// NewEngine creates a new notification engine.
-func NewEngine(store *Store, client *http.Client) *Engine {
+// NewDispatcher creates a new notification dispatcher.
+func NewDispatcher(store *Store, client *http.Client) *Dispatcher {
 	c := client
 	if c == nil {
 		c = &http.Client{Timeout: defaultRequestTimeout}
 	}
-	return &Engine{
+	return &Dispatcher{
 		store:  store,
 		client: c,
 	}
@@ -34,24 +34,24 @@ func NewEngine(store *Store, client *http.Client) *Engine {
 // Dispatch sends a SyncEvent asynchronously in a background goroutine
 // to all active connections matching the event type, using a strict 10-second
 // context timeout per delivery.
-func (e *Engine) Dispatch(event SyncEvent) {
-	e.closeMu.RLock()
-	if e.closed {
-		e.closeMu.RUnlock()
+func (d *Dispatcher) Dispatch(event SyncEvent) {
+	d.closeMu.RLock()
+	if d.closed {
+		d.closeMu.RUnlock()
 		return
 	}
-	e.wg.Add(1)
-	e.closeMu.RUnlock()
+	d.wg.Add(1)
+	d.closeMu.RUnlock()
 
 	go func() {
-		defer e.wg.Done()
+		defer d.wg.Done()
 
 		// Read connections from store with a short query timeout
 		fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		connections, err := e.store.List(fetchCtx)
+		connections, err := d.store.List(fetchCtx)
 		fetchCancel()
 		if err != nil {
-			log.Printf("notification engine: failed to load connections: %v", err)
+			log.Printf("notification dispatcher: failed to load connections: %v", err)
 			return
 		}
 
@@ -66,9 +66,9 @@ func (e *Engine) Dispatch(event SyncEvent) {
 			go func() {
 				defer sendWg.Done()
 
-				provider, provErr := NewProviderFromConnection(c, e.client)
+				provider, provErr := NewProviderFromConnection(c, d.client)
 				if provErr != nil {
-					log.Printf("notification engine: failed to create provider for %s (%d): %v", c.Name, c.ID, provErr)
+					log.Printf("notification dispatcher: failed to create provider for %s (%d): %v", c.Name, c.ID, provErr)
 					return
 				}
 
@@ -76,7 +76,7 @@ func (e *Engine) Dispatch(event SyncEvent) {
 				defer sendCancel()
 
 				if sendErr := provider.Send(sendCtx, event); sendErr != nil {
-					log.Printf("notification engine: failed to send %s notification to %s (%d): %v",
+					log.Printf("notification dispatcher: failed to send %s notification to %s (%d): %v",
 						event.Type, c.Name, c.ID, sendErr)
 				}
 			}()
@@ -86,8 +86,8 @@ func (e *Engine) Dispatch(event SyncEvent) {
 }
 
 // TestConnection verifies connectivity for a specific connection record.
-func (e *Engine) TestConnection(ctx context.Context, conn Connection) error {
-	provider, err := NewProviderFromConnection(conn, e.client)
+func (d *Dispatcher) TestConnection(ctx context.Context, conn Connection) error {
+	provider, err := NewProviderFromConnection(conn, d.client)
 	if err != nil {
 		return fmt.Errorf("failed to create provider: %w", err)
 	}
@@ -103,15 +103,15 @@ func (e *Engine) TestConnection(ctx context.Context, conn Connection) error {
 }
 
 // Wait blocks until all ongoing background dispatches have finished.
-func (e *Engine) Wait() {
-	e.wg.Wait()
+func (d *Dispatcher) Wait() {
+	d.wg.Wait()
 }
 
-// Close closes the engine and waits for pending background dispatches.
-func (e *Engine) Close() {
-	e.closeMu.Lock()
-	e.closed = true
-	e.closeMu.Unlock()
+// Close closes the dispatcher and waits for pending background dispatches.
+func (d *Dispatcher) Close() {
+	d.closeMu.Lock()
+	d.closed = true
+	d.closeMu.Unlock()
 
-	e.wg.Wait()
+	d.wg.Wait()
 }

@@ -29,7 +29,7 @@ type Server struct {
 	db           *storage.DB
 	orch         *orchestrator.Orchestrator
 	backup       *backup.Engine
-	notifier     *notification.Engine
+	notifier     *notification.Dispatcher
 	notifStore   *notification.Store
 	sessions     *SessionStore
 	cleanURLBase string
@@ -54,14 +54,14 @@ func NewServer(
 	cleanBase := normalizeURLBase(cfg.URLBase)
 
 	var notifStore *notification.Store
-	var notifEngine *notification.Engine
+	var notifDispatcher *notification.Dispatcher
 	if db != nil {
 		notifStore = notification.NewStore(db)
-		notifEngine = notification.NewEngine(notifStore, nil)
+		notifDispatcher = notification.NewDispatcher(notifStore, nil)
 	}
 
-	if orch != nil && notifEngine != nil {
-		orch.SetNotifier(notifEngine)
+	if orch != nil && notifDispatcher != nil {
+		orch.SetNotifier(notifDispatcher)
 	}
 
 	return &Server{
@@ -70,7 +70,7 @@ func NewServer(
 		db:           db,
 		orch:         orch,
 		backup:       backupEngine,
-		notifier:     notifEngine,
+		notifier:     notifDispatcher,
 		notifStore:   notifStore,
 		sessions:     NewSessionStore(24 * time.Hour),
 		cleanURLBase: cleanBase,
@@ -78,16 +78,16 @@ func NewServer(
 	}
 }
 
-// SetNotifier sets a custom notification engine on the server.
-func (s *Server) SetNotifier(n *notification.Engine) {
+// SetNotifier sets a custom notification dispatcher on the server.
+func (s *Server) SetNotifier(n *notification.Dispatcher) {
 	s.notifier = n
 	if s.orch != nil {
 		s.orch.SetNotifier(n)
 	}
 }
 
-// Notifier returns the configured notification engine.
-func (s *Server) Notifier() *notification.Engine {
+// Notifier returns the configured notification dispatcher.
+func (s *Server) Notifier() *notification.Dispatcher {
 	return s.notifier
 }
 
