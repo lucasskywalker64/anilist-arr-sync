@@ -16,6 +16,7 @@ import (
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/backup"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/notification"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/orchestrator"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 )
@@ -28,6 +29,8 @@ type Server struct {
 	db           *storage.DB
 	orch         *orchestrator.Orchestrator
 	backup       *backup.Engine
+	notifier     *notification.Dispatcher
+	notifStore   *notification.Store
 	sessions     *SessionStore
 	cleanURLBase string
 	errChan      chan error
@@ -50,16 +53,42 @@ func NewServer(
 ) *Server {
 	cleanBase := normalizeURLBase(cfg.URLBase)
 
+	var notifStore *notification.Store
+	var notifDispatcher *notification.Dispatcher
+	if db != nil {
+		notifStore = notification.NewStore(db)
+		notifDispatcher = notification.NewDispatcher(notifStore, nil)
+	}
+
+	if orch != nil && notifDispatcher != nil {
+		orch.SetNotifier(notifDispatcher)
+	}
+
 	return &Server{
 		cfg:          cfg,
 		configPath:   configPath,
 		db:           db,
 		orch:         orch,
 		backup:       backupEngine,
+		notifier:     notifDispatcher,
+		notifStore:   notifStore,
 		sessions:     NewSessionStore(24 * time.Hour),
 		cleanURLBase: cleanBase,
 		errChan:      make(chan error, 2),
 	}
+}
+
+// SetNotifier sets a custom notification dispatcher on the server.
+func (s *Server) SetNotifier(n *notification.Dispatcher) {
+	s.notifier = n
+	if s.orch != nil {
+		s.orch.SetNotifier(n)
+	}
+}
+
+// Notifier returns the configured notification dispatcher.
+func (s *Server) Notifier() *notification.Dispatcher {
+	return s.notifier
 }
 
 // Errors returns a receive-only channel for background listener errors.
@@ -243,6 +272,13 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/v1/update/status", s.handleGetUpdateStatus)
 	mux.HandleFunc("POST /api/v1/update/apply", s.handleApplyUpdate)
+
+	mux.HandleFunc("GET /api/v1/notifications", s.handleListNotifications)
+	mux.HandleFunc("POST /api/v1/notifications", s.handleCreateNotification)
+	mux.HandleFunc("POST /api/v1/notifications/test", s.handleTestNotificationPayload)
+	mux.HandleFunc("POST /api/v1/notifications/{id}/test", s.handleTestNotificationConnection)
+	mux.HandleFunc("PUT /api/v1/notifications/{id}", s.handleUpdateNotification)
+	mux.HandleFunc("DELETE /api/v1/notifications/{id}", s.handleDeleteNotification)
 }
 
 // handleHealth responds with service health status and version.

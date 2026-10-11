@@ -18,6 +18,7 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/domain/router"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/domain/season"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/notification"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/resolver"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
@@ -64,6 +65,11 @@ type SyncReport struct {
 	Trigger           TriggerType `json:"trigger"`
 }
 
+// Notifier defines the interface for dispatching notification events.
+type Notifier interface {
+	Dispatch(event notification.SyncEvent)
+}
+
 // Orchestrator coordinates the end-to-end synchronization workflow.
 type Orchestrator struct {
 	db       *storage.DB
@@ -72,6 +78,12 @@ type Orchestrator struct {
 	sonarr   *servarr.SonarrClient
 	radarr   *servarr.RadarrClient
 	resolver *resolver.Resolver
+	notifier Notifier
+}
+
+// SetNotifier sets a notification dispatcher on the Orchestrator.
+func (o *Orchestrator) SetNotifier(n Notifier) {
+	o.notifier = n
 }
 
 // New creates an Orchestrator instance.
@@ -125,7 +137,7 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 	if err != nil {
 		report.Status = SyncStatusFailed
 		report.Errors = append(report.Errors, fmt.Sprintf("failed to load ignored titles: %v", err))
-		o.recordHistory(ctx, report, startTime)
+		o.finishSync(ctx, report, startTime)
 		return report, fmt.Errorf("load ignored titles: %w", err)
 	}
 
@@ -141,7 +153,7 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 	if err != nil {
 		report.Status = SyncStatusFailed
 		report.Errors = append(report.Errors, fmt.Sprintf("failed to fetch AniList watchlist: %v", err))
-		o.recordHistory(ctx, report, startTime)
+		o.finishSync(ctx, report, startTime)
 		return report, fmt.Errorf("fetch anilist watchlist: %w", err)
 	}
 
@@ -169,6 +181,24 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 
 		if res.Diverted {
 			report.QueuedReview++
+			if o.notifier != nil {
+				title := entry.Media.Title.Romaji
+				if title == "" {
+					title = entry.Media.Title.UserPreferred
+				}
+				if title == "" {
+					title = entry.Media.Title.English
+				}
+				o.notifier.Dispatch(notification.SyncEvent{
+					Type:      notification.EventReviewRequired,
+					Timestamp: time.Now().UTC(),
+					Title:     title,
+					MediaType: entry.Media.Format,
+					AniListID: entry.Media.ID,
+					Reason:    res.DivertReason,
+					PosterURL: entry.Media.CoverImageURL(),
+				})
+			}
 			continue
 		}
 
@@ -193,8 +223,33 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 		}
 	}
 
-	o.recordHistory(ctx, report, startTime)
+	o.finishSync(ctx, report, startTime)
 	return report, nil
+}
+
+func (o *Orchestrator) finishSync(ctx context.Context, report *SyncReport, startTime time.Time) {
+	o.recordHistory(ctx, report, startTime)
+
+	if o.notifier != nil {
+		if report.Status == SyncStatusFailed || len(report.Errors) > 0 {
+			o.notifier.Dispatch(notification.SyncEvent{
+				Type:      notification.EventSyncError,
+				Timestamp: time.Now().UTC(),
+				Error:     strings.Join(report.Errors, "; "),
+			})
+		}
+		o.notifier.Dispatch(notification.SyncEvent{
+			Type:              notification.EventSyncComplete,
+			Timestamp:         time.Now().UTC(),
+			DurationMs:        report.DurationMs,
+			ItemsScanned:      report.ItemsScanned,
+			AddedRadarr:       report.AddedRadarr,
+			MonitoredSonarr:   report.MonitoredSonarr,
+			UnmonitoredSonarr: report.UnmonitoredSonarr,
+			UnmonitoredRadarr: report.UnmonitoredRadarr,
+			QueuedReview:      report.QueuedReview,
+		})
+	}
 }
 
 func (o *Orchestrator) dispatchRadarr(ctx context.Context, entry anilist.MediaListEntry, res *resolver.Result, report *SyncReport) {
@@ -296,6 +351,17 @@ func (o *Orchestrator) dispatchRadarr(ctx context.Context, entry anilist.MediaLi
 	}
 
 	report.AddedRadarr++
+	if o.notifier != nil {
+		o.notifier.Dispatch(notification.SyncEvent{
+			Type:          notification.EventMediaAdded,
+			Timestamp:     time.Now().UTC(),
+			Title:         title,
+			MediaType:     "MOVIE",
+			TargetService: "Radarr",
+			AniListID:     entry.Media.ID,
+			PosterURL:     entry.Media.CoverImageURL(),
+		})
+	}
 }
 
 func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaListEntry, res *resolver.Result, report *SyncReport) {
@@ -391,6 +457,18 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 		}
 
 		report.MonitoredSonarr++
+		if o.notifier != nil {
+			o.notifier.Dispatch(notification.SyncEvent{
+				Type:          notification.EventMediaAdded,
+				Timestamp:     time.Now().UTC(),
+				Title:         title,
+				MediaType:     "SERIES",
+				TargetService: "Sonarr",
+				AniListID:     entry.Media.ID,
+				Season:        &targetSeason,
+				PosterURL:     entry.Media.CoverImageURL(),
+			})
+		}
 		return
 	}
 
@@ -531,6 +609,19 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 			} else {
 				if monErr := o.sonarr.MonitorEpisodes(ctx, sliceEpisodeIDs, true); monErr == nil {
 					report.MonitoredSonarr++
+					if o.notifier != nil {
+						o.notifier.Dispatch(notification.SyncEvent{
+							Type:          notification.EventMediaAdded,
+							Timestamp:     time.Now().UTC(),
+							Title:         title,
+							MediaType:     "SERIES",
+							TargetService: "Sonarr",
+							AniListID:     entry.Media.ID,
+							Season:        &targetSeason,
+							Episodes:      sliceEpisodeIDs,
+							PosterURL:     entry.Media.CoverImageURL(),
+						})
+					}
 					if o.cfg.SonarrSearchOnAdd {
 						_, _ = o.sonarr.SearchSeason(ctx, series.ID, targetSeason)
 					}
@@ -581,6 +672,18 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 			}
 			if _, updErr := o.sonarr.UpdateSeries(ctx, series); updErr == nil {
 				report.MonitoredSonarr++
+				if o.notifier != nil {
+					o.notifier.Dispatch(notification.SyncEvent{
+						Type:          notification.EventMediaAdded,
+						Timestamp:     time.Now().UTC(),
+						Title:         title,
+						MediaType:     "SERIES",
+						TargetService: "Sonarr",
+						AniListID:     entry.Media.ID,
+						Season:        &targetSeason,
+						PosterURL:     entry.Media.CoverImageURL(),
+					})
+				}
 				if o.cfg.SonarrSearchOnAdd {
 					_, _ = o.sonarr.SearchSeason(ctx, series.ID, targetSeason)
 				}
