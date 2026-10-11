@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -60,9 +61,9 @@ func TestDiscordProvider_Send(t *testing.T) {
 }
 
 func TestDiscordProvider_Test(t *testing.T) {
-	called := false
+	var called atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		called = true
+		called.Store(true)
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
@@ -78,7 +79,7 @@ func TestDiscordProvider_Test(t *testing.T) {
 	if err := provider.Test(ctx); err != nil {
 		t.Fatalf("unexpected error testing Discord provider: %v", err)
 	}
-	if !called {
+	if !called.Load() {
 		t.Fatal("expected server to be called during Test")
 	}
 }
@@ -147,9 +148,9 @@ func TestWebhookProvider_Send(t *testing.T) {
 }
 
 func TestWebhookProvider_Test(t *testing.T) {
-	called := false
+	var called atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		called = true
+		called.Store(true)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -162,7 +163,7 @@ func TestWebhookProvider_Test(t *testing.T) {
 	if err := provider.Test(context.Background()); err != nil {
 		t.Fatalf("unexpected error during Webhook Test: %v", err)
 	}
-	if !called {
+	if !called.Load() {
 		t.Fatal("expected server to be called during Test")
 	}
 }

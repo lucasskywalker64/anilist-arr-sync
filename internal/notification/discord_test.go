@@ -90,6 +90,7 @@ func TestBuildDiscordPayload_Events(t *testing.T) {
 		event := notification.SyncEvent{
 			Type:            notification.EventSyncComplete,
 			Timestamp:       now,
+			Title:           "Webhook connection verified successfully.",
 			ItemsScanned:    50,
 			AddedRadarr:     2,
 			MonitoredSonarr: 4,
@@ -103,6 +104,9 @@ func TestBuildDiscordPayload_Events(t *testing.T) {
 		}
 		if len(payload.Embeds) != 1 {
 			t.Fatalf("expected 1 embed, got %d", len(payload.Embeds))
+		}
+		if payload.Embeds[0].Description != "Webhook connection verified successfully." {
+			t.Fatalf("expected description %q, got %q", "Webhook connection verified successfully.", payload.Embeds[0].Description)
 		}
 	})
 

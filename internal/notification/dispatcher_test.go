@@ -96,11 +96,11 @@ func TestDispatcher_TestConnection(t *testing.T) {
 	db := setupTestDB(t)
 	store := notification.NewStore(db)
 
-	called := false
+	var called atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		if len(body) > 0 {
-			called = true
+			called.Store(true)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -120,7 +120,7 @@ func TestDispatcher_TestConnection(t *testing.T) {
 	if err := dispatcher.TestConnection(ctx, conn); err != nil {
 		t.Fatalf("unexpected error in TestConnection: %v", err)
 	}
-	if !called {
+	if !called.Load() {
 		t.Fatal("expected test notification to reach the server")
 	}
 }

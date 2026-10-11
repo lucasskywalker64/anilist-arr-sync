@@ -159,6 +159,9 @@ func BuildDiscordPayload(event SyncEvent) (DiscordPayload, error) {
 	case EventSyncComplete:
 		embed.Title = "Sync Complete"
 		embed.Color = colorInfo
+		if event.Title != "" {
+			embed.Description = event.Title
+		}
 		embed.Fields = append(embed.Fields,
 			DiscordField{
 				Name:   "Duration",

@@ -136,7 +136,18 @@ func TestNotificationEndpoints(t *testing.T) {
 		t.Fatalf("expected 200/204 from delete connection, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	// 7. Verify empty list
+	// 7. DELETE /api/v1/notifications/{id} for unknown ID returns 404
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/notifications/99999", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-Api-Key", "test-key")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 Not Found from deleting nonexistent connection, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 8. Verify empty list
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/notifications", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-Api-Key", "test-key")

@@ -137,7 +137,7 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 	if err != nil {
 		report.Status = SyncStatusFailed
 		report.Errors = append(report.Errors, fmt.Sprintf("failed to load ignored titles: %v", err))
-		o.recordHistory(ctx, report, startTime)
+		o.finishSync(ctx, report, startTime)
 		return report, fmt.Errorf("load ignored titles: %w", err)
 	}
 
@@ -153,7 +153,7 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 	if err != nil {
 		report.Status = SyncStatusFailed
 		report.Errors = append(report.Errors, fmt.Sprintf("failed to fetch AniList watchlist: %v", err))
-		o.recordHistory(ctx, report, startTime)
+		o.finishSync(ctx, report, startTime)
 		return report, fmt.Errorf("fetch anilist watchlist: %w", err)
 	}
 
@@ -223,6 +223,11 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 		}
 	}
 
+	o.finishSync(ctx, report, startTime)
+	return report, nil
+}
+
+func (o *Orchestrator) finishSync(ctx context.Context, report *SyncReport, startTime time.Time) {
 	o.recordHistory(ctx, report, startTime)
 
 	if o.notifier != nil {
@@ -245,8 +250,6 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 			QueuedReview:      report.QueuedReview,
 		})
 	}
-
-	return report, nil
 }
 
 func (o *Orchestrator) dispatchRadarr(ctx context.Context, entry anilist.MediaListEntry, res *resolver.Result, report *SyncReport) {

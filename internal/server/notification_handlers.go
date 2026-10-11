@@ -1,7 +1,9 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -208,6 +210,10 @@ func (s *Server) handleDeleteNotification(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := s.notifStore.Delete(r.Context(), id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			s.writeJSONError(w, http.StatusNotFound, "notification connection not found")
+			return
+		}
 		s.writeJSONError(w, http.StatusInternalServerError, "failed to delete notification connection")
 		return
 	}
