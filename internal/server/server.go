@@ -82,7 +82,11 @@ func NewServer(
 func (s *Server) SetNotifier(n *notification.Dispatcher) {
 	s.notifier = n
 	if s.orch != nil {
-		s.orch.SetNotifier(n)
+		if n == nil {
+			s.orch.SetNotifier(nil)
+		} else {
+			s.orch.SetNotifier(n)
+		}
 	}
 }
 

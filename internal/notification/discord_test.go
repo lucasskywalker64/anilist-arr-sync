@@ -1,6 +1,7 @@
 package notification_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +41,39 @@ func TestBuildDiscordPayload_Events(t *testing.T) {
 		}
 		if embed.Color == 0 {
 			t.Fatal("expected non-zero embed color")
+		}
+	})
+
+	t.Run("OnMediaAdded_TruncateLongEpisodes", func(t *testing.T) {
+		eps := make([]int, 400)
+		for i := 0; i < 400; i++ {
+			eps[i] = i + 1
+		}
+		event := notification.SyncEvent{
+			Type:     notification.EventMediaAdded,
+			Title:    "Long Series",
+			Episodes: eps,
+		}
+		payload, err := notification.BuildDiscordPayload(event)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		var epField *notification.DiscordField
+		for _, f := range payload.Embeds[0].Fields {
+			if f.Name == "Episodes" {
+				fCopy := f
+				epField = &fCopy
+				break
+			}
+		}
+		if epField == nil {
+			t.Fatal("expected Episodes field")
+		}
+		if len(epField.Value) > 1024 {
+			t.Fatalf("episodes field exceeded 1024 chars: length is %d", len(epField.Value))
+		}
+		if !strings.HasSuffix(epField.Value, "...") {
+			t.Fatalf("expected truncated field to end in ..., got %q", epField.Value[len(epField.Value)-10:])
 		}
 	})
 

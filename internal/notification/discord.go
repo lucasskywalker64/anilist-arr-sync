@@ -112,9 +112,13 @@ func BuildDiscordPayload(event SyncEvent) (DiscordPayload, error) {
 			for i, ep := range event.Episodes {
 				epList[i] = strconv.Itoa(ep)
 			}
+			val := strings.Join(epList, ", ")
+			if len(val) > 1024 {
+				val = val[:1021] + "..."
+			}
 			embed.Fields = append(embed.Fields, DiscordField{
 				Name:   "Episodes",
-				Value:  strings.Join(epList, ", "),
+				Value:  val,
 				Inline: true,
 			})
 		}

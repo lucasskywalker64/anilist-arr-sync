@@ -35,6 +35,10 @@ func NewDispatcher(store *Store, client *http.Client) *Dispatcher {
 // to all active connections matching the event type, using a strict 10-second
 // context timeout per delivery.
 func (d *Dispatcher) Dispatch(event SyncEvent) {
+	if d == nil || d.store == nil {
+		return
+	}
+
 	d.closeMu.RLock()
 	if d.closed {
 		d.closeMu.RUnlock()

@@ -124,3 +124,13 @@ func TestDispatcher_TestConnection(t *testing.T) {
 		t.Fatal("expected test notification to reach the server")
 	}
 }
+
+func TestDispatcher_Dispatch_NilGuard(_ *testing.T) {
+	// Must not panic on nil receiver
+	var nilDispatcher *notification.Dispatcher
+	nilDispatcher.Dispatch(notification.SyncEvent{Type: notification.EventSyncComplete})
+
+	// Must not panic on nil store
+	emptyDispatcher := notification.NewDispatcher(nil, nil)
+	emptyDispatcher.Dispatch(notification.SyncEvent{Type: notification.EventSyncComplete})
+}

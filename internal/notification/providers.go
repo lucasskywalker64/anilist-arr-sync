@@ -200,5 +200,6 @@ func postJSON(
 		return fmt.Errorf("webhook endpoint returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(respSnippet)))
 	}
 
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
 }
