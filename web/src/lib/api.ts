@@ -96,7 +96,9 @@ export interface AppConfig {
   databasePath?: string;
   aniListUsername?: string;
   radarrUrl?: string;
+  radarrApiKey?: string;
   sonarrUrl?: string;
+  sonarrApiKey?: string;
   tagName?: string;
   syncIntervalHours?: number;
   dateToleranceDays?: number;

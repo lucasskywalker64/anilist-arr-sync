@@ -211,7 +211,7 @@
   {:else}
     <div class="grid grid-cols-1 gap-4">
       {#each filteredItems as item (item.id)}
-        {@const candidates = parseCandidates(item.candidatesJSON)}
+        {@const candidates = parseCandidates(item.candidatesJson)}
         {@const isBusy = processingId === item.id}
         <div class="rounded-xl bg-[#152232] border border-[#24374e] overflow-hidden shadow-lg p-5 flex flex-col md:flex-row gap-5">
           <!-- Poster Thumbnail -->
