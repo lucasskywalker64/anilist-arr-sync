@@ -1,0 +1,4 @@
+{
+  "css.lint.unknownAtRules": "ignore",
+  "typescript.tsdk": "web/node_modules/typescript/lib"
+}

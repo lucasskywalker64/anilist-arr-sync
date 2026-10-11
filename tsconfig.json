@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "checkJs": true,
+    "isolatedModules": true,
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "typeRoots": ["./web/node_modules/@types"]
+  },
+  "include": [
+    "web/src/**/*.d.ts",
+    "web/src/**/*.ts",
+    "web/src/**/*.js",
+    "web/src/**/*.svelte"
+  ]
+}
