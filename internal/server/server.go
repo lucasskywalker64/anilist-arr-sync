@@ -3,11 +3,14 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"strings"
@@ -19,6 +22,7 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/notification"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/orchestrator"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
+	"github.com/lucasskywalker64/anilist-arr-sync/web"
 )
 
 // Server coordinates the HTTP/HTTPS listeners and REST API routes.
@@ -33,6 +37,7 @@ type Server struct {
 	notifStore   *notification.Store
 	sessions     *SessionStore
 	cleanURLBase string
+	webFS        fs.FS
 	errChan      chan error
 
 	httpServer  *http.Server
@@ -64,6 +69,11 @@ func NewServer(
 		orch.SetNotifier(notifDispatcher)
 	}
 
+	var defaultWebFS fs.FS
+	if dist, err := web.Dist(); err == nil {
+		defaultWebFS = dist
+	}
+
 	return &Server{
 		cfg:          cfg,
 		configPath:   configPath,
@@ -74,8 +84,14 @@ func NewServer(
 		notifStore:   notifStore,
 		sessions:     NewSessionStore(24 * time.Hour),
 		cleanURLBase: cleanBase,
+		webFS:        defaultWebFS,
 		errChan:      make(chan error, 2),
 	}
+}
+
+// SetWebFS sets a custom filesystem for serving static assets and the web SPA.
+func (s *Server) SetWebFS(f fs.FS) {
+	s.webFS = f
 }
 
 // SetNotifier sets a custom notification dispatcher on the server.
@@ -283,6 +299,80 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/notifications/{id}/test", s.handleTestNotificationConnection)
 	mux.HandleFunc("PUT /api/v1/notifications/{id}", s.handleUpdateNotification)
 	mux.HandleFunc("DELETE /api/v1/notifications/{id}", s.handleDeleteNotification)
+
+	// Web SPA and static assets
+	mux.HandleFunc("/", s.handleSPA)
+}
+
+// handleSPA serves the static frontend assets and provides SPA routing fallback to index.html.
+func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		http.NotFound(w, r)
+		return
+	}
+
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.NotFound(w, r)
+		return
+	}
+
+	if s.webFS == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	cleanPath := strings.TrimPrefix(r.URL.Path, "/")
+	if cleanPath == "" {
+		cleanPath = "index.html"
+	}
+
+	// Try serving static file if it exists and is not a directory
+	f, err := s.webFS.Open(cleanPath)
+	if err == nil {
+		stat, statErr := f.Stat()
+		if statErr == nil && !stat.IsDir() {
+			defer func() { _ = f.Close() }()
+			if strings.HasPrefix(cleanPath, "assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			}
+			seeker, ok := f.(io.ReadSeeker)
+			if ok {
+				http.ServeContent(w, r, stat.Name(), stat.ModTime(), seeker)
+				return
+			}
+			content, readErr := io.ReadAll(f)
+			if readErr == nil {
+				http.ServeContent(w, r, stat.Name(), stat.ModTime(), bytes.NewReader(content))
+				return
+			}
+		} else {
+			_ = f.Close()
+		}
+	}
+
+	// SPA fallback: serve index.html for client routes
+	indexFile, err := s.webFS.Open("index.html")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer func() { _ = indexFile.Close() }()
+
+	indexStat, err := indexFile.Stat()
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	content, err := io.ReadAll(indexFile)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	http.ServeContent(w, r, "index.html", indexStat.ModTime(), bytes.NewReader(content))
 }
 
 // handleHealth responds with service health status and version.

@@ -23,8 +23,8 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			path = strings.TrimPrefix(path, s.cleanURLBase)
 		}
 
-		// Public endpoints that do not require authentication
-		if path == "" || path == "/" || path == "/api/v1/health" || path == "/api/v1/auth/login" || path == "/api/v1/auth/setup" {
+		// Public endpoints that do not require authentication (SPA static assets, non-API routes, and public auth API)
+		if !strings.HasPrefix(path, "/api/") || path == "/api/v1/health" || path == "/api/v1/auth/login" || path == "/api/v1/auth/setup" {
 			next.ServeHTTP(w, r)
 			return
 		}
