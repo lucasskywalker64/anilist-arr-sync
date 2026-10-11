@@ -2,7 +2,6 @@ package notification
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,20 +17,11 @@ const (
 	colorUpdate  = 0x9b59b6 // Amethyst purple
 )
 
-var hexColorRegex = regexp.MustCompile(`^[0-9a-fA-F]{6}$`)
-
-// ResolvePosterURL resolves poster artwork URL, falling back to a solid color
-// placeholder image if artwork is missing.
-func ResolvePosterURL(posterURL, color string) string {
-	if strings.TrimSpace(posterURL) != "" {
-		return strings.TrimSpace(posterURL)
+func resolveThumbnailURL(posterURL string) string {
+	cleaned := strings.TrimSpace(posterURL)
+	if cleaned != "" {
+		return cleaned
 	}
-
-	sanitizedColor := strings.TrimPrefix(strings.TrimSpace(color), "#")
-	if hexColorRegex.MatchString(sanitizedColor) {
-		return fmt.Sprintf("https://dummyimage.com/400x600/%s/%s.png", sanitizedColor, sanitizedColor)
-	}
-
 	return defaultCoverPlaceholderURL
 }
 
@@ -86,7 +76,7 @@ func BuildDiscordPayload(event SyncEvent) (DiscordPayload, error) {
 		embed.Title = fmt.Sprintf("Media Added: %s", event.Title)
 		embed.Color = colorSuccess
 		embed.Thumbnail = &DiscordThumbnail{
-			URL: ResolvePosterURL(event.PosterURL, ""),
+			URL: resolveThumbnailURL(event.PosterURL),
 		}
 
 		if event.TargetService != "" {
@@ -133,7 +123,7 @@ func BuildDiscordPayload(event SyncEvent) (DiscordPayload, error) {
 		embed.Title = fmt.Sprintf("Review Required: %s", event.Title)
 		embed.Color = colorWarning
 		embed.Thumbnail = &DiscordThumbnail{
-			URL: ResolvePosterURL(event.PosterURL, ""),
+			URL: resolveThumbnailURL(event.PosterURL),
 		}
 		if event.Reason != "" {
 			embed.Fields = append(embed.Fields, DiscordField{

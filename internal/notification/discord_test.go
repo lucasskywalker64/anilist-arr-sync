@@ -7,55 +7,6 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/notification"
 )
 
-func TestResolvePosterURL(t *testing.T) {
-	tests := []struct {
-		name        string
-		posterURL   string
-		color       string
-		expectedURL string
-	}{
-		{
-			name:        "Poster URL provided directly",
-			posterURL:   "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx1-abc.jpg",
-			color:       "#e4a15d",
-			expectedURL: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx1-abc.jpg",
-		},
-		{
-			name:        "Empty poster URL with valid hex color with hash",
-			posterURL:   "",
-			color:       "#e4a15d",
-			expectedURL: "https://dummyimage.com/400x600/e4a15d/e4a15d.png",
-		},
-		{
-			name:        "Empty poster URL with valid hex color without hash",
-			posterURL:   "",
-			color:       "336699",
-			expectedURL: "https://dummyimage.com/400x600/336699/336699.png",
-		},
-		{
-			name:        "Empty poster URL and invalid hex color",
-			posterURL:   "",
-			color:       "not-a-color",
-			expectedURL: "https://dummyimage.com/400x600/2b2d42/2b2d42.png",
-		},
-		{
-			name:        "Empty poster URL and empty color",
-			posterURL:   "",
-			color:       "",
-			expectedURL: "https://dummyimage.com/400x600/2b2d42/2b2d42.png",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			actual := notification.ResolvePosterURL(tt.posterURL, tt.color)
-			if actual != tt.expectedURL {
-				t.Fatalf("expected ResolvePosterURL(%q, %q) = %q, got %q", tt.posterURL, tt.color, tt.expectedURL, actual)
-			}
-		})
-	}
-}
-
 func TestBuildDiscordPayload_Events(t *testing.T) {
 	now := time.Date(2026, 10, 11, 3, 0, 0, 0, time.UTC)
 	seasonNum := 2
