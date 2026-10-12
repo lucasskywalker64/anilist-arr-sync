@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import { getApiKey } from '../lib/api';
+  import { apiKeyStore } from '../lib/api';
 
   export let activeTab = 'sync';
   export let isSyncing = false;
@@ -108,7 +108,7 @@
           title="Configure API Key"
           class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-[#24374e] bg-[#0b1622] hover:bg-[#19273a] text-slate-300 transition"
         >
-          <span class="inline-block w-2 h-2 rounded-full {getApiKey() ? 'bg-emerald-400' : 'bg-slate-500'}"></span>
+          <span class="inline-block w-2 h-2 rounded-full {$apiKeyStore ? 'bg-emerald-400' : 'bg-slate-500'}"></span>
           <span>API Key</span>
         </button>
 

@@ -53,14 +53,16 @@
   }
 
   async function handleSaveOverride() {
-    const anilistIdNum = parseInt(formAniListId.trim(), 10);
+    const anilistIdNum = parseInt(String(formAniListId ?? '').trim(), 10);
     if (!anilistIdNum || anilistIdNum <= 0) {
       errorMessage = 'Please enter a valid positive AniList ID.';
       return;
     }
 
-    const tvdbNum = formTvdbId.trim() ? parseInt(formTvdbId.trim(), 10) : undefined;
-    const tmdbNum = formTmdbId.trim() ? parseInt(formTmdbId.trim(), 10) : undefined;
+    const tvdbStr = String(formTvdbId ?? '').trim();
+    const tmdbStr = String(formTmdbId ?? '').trim();
+    const tvdbNum = tvdbStr ? parseInt(tvdbStr, 10) : undefined;
+    const tmdbNum = tmdbStr ? parseInt(tmdbStr, 10) : undefined;
 
     if (!tvdbNum && !tmdbNum) {
       errorMessage = 'At least one TVDB ID or TMDb ID is required.';
@@ -77,8 +79,8 @@
         mediaType: formMediaType,
         tvdbId: tvdbNum,
         tmdbId: tmdbNum,
-        seasons: formMediaType === 'SERIES' ? formSeasons.trim() || '1' : '1',
-        titleOverride: formTitleOverride.trim() || undefined,
+        seasons: formMediaType === 'SERIES' ? String(formSeasons ?? '').trim() || '1' : '1',
+        titleOverride: String(formTitleOverride ?? '').trim() || undefined,
       });
 
       successMessage = `Saved mapping override for AniList #${anilistIdNum}.`;

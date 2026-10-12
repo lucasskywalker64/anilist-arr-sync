@@ -129,10 +129,19 @@ export interface CreateOverrideInput {
   titleOverride?: string;
 }
 
-let apiKey = '';
+import { writable } from 'svelte/store';
+
+let initialKey = '';
 if (typeof localStorage !== 'undefined') {
-  apiKey = localStorage.getItem('anilist_arr_sync_apikey') || '';
+  initialKey = localStorage.getItem('anilist_arr_sync_apikey') || '';
 }
+
+export const apiKeyStore = writable<string>(initialKey);
+
+let apiKey = initialKey;
+apiKeyStore.subscribe((val) => {
+  apiKey = val;
+});
 
 export function getApiKey(): string {
   return apiKey;
@@ -140,6 +149,7 @@ export function getApiKey(): string {
 
 export function setApiKey(newKey: string): void {
   apiKey = newKey;
+  apiKeyStore.set(newKey);
   if (typeof localStorage !== 'undefined') {
     if (newKey) {
       localStorage.setItem('anilist_arr_sync_apikey', newKey);
@@ -147,6 +157,14 @@ export function setApiKey(newKey: string): void {
       localStorage.removeItem('anilist_arr_sync_apikey');
     }
   }
+}
+
+export function resolveApiUrl(path: string): string {
+  if (typeof document !== 'undefined' && document.baseURI) {
+    const rel = path.startsWith('/') ? `.${path}` : path;
+    return new URL(rel, document.baseURI).toString();
+  }
+  return path;
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -167,7 +185,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers['X-Api-Key'] = apiKey;
   }
 
-  const response = await fetch(path, {
+  const resolvedPath = resolveApiUrl(path);
+  const response = await fetch(resolvedPath, {
     ...options,
     headers,
   });

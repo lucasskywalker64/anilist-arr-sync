@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { api, setApiKey, getApiKey } from './api';
+import { get } from 'svelte/store';
+import { api, setApiKey, getApiKey, apiKeyStore, resolveApiUrl } from './api';
 
 describe('API Client', () => {
   beforeEach(() => {
@@ -7,10 +8,28 @@ describe('API Client', () => {
     setApiKey('');
   });
 
-  it('manages API key storage', () => {
+  it('manages API key storage and reactive store', () => {
     expect(getApiKey()).toBe('');
+    expect(get(apiKeyStore)).toBe('');
     setApiKey('secret-token-123');
     expect(getApiKey()).toBe('secret-token-123');
+    expect(get(apiKeyStore)).toBe('secret-token-123');
+  });
+
+  it('resolves API URLs with and without document.baseURI subpaths', () => {
+    // When no document is defined
+    expect(resolveApiUrl('/api/v1/health')).toBe('/api/v1/health');
+
+    // When document.baseURI has root path
+    vi.stubGlobal('document', { baseURI: 'http://localhost:7171/' });
+    expect(resolveApiUrl('/api/v1/health')).toBe('http://localhost:7171/api/v1/health');
+
+    // When document.baseURI has subpath prefix (e.g. UrlBase /anilist-sync/)
+    vi.stubGlobal('document', { baseURI: 'http://localhost:7171/anilist-sync/' });
+    expect(resolveApiUrl('/api/v1/health')).toBe('http://localhost:7171/anilist-sync/api/v1/health');
+    expect(resolveApiUrl('/api/v1/sync/status')).toBe('http://localhost:7171/anilist-sync/api/v1/sync/status');
+
+    vi.unstubAllGlobals();
   });
 
   it('automatically attaches X-Api-Key header on state-mutating POST requests', async () => {

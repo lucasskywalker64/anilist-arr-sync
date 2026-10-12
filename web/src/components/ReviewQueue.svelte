@@ -82,7 +82,7 @@
     const state = formStates[item.id];
     if (!state) return;
 
-    const idNum = parseInt(state.resolvedId.trim(), 10);
+    const idNum = parseInt(String(state.resolvedId ?? '').trim(), 10);
     if (!idNum || idNum <= 0) {
       errorMessage = `Please enter a valid positive numeric ${state.idType.toUpperCase()} ID for "${item.titleRomaji}"`;
       return;
@@ -97,8 +97,8 @@
         mediaType: item.mediaType,
         tvdbId: state.idType === 'tvdb' ? idNum : undefined,
         tmdbId: state.idType === 'tmdb' ? idNum : undefined,
-        seasons: state.seasons.trim() || '1',
-        titleOverride: state.titleOverride.trim(),
+        seasons: String(state.seasons ?? '').trim() || '1',
+        titleOverride: String(state.titleOverride ?? '').trim(),
       });
       successMessage = `Successfully resolved "${item.titleRomaji}" and created mapping override.`;
       await loadReviewQueue();
