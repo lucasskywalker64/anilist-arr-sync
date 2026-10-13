@@ -136,8 +136,8 @@ try {
   if (typeof localStorage !== 'undefined') {
     initialKey = localStorage.getItem('anilist_arr_sync_apikey') || '';
   }
-} catch {
-  // Storage access denied or unavailable
+} catch (err) {
+  console.warn('Failed to read API key from localStorage:', err);
 }
 
 export const apiKeyStore = writable<string>(initialKey);
@@ -162,8 +162,8 @@ export function setApiKey(newKey: string): void {
         localStorage.removeItem('anilist_arr_sync_apikey');
       }
     }
-  } catch {
-    // Storage access denied or quota exceeded; key remains active in memory
+  } catch (err) {
+    console.warn('Failed to persist API key to localStorage:', err);
   }
 }
 

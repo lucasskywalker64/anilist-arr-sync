@@ -17,6 +17,7 @@ describe('API Client', () => {
   });
 
   it('gracefully handles localStorage failures on setApiKey', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.stubGlobal('localStorage', {
       getItem: () => { throw new Error('Access denied'); },
       setItem: () => { throw new Error('Quota exceeded'); },
@@ -26,12 +27,14 @@ describe('API Client', () => {
     expect(() => setApiKey('offline-token')).not.toThrow();
     expect(getApiKey()).toBe('offline-token');
     expect(get(apiKeyStore)).toBe('offline-token');
+    expect(warnSpy).toHaveBeenCalledWith('Failed to persist API key to localStorage:', expect.any(Error));
 
     expect(() => setApiKey('')).not.toThrow();
     expect(getApiKey()).toBe('');
     expect(get(apiKeyStore)).toBe('');
 
     vi.unstubAllGlobals();
+    warnSpy.mockRestore();
   });
 
   it('resolves API URLs with and without document.baseURI subpaths', () => {
