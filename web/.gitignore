@@ -1,4 +1,5 @@
 node_modules
 dist/*
 !dist/.gitkeep
+*.timestamp-*.mjs
 .DS_Store

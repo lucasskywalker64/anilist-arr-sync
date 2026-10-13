@@ -16,6 +16,24 @@ describe('API Client', () => {
     expect(get(apiKeyStore)).toBe('secret-token-123');
   });
 
+  it('gracefully handles localStorage failures on setApiKey', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => { throw new Error('Access denied'); },
+      setItem: () => { throw new Error('Quota exceeded'); },
+      removeItem: () => { throw new Error('SecurityError'); },
+    });
+
+    expect(() => setApiKey('offline-token')).not.toThrow();
+    expect(getApiKey()).toBe('offline-token');
+    expect(get(apiKeyStore)).toBe('offline-token');
+
+    expect(() => setApiKey('')).not.toThrow();
+    expect(getApiKey()).toBe('');
+    expect(get(apiKeyStore)).toBe('');
+
+    vi.unstubAllGlobals();
+  });
+
   it('resolves API URLs with and without document.baseURI subpaths', () => {
     // When no document is defined
     expect(resolveApiUrl('/api/v1/health')).toBe('/api/v1/health');

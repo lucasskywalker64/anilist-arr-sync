@@ -132,8 +132,12 @@ export interface CreateOverrideInput {
 import { writable } from 'svelte/store';
 
 let initialKey = '';
-if (typeof localStorage !== 'undefined') {
-  initialKey = localStorage.getItem('anilist_arr_sync_apikey') || '';
+try {
+  if (typeof localStorage !== 'undefined') {
+    initialKey = localStorage.getItem('anilist_arr_sync_apikey') || '';
+  }
+} catch {
+  // Storage access denied or unavailable
 }
 
 export const apiKeyStore = writable<string>(initialKey);
@@ -150,12 +154,16 @@ export function getApiKey(): string {
 export function setApiKey(newKey: string): void {
   apiKey = newKey;
   apiKeyStore.set(newKey);
-  if (typeof localStorage !== 'undefined') {
-    if (newKey) {
-      localStorage.setItem('anilist_arr_sync_apikey', newKey);
-    } else {
-      localStorage.removeItem('anilist_arr_sync_apikey');
+  try {
+    if (typeof localStorage !== 'undefined') {
+      if (newKey) {
+        localStorage.setItem('anilist_arr_sync_apikey', newKey);
+      } else {
+        localStorage.removeItem('anilist_arr_sync_apikey');
+      }
     }
+  } catch {
+    // Storage access denied or quota exceeded; key remains active in memory
   }
 }
 
