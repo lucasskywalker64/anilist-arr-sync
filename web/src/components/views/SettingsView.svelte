@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Save, Sliders, Copy, RefreshCw, Plus, Edit, Trash2, Send } from 'lucide-svelte';
+  import { Save, Sliders, Copy, Plus, Edit, Trash2, Send } from 'lucide-svelte';
   import PageToolbar from '../layout/PageToolbar.svelte';
   import PageToolbarButton from '../layout/PageToolbarButton.svelte';
   import PageContentFooter from '../layout/PageContentFooter.svelte';
@@ -92,16 +92,6 @@
     }
   }
 
-  function generateApiKey() {
-    const chars = 'abcdef0123456789';
-    let key = '';
-    for (let i = 0; i < 32; i++) {
-      key += chars[Math.floor(Math.random() * chars.length)];
-    }
-    formConfig.apiKey = key;
-    formConfig = { ...formConfig };
-  }
-
   // Connect Notifications handlers
   function openAddNotification() {
     editingNotif = null;
@@ -125,7 +115,7 @@
     notifOnSyncSuccess = item.onSyncSuccess;
     notifOnSyncFailure = item.onSyncFailure;
     notifOnReviewNeeded = item.onReviewQueueNeeded;
-    notifWebhookUrl = item.settings?.webhookUrl || '';
+    notifWebhookUrl = typeof item.settings?.webhookUrl === 'string' ? item.settings.webhookUrl : '';
     notifTestMsg = '';
     notifError = '';
     isNotifModalOpen = true;
@@ -257,42 +247,26 @@
             <input type="text" class="formInput" bind:value={formConfig.urlBase} />
           </FormGroup>
 
-          <FormGroup
-            label="Enable SSL"
-            helpText="Enables HTTPS listener on configured SSL port with certificates"
-            isAdvanced={true}
-            isDirty={isFieldDirty('enableSsl')}
-          >
-            <CheckInput checked={!!formConfig.enableSsl} on:change={(e) => (formConfig.enableSsl = e.detail)} />
-          </FormGroup>
-
-          {#if formConfig.enableSsl}
+          {#if showAdvanced}
             <FormGroup
-              label="SSL Port"
-              helpText="Port the internal HTTPS listener listens on"
+              label="Enable SSL"
+              helpText="Enables HTTPS listener on configured SSL port with certificates"
               isAdvanced={true}
-              isDirty={isFieldDirty('sslPort')}
+              isDirty={isFieldDirty('enableSsl')}
             >
-              <input type="number" class="formInput" bind:value={formConfig.sslPort} />
+              <CheckInput checked={!!formConfig.enableSsl} on:change={(e) => (formConfig.enableSsl = e.detail)} />
             </FormGroup>
 
-            <FormGroup
-              label="SSL Certificate Path"
-              helpText="Absolute path to X.509 certificate file"
-              isAdvanced={true}
-              isDirty={isFieldDirty('sslCertPath')}
-            >
-              <input type="text" class="formInput" bind:value={formConfig.sslCertPath} />
-            </FormGroup>
-
-            <FormGroup
-              label="SSL Key Path"
-              helpText="Absolute path to certificate private key file"
-              isAdvanced={true}
-              isDirty={isFieldDirty('sslKeyPath')}
-            >
-              <input type="text" class="formInput" bind:value={formConfig.sslKeyPath} />
-            </FormGroup>
+            {#if formConfig.enableSsl}
+              <FormGroup
+                label="SSL Port"
+                helpText="Port the internal HTTPS listener listens on"
+                isAdvanced={true}
+                isDirty={isFieldDirty('sslPort')}
+              >
+                <input type="number" class="formInput" bind:value={formConfig.sslPort} />
+              </FormGroup>
+            {/if}
           {/if}
         </FieldSet>
 
@@ -331,9 +305,6 @@
             <button type="button" class="formInputButton" on:click={copyApiKey} title="Copy API Key">
               <Copy size={16} />
             </button>
-            <button type="button" class="formInputButton" on:click={generateApiKey} title="Generate New Key">
-              <RefreshCw size={16} />
-            </button>
           </FormGroup>
         </FieldSet>
 
@@ -353,20 +324,22 @@
             </select>
           </FormGroup>
 
-          <FormGroup
-            label="Console Log Level"
-            helpText="Minimum severity level written to standard output"
-            isAdvanced={true}
-            isDirty={isFieldDirty('consoleLogLevel')}
-          >
-            <select class="formInput" bind:value={formConfig.consoleLogLevel}>
-              <option value="Trace">Trace</option>
-              <option value="Debug">Debug</option>
-              <option value="Info">Info</option>
-              <option value="Warn">Warn</option>
-              <option value="Error">Error</option>
-            </select>
-          </FormGroup>
+          {#if showAdvanced}
+            <FormGroup
+              label="Console Log Level"
+              helpText="Minimum severity level written to standard output"
+              isAdvanced={true}
+              isDirty={isFieldDirty('consoleLogLevel')}
+            >
+              <select class="formInput" bind:value={formConfig.consoleLogLevel}>
+                <option value="Trace">Trace</option>
+                <option value="Debug">Debug</option>
+                <option value="Info">Info</option>
+                <option value="Warn">Warn</option>
+                <option value="Error">Error</option>
+              </select>
+            </FormGroup>
+          {/if}
         </FieldSet>
 
         <!-- Instance -->
@@ -401,23 +374,25 @@
         </FieldSet>
 
         <FieldSet legend="Matching Rules & Policy">
-          <FormGroup
-            label="Date Tolerance (Days)"
-            helpText="Maximum allowable divergence in release dates when matching entries"
-            isAdvanced={true}
-            isDirty={isFieldDirty('dateToleranceDays')}
-          >
-            <input type="number" class="formInput" min="0" max="365" bind:value={formConfig.dateToleranceDays} />
-          </FormGroup>
+          {#if showAdvanced}
+            <FormGroup
+              label="Date Tolerance (Days)"
+              helpText="Maximum allowable divergence in release dates when matching entries"
+              isAdvanced={true}
+              isDirty={isFieldDirty('dateToleranceDays')}
+            >
+              <input type="number" class="formInput" min="0" max="365" bind:value={formConfig.dateToleranceDays} />
+            </FormGroup>
 
-          <FormGroup
-            label="Confidence Threshold"
-            helpText="Minimum fuzzy match score (0.0 - 1.0) required to auto-bind without review diversion"
-            isAdvanced={true}
-            isDirty={isFieldDirty('confidenceThreshold')}
-          >
-            <input type="number" step="0.05" min="0" max="1" class="formInput" bind:value={formConfig.confidenceThreshold} />
-          </FormGroup>
+            <FormGroup
+              label="Confidence Threshold"
+              helpText="Minimum fuzzy match score (0.0 - 1.0) required to auto-bind without review diversion"
+              isAdvanced={true}
+              isDirty={isFieldDirty('confidenceThreshold')}
+            >
+              <input type="number" step="0.05" min="0" max="1" class="formInput" bind:value={formConfig.confidenceThreshold} />
+            </FormGroup>
+          {/if}
 
           <FormGroup
             label="Unmonitor Dropped"

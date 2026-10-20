@@ -47,6 +47,7 @@
     if (!formState[itemId]) return;
     formState[itemId].tvdbId = candidate.tvdbId ? String(candidate.tvdbId) : '';
     formState[itemId].tmdbId = candidate.tmdbId ? String(candidate.tmdbId) : '';
+    formState[itemId].seasons = '1';
     if (candidate.title) {
       formState[itemId].titleOverride = candidate.title;
     }
@@ -244,43 +245,41 @@
                         </select>
                       </div>
 
-                      {#if formState[item.id].mediaType === 'SERIES'}
-                        <div class="inputCol" style="width: 140px;">
-                          <label for="tvdb-id-{item.id}" class="inputLabel">TVDB ID</label>
-                          <input
-                            id="tvdb-id-{item.id}"
-                            type="number"
-                            class="inlineInput"
-                            placeholder="TVDB ID"
-                            bind:value={formState[item.id].tvdbId}
-                            disabled={actionLoading}
-                          />
-                        </div>
+                      <div class="inputCol" style="width: 130px;">
+                        <label for="tvdb-id-{item.id}" class="inputLabel">TVDB ID</label>
+                        <input
+                          id="tvdb-id-{item.id}"
+                          type="number"
+                          class="inlineInput"
+                          placeholder="TVDB ID"
+                          bind:value={formState[item.id].tvdbId}
+                          disabled={actionLoading}
+                        />
+                      </div>
 
-                        <div class="inputCol" style="width: 100px;">
-                          <label for="seasons-{item.id}" class="inputLabel">Seasons</label>
-                          <input
-                            id="seasons-{item.id}"
-                            type="text"
-                            class="inlineInput"
-                            placeholder="1"
-                            bind:value={formState[item.id].seasons}
-                            disabled={actionLoading}
-                          />
-                        </div>
-                      {:else}
-                        <div class="inputCol" style="width: 140px;">
-                          <label for="tmdb-id-{item.id}" class="inputLabel">TMDB ID</label>
-                          <input
-                            id="tmdb-id-{item.id}"
-                            type="number"
-                            class="inlineInput"
-                            placeholder="TMDB ID"
-                            bind:value={formState[item.id].tmdbId}
-                            disabled={actionLoading}
-                          />
-                        </div>
-                      {/if}
+                      <div class="inputCol" style="width: 130px;">
+                        <label for="tmdb-id-{item.id}" class="inputLabel">TMDB ID</label>
+                        <input
+                          id="tmdb-id-{item.id}"
+                          type="number"
+                          class="inlineInput"
+                          placeholder="TMDB ID"
+                          bind:value={formState[item.id].tmdbId}
+                          disabled={actionLoading}
+                        />
+                      </div>
+
+                      <div class="inputCol" style="width: 100px;">
+                        <label for="seasons-{item.id}" class="inputLabel">Seasons</label>
+                        <input
+                          id="seasons-{item.id}"
+                          type="text"
+                          class="inlineInput"
+                          placeholder="1"
+                          bind:value={formState[item.id].seasons}
+                          disabled={actionLoading}
+                        />
+                      </div>
 
                       <div class="inputCol flexGrow">
                         <label for="title-override-{item.id}" class="inputLabel">Title Override (optional)</label>

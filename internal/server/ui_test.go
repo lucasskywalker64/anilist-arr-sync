@@ -71,6 +71,9 @@ func TestEmbeddedSPA_DeliveryAndRouting(t *testing.T) {
 		if !strings.Contains(body, "AniListArrSync") {
 			t.Errorf("expected body to contain AniListArrSync bootstrap script, got %s", body)
 		}
+		if !strings.Contains(body, "test-api-key") {
+			t.Errorf("expected body to contain apiKey in AniListArrSync bootstrap script, got %s", body)
+		}
 	})
 
 	t.Run("Static JS delivers file directly with cache header", func(t *testing.T) {

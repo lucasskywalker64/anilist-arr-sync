@@ -30,23 +30,32 @@
     return path;
   }
 
-  function handleHashChange() {
-    const hash = window.location.hash;
-    if (hash) {
-      currentRoute = normalizeRoute(hash);
-    } else {
-      const urlBase = getBaseUrl();
-      let path = window.location.pathname;
-      if (urlBase && path.startsWith(urlBase)) {
-        path = path.slice(urlBase.length);
-      }
-      currentRoute = normalizeRoute(path);
+  function getRouteFromLocation(): string {
+    if (typeof window === 'undefined') return '/';
+    const urlBase = getBaseUrl();
+    let path = window.location.pathname;
+    if (urlBase && path.startsWith(urlBase)) {
+      path = path.slice(urlBase.length);
     }
+    if (window.location.hash && (path === '' || path === '/')) {
+      return normalizeRoute(window.location.hash);
+    }
+    return normalizeRoute(path);
+  }
+
+  function handlePopState() {
+    currentRoute = getRouteFromLocation();
   }
 
   function navigate(path: string) {
     currentRoute = normalizeRoute(path);
-    window.location.hash = currentRoute;
+    if (typeof window !== 'undefined') {
+      const urlBase = getBaseUrl();
+      const fullPath = `${urlBase}${currentRoute}`;
+      if (window.location.pathname !== fullPath) {
+        window.history.pushState(null, '', fullPath);
+      }
+    }
   }
 
   async function checkAuthAndBoot() {
@@ -106,8 +115,9 @@
   }
 
   onMount(() => {
-    handleHashChange();
-    window.addEventListener('hashchange', handleHashChange);
+    currentRoute = getRouteFromLocation();
+    window.addEventListener('popstate', handlePopState);
+    window.addEventListener('hashchange', handlePopState);
     checkAuthAndBoot();
 
     const interval = setInterval(() => {
@@ -117,7 +127,8 @@
     }, 10000);
 
     return () => {
-      window.removeEventListener('hashchange', handleHashChange);
+      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('hashchange', handlePopState);
       clearInterval(interval);
     };
   });
@@ -138,16 +149,7 @@
     on:logout={handleLogout}
   >
     <!-- View Switcher -->
-    {#if currentRoute === '/'}
-      <SyncDashboard
-        bind:isSyncing
-        {reviewItems}
-        {stagedActions}
-        {overrides}
-        on:navigate={(e) => navigate(e.detail)}
-        on:refresh={loadGlobalData}
-      />
-    {:else if currentRoute === '/staged'}
+    {#if currentRoute === '/staged'}
       <StagedPreview
         bind:stagedActions
         on:refresh={loadGlobalData}
@@ -183,7 +185,7 @@
           : 'status'}
       />
     {:else}
-      <!-- Fallback to Dashboard -->
+      <!-- Dashboard (handles '/' and route fallback) -->
       <SyncDashboard
         bind:isSyncing
         {reviewItems}

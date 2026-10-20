@@ -7,11 +7,13 @@
     Server,
   } from 'lucide-svelte';
   import Label from '../common/Label.svelte';
+  import { getBaseUrl } from '../../lib/api';
 
   export let currentRoute = '/';
   export let stagedCount = 0;
   export let reviewCount = 0;
 
+  const urlBase = getBaseUrl();
   const dispatch = createEventDispatcher<{ navigate: string }>();
 
   function navigate(path: string) {
@@ -30,7 +32,7 @@
     <!-- 1. Sync -->
     <div class="item {isSyncParent ? 'isActiveItem' : ''}">
       <a
-        href="#/"
+        href="{urlBase}/"
         class="link {isSyncParent ? 'isActiveParentLink' : ''}"
         on:click|preventDefault={() => navigate('/')}
       >
@@ -45,14 +47,14 @@
       {#if isSyncParent}
         <div class="children">
           <a
-            href="#/"
+            href="{urlBase}/"
             class="link childLink {currentRoute === '/' ? 'isActiveLink' : ''}"
             on:click|preventDefault={() => navigate('/')}
           >
             <span class="noIcon">Dashboard</span>
           </a>
           <a
-            href="#/staged"
+            href="{urlBase}/staged"
             class="link childLink {currentRoute === '/staged' ? 'isActiveLink' : ''}"
             on:click|preventDefault={() => navigate('/staged')}
           >
@@ -64,7 +66,7 @@
             {/if}
           </a>
           <a
-            href="#/overrides"
+            href="{urlBase}/overrides"
             class="link childLink {currentRoute === '/overrides' ? 'isActiveLink' : ''}"
             on:click|preventDefault={() => navigate('/overrides')}
           >
@@ -77,7 +79,7 @@
     <!-- 2. Activity -->
     <div class="item {isActivityParent ? 'isActiveItem' : ''}">
       <a
-        href="#/activity/review"
+        href="{urlBase}/activity/review"
         class="link {isActivityParent ? 'isActiveParentLink' : ''}"
         on:click|preventDefault={() => navigate('/activity/review')}
       >
@@ -92,7 +94,7 @@
       {#if isActivityParent}
         <div class="children">
           <a
-            href="#/activity/review"
+            href="{urlBase}/activity/review"
             class="link childLink {currentRoute === '/activity/review' ? 'isActiveLink' : ''}"
             on:click|preventDefault={() => navigate('/activity/review')}
           >
@@ -104,7 +106,7 @@
             {/if}
           </a>
           <a
-            href="#/activity/history"
+            href="{urlBase}/activity/history"
             class="link childLink {currentRoute === '/activity/history' ? 'isActiveLink' : ''}"
             on:click|preventDefault={() => navigate('/activity/history')}
           >
@@ -117,7 +119,7 @@
     <!-- 3. Settings -->
     <div class="item {isSettingsParent ? 'isActiveItem' : ''}">
       <a
-        href="#/settings/general"
+        href="{urlBase}/settings/general"
         class="link {isSettingsParent ? 'isActiveParentLink' : ''}"
         on:click|preventDefault={() => navigate('/settings/general')}
       >
@@ -127,28 +129,28 @@
       {#if isSettingsParent}
         <div class="children">
           <a
-            href="#/settings/general"
+            href="{urlBase}/settings/general"
             class="link childLink {currentRoute === '/settings/general' ? 'isActiveLink' : ''}"
             on:click|preventDefault={() => navigate('/settings/general')}
           >
             <span class="noIcon">General</span>
           </a>
           <a
-            href="#/settings/sync"
+            href="{urlBase}/settings/sync"
             class="link childLink {currentRoute === '/settings/sync' ? 'isActiveLink' : ''}"
             on:click|preventDefault={() => navigate('/settings/sync')}
           >
             <span class="noIcon">Sync & AniList</span>
           </a>
           <a
-            href="#/settings/servarr"
+            href="{urlBase}/settings/servarr"
             class="link childLink {currentRoute === '/settings/servarr' ? 'isActiveLink' : ''}"
             on:click|preventDefault={() => navigate('/settings/servarr')}
           >
             <span class="noIcon">Servarr</span>
           </a>
           <a
-            href="#/settings/connect"
+            href="{urlBase}/settings/connect"
             class="link childLink {currentRoute === '/settings/connect' ? 'isActiveLink' : ''}"
             on:click|preventDefault={() => navigate('/settings/connect')}
           >
@@ -161,7 +163,7 @@
     <!-- 4. System -->
     <div class="item {isSystemParent ? 'isActiveItem' : ''}">
       <a
-        href="#/system/status"
+        href="{urlBase}/system/status"
         class="link {isSystemParent ? 'isActiveParentLink' : ''}"
         on:click|preventDefault={() => navigate('/system/status')}
       >
@@ -171,21 +173,21 @@
       {#if isSystemParent}
         <div class="children">
           <a
-            href="#/system/status"
+            href="{urlBase}/system/status"
             class="link childLink {currentRoute === '/system/status' ? 'isActiveLink' : ''}"
             on:click|preventDefault={() => navigate('/system/status')}
           >
             <span class="noIcon">Status</span>
           </a>
           <a
-            href="#/system/backup"
+            href="{urlBase}/system/backup"
             class="link childLink {currentRoute === '/system/backup' ? 'isActiveLink' : ''}"
             on:click|preventDefault={() => navigate('/system/backup')}
           >
             <span class="noIcon">Backup</span>
           </a>
           <a
-            href="#/system/updates"
+            href="{urlBase}/system/updates"
             class="link childLink {currentRoute === '/system/updates' ? 'isActiveLink' : ''}"
             on:click|preventDefault={() => navigate('/system/updates')}
           >

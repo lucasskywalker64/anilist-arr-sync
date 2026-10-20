@@ -376,10 +376,15 @@ func (s *Server) serveIndexHTML(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Inject runtime bootstrap config
-	bootstrapJSON, _ := json.Marshal(map[string]any{
+	bootstrapData := map[string]any{
 		"urlBase": s.cleanURLBase,
 		"version": "1.0.0",
-	})
+		"apiKey":  s.getAPIKey(),
+	}
+	bootstrapJSON, err := json.Marshal(bootstrapData)
+	if err != nil {
+		bootstrapJSON = []byte(`{"urlBase":"","version":"1.0.0","apiKey":""}`)
+	}
 	bootstrapScript := fmt.Sprintf("<script id=\"arr-bootstrap\">window.AniListArrSync = %s;</script>", bootstrapJSON)
 	if bytes.Contains(content, []byte("<!-- ANILIST_ARR_SYNC_CONFIG -->")) {
 		content = bytes.Replace(content, []byte("<!-- ANILIST_ARR_SYNC_CONFIG -->"), []byte(bootstrapScript), 1)

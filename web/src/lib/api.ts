@@ -10,6 +10,7 @@ import type {
   NotificationItem,
   CurrentUser,
   Candidate,
+  MappingResolution,
 } from './types';
 
 import { writable } from 'svelte/store';
@@ -192,7 +193,7 @@ export const api = {
     });
   },
 
-  async resolveReview(id: number, resolution: { mediaType: 'SERIES' | 'MOVIE'; tvdbId?: number | null; tmdbId?: number | null; seasons?: string; titleOverride?: string }): Promise<{ status: string }> {
+  async resolveReview(id: number, resolution: MappingResolution): Promise<{ status: string }> {
     return request(`/api/v1/review/${id}/resolve`, {
       method: 'POST',
       body: JSON.stringify(resolution),
@@ -308,7 +309,7 @@ export const api = {
     });
   },
 
-  async testNotificationPayload(payload: { type: string; settings: Record<string, any> }): Promise<{ status: string; message?: string }> {
+  async testNotificationPayload(payload: { type: string; settings: Record<string, unknown> }): Promise<{ status: string; message?: string }> {
     return request('/api/v1/notifications/test', {
       method: 'POST',
       body: JSON.stringify(payload),

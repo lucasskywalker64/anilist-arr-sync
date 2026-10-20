@@ -154,9 +154,9 @@
     background-color: var(--defaultHoverBackgroundColor);
   }
 
-  @media (max-width: 800px) {
+  @media (max-width: 1200px) {
     .group {
-      flex-direction: column;
+      display: block;
     }
     .label {
       justify-content: flex-start;

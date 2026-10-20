@@ -123,11 +123,19 @@ export interface NotificationItem {
   onSyncSuccess: boolean;
   onSyncFailure: boolean;
   onReviewQueueNeeded: boolean;
-  settings: Record<string, any>;
+  settings: Record<string, unknown>;
 }
 
 export interface CurrentUser {
   username: string;
   authenticated: boolean;
   csrfToken?: string;
+}
+
+export interface MappingResolution {
+  mediaType: 'SERIES' | 'MOVIE';
+  tvdbId?: number | null;
+  tmdbId?: number | null;
+  seasons?: string;
+  titleOverride?: string;
 }
