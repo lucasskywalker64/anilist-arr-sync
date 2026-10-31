@@ -188,3 +188,121 @@ func TestReviewQueueEndpoints(t *testing.T) {
 		}
 	}
 }
+
+func TestIgnoredTitlesEndpoints(t *testing.T) {
+	db := newTestStorage(t)
+	cfg := config.NewDefault()
+	cfg.AuthenticationRequired = "DisabledForLocalAddresses"
+	cfg.APIKey = "test-api-key"
+
+	srv := NewServer(cfg, "", db, nil, nil)
+	handler := srv.Handler()
+
+	// 1. GET /api/v1/ignored initially empty
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ignored", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var list []map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+			t.Fatalf("failed to parse JSON: %v", err)
+		}
+		if len(list) != 0 {
+			t.Errorf("expected empty list, got %d items", len(list))
+		}
+	}
+
+	// Seed an ignored title
+	err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		_, execErr := tx.ExecContext(ctx, `
+			INSERT INTO ignored_titles (anilist_id, title_romaji, reason)
+			VALUES (12345, 'Steins;Gate', 'Already watched');
+		`)
+		return execErr
+	})
+	if err != nil {
+		t.Fatalf("failed to insert ignored title: %v", err)
+	}
+
+	// 2. GET /api/v1/ignored returns the seeded title
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ignored", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var list []map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+			t.Fatalf("failed to parse JSON: %v", err)
+		}
+		if len(list) != 1 {
+			t.Fatalf("expected 1 item, got %d", len(list))
+		}
+		if int(list[0]["anilistId"].(float64)) != 12345 {
+			t.Errorf("expected anilistId 12345, got %v", list[0]["anilistId"])
+		}
+		if list[0]["titleRomaji"] != "Steins;Gate" {
+			t.Errorf("expected titleRomaji Steins;Gate, got %v", list[0]["titleRomaji"])
+		}
+		if list[0]["reason"] != "Already watched" {
+			t.Errorf("expected reason Already watched, got %v", list[0]["reason"])
+		}
+	}
+
+	// 3. DELETE /api/v1/ignored/12345 removes title
+	{
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ignored/12345", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		req.Header.Set("X-Api-Key", "test-api-key")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to parse JSON: %v", err)
+		}
+		if resp["status"] != "DELETED" {
+			t.Errorf("expected status DELETED, got %v", resp["status"])
+		}
+
+		// Verify table is empty
+		err = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+			var count int
+			qErr := q.QueryRowContext(ctx, "SELECT COUNT(*) FROM ignored_titles WHERE anilist_id = 12345;").Scan(&count)
+			if qErr != nil {
+				return qErr
+			}
+			if count != 0 {
+				t.Errorf("expected 0 rows in ignored_titles, got %d", count)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("failed to query ignored_titles: %v", err)
+		}
+	}
+
+	// 4. DELETE /api/v1/ignored/12345 again returns 404
+	{
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ignored/12345", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		req.Header.Set("X-Api-Key", "test-api-key")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+}

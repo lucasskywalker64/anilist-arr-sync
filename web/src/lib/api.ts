@@ -11,6 +11,7 @@ import type {
   CurrentUser,
   Candidate,
   MappingResolution,
+  IgnoredItem,
 } from './types';
 
 import { writable } from 'svelte/store';
@@ -203,6 +204,17 @@ export const api = {
   async ignoreReview(id: number): Promise<{ status: string }> {
     return request(`/api/v1/review/${id}/ignore`, {
       method: 'POST',
+    });
+  },
+
+  // Ignored Titles (Blocklist)
+  async getIgnored(): Promise<IgnoredItem[]> {
+    return request('/api/v1/ignored');
+  },
+
+  async deleteIgnored(anilistId: number): Promise<{ status: string; anilistId: number }> {
+    return request(`/api/v1/ignored/${anilistId}`, {
+      method: 'DELETE',
     });
   },
 

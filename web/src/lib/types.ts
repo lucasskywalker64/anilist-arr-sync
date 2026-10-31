@@ -139,3 +139,10 @@ export interface MappingResolution {
   seasons?: string;
   titleOverride?: string;
 }
+
+export interface IgnoredItem {
+  anilistId: number;
+  titleRomaji: string;
+  reason?: string;
+  createdAt: string;
+}

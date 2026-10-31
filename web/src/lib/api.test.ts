@@ -103,4 +103,34 @@ describe('API Client', () => {
 
     await expect(api.createOverride({ anilistId: 123, mediaType: 'SERIES' })).rejects.toThrow('invalid override mapping');
   });
+
+  it('fetches and deletes ignored titles from blocklist', async () => {
+    const ignoredData = [
+      { anilistId: 123, titleRomaji: 'Ignored Show', reason: 'Dropped', createdAt: '2026-10-21T00:00:00Z' },
+    ];
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ignoredData,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ status: 'DELETED', anilistId: 123 }),
+      });
+    globalThis.fetch = fetchMock;
+
+    const list = await api.getIgnored();
+    expect(list).toEqual(ignoredData);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/ignored');
+    expect(fetchMock.mock.calls[0][1].method).toBe('GET');
+
+    const delRes = await api.deleteIgnored(123);
+    expect(delRes.status).toBe('DELETED');
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/ignored/123');
+    expect(fetchMock.mock.calls[1][1].method).toBe('DELETE');
+  });
 });

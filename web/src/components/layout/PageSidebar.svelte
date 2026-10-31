@@ -112,6 +112,13 @@
           >
             <span class="noIcon">History</span>
           </a>
+          <a
+            href="{urlBase}/activity/blocklist"
+            class="link childLink {currentRoute === '/activity/blocklist' || currentRoute === '/activity/ignored' ? 'isActiveLink' : ''}"
+            on:click|preventDefault={() => navigate('/activity/blocklist')}
+          >
+            <span class="noIcon">Blocklist</span>
+          </a>
         </div>
       {/if}
     </div>

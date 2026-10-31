@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, createEventDispatcher } from 'svelte';
-  import { Plus, RefreshCw, Edit, Trash2, ExternalLink } from 'lucide-svelte';
+  import { Plus, RefreshCw, Edit, Trash2, ExternalLink, Ban } from 'lucide-svelte';
   import PageToolbar from '../layout/PageToolbar.svelte';
   import PageToolbarButton from '../layout/PageToolbarButton.svelte';
   import Table from '../common/Table.svelte';
@@ -14,7 +14,10 @@
 
   export let overrides: OverrideItem[] = [];
 
-  const dispatch = createEventDispatcher<{ refresh: void }>();
+  const dispatch = createEventDispatcher<{
+    refresh: void;
+    navigate: string;
+  }>();
 
   let loading = false;
   let errorMsg = '';
@@ -137,6 +140,13 @@
         on:click={openAddModal}
       >
         <Plus size={18} />
+      </PageToolbarButton>
+
+      <PageToolbarButton
+        label="Blocklist"
+        on:click={() => dispatch('navigate', '/activity/blocklist')}
+      >
+        <Ban size={18} />
       </PageToolbarButton>
 
       <PageToolbarButton

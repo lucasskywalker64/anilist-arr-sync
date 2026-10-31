@@ -371,3 +371,100 @@ func (s *Server) handleIgnoreReview(w http.ResponseWriter, r *http.Request) {
 		"anilistId": anilistID,
 	})
 }
+
+// IgnoredTitle represents a row in the ignored_titles table.
+type IgnoredTitle struct {
+	AniListID   int       `json:"anilistId"`
+	TitleRomaji string    `json:"titleRomaji"`
+	Reason      string    `json:"reason"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
+// handleListIgnored returns all titles in ignored_titles.
+func (s *Server) handleListIgnored(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		s.writeJSONError(w, http.StatusInternalServerError, "database not configured")
+		return
+	}
+
+	var list []IgnoredTitle
+	err := s.db.Read(r.Context(), func(ctx context.Context, q storage.Querier) error {
+		rows, err := q.QueryContext(ctx, `
+			SELECT anilist_id, title_romaji, COALESCE(reason, ''), created_at
+			FROM ignored_titles
+			ORDER BY created_at DESC, anilist_id ASC;
+		`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+
+		for rows.Next() {
+			var item IgnoredTitle
+			if err := rows.Scan(&item.AniListID, &item.TitleRomaji, &item.Reason, &item.CreatedAt); err != nil {
+				return err
+			}
+			list = append(list, item)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		log.Printf("list ignored titles failed: %v", err)
+		s.writeJSONError(w, http.StatusInternalServerError, "failed to query ignored titles")
+		return
+	}
+
+	if list == nil {
+		list = []IgnoredTitle{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(list)
+}
+
+// handleDeleteIgnored removes an entry from ignored_titles by anilistId.
+func (s *Server) handleDeleteIgnored(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		s.writeJSONError(w, http.StatusInternalServerError, "database not configured")
+		return
+	}
+
+	idStr := r.PathValue("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		s.writeJSONError(w, http.StatusBadRequest, "invalid anilist id")
+		return
+	}
+
+	err = s.db.Write(r.Context(), func(ctx context.Context, tx *sql.Tx) error {
+		res, execErr := tx.ExecContext(ctx, "DELETE FROM ignored_titles WHERE anilist_id = ?;", id)
+		if execErr != nil {
+			return execErr
+		}
+		rows, rowsErr := res.RowsAffected()
+		if rowsErr != nil {
+			return rowsErr
+		}
+		if rows == 0 {
+			return sql.ErrNoRows
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			s.writeJSONError(w, http.StatusNotFound, fmt.Sprintf("ignored title with anilist_id %d not found", id))
+			return
+		}
+		log.Printf("delete ignored title %d failed: %v", id, err)
+		s.writeJSONError(w, http.StatusInternalServerError, "failed to delete ignored title")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":    "DELETED",
+		"anilistId": id,
+	})
+}

@@ -6,6 +6,7 @@
   import OverridesManager from './components/views/OverridesManager.svelte';
   import ReviewQueue from './components/views/ReviewQueue.svelte';
   import HistoryView from './components/views/HistoryView.svelte';
+  import BlocklistView from './components/views/BlocklistView.svelte';
   import SettingsView from './components/views/SettingsView.svelte';
   import SystemView from './components/views/SystemView.svelte';
   import LoginModal from './components/views/LoginModal.svelte';
@@ -158,6 +159,7 @@
       <OverridesManager
         bind:overrides
         on:refresh={loadGlobalData}
+        on:navigate={(e) => navigate(e.detail)}
       />
     {:else if currentRoute === '/activity/review'}
       <ReviewQueue
@@ -166,6 +168,8 @@
       />
     {:else if currentRoute === '/activity/history'}
       <HistoryView />
+    {:else if currentRoute === '/activity/blocklist' || currentRoute === '/activity/ignored'}
+      <BlocklistView />
     {:else if currentRoute.startsWith('/settings')}
       <SettingsView
         subTab={currentRoute === '/settings/sync'

@@ -109,7 +109,7 @@ func TestEmbeddedSPA_DeliveryAndRouting(t *testing.T) {
 	})
 
 	t.Run("Client-side route falls back to index.html", func(t *testing.T) {
-		routes := []string{"/staged", "/overrides", "/activity/review", "/activity/history", "/settings/general", "/settings/sync", "/settings/servarr", "/settings/connect", "/system/status", "/system/backup", "/system/updates"}
+		routes := []string{"/staged", "/overrides", "/activity/review", "/activity/history", "/activity/blocklist", "/activity/ignored", "/settings/general", "/settings/sync", "/settings/servarr", "/settings/connect", "/system/status", "/system/backup", "/system/updates"}
 		for _, route := range routes {
 			req := httptest.NewRequest(http.MethodGet, route, nil)
 			rec := httptest.NewRecorder()
