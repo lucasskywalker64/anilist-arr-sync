@@ -24,6 +24,22 @@ func TestOverridesEndpoints(t *testing.T) {
 	srv := NewServer(cfg, "", db, nil, nil)
 	handler := srv.Handler()
 
+	// Seed synced_media row to verify arr_title synchronization
+	_ = db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO synced_media (
+				anilist_id, media_type, format, title_romaji, title_english,
+				release_year, poster_url, anilist_status, target_service,
+				tvdb_id, tmdb_id, arr_title, monitored_status, seasons
+			) VALUES (
+				500, 'SERIES', 'TV', 'Original Romaji', 'Original English',
+				2020, '', 'CURRENT', 'SONARR',
+				NULL, NULL, NULL, 'MONITORED', '1'
+			);
+		`)
+		return err
+	})
+
 	// 1. Create mapping override via POST /api/v1/overrides
 	createPayload, _ := json.Marshal(map[string]any{
 		"anilistId":     500,
@@ -42,6 +58,14 @@ func TestOverridesEndpoints(t *testing.T) {
 
 	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
 		t.Fatalf("expected create override to succeed, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var seededArrTitle sql.NullString
+	_ = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT arr_title FROM synced_media WHERE anilist_id = 500;").Scan(&seededArrTitle)
+	})
+	if !seededArrTitle.Valid || seededArrTitle.String != "Custom Title" {
+		t.Errorf("expected synced_media arr_title to be updated to 'Custom Title', got %v", seededArrTitle)
 	}
 
 	// 2. GET /api/v1/overrides
@@ -73,6 +97,14 @@ func TestOverridesEndpoints(t *testing.T) {
 
 	if delRec.Code != http.StatusOK {
 		t.Fatalf("expected DELETE /api/v1/overrides/500 to return 200, got %d: %s", delRec.Code, delRec.Body.String())
+	}
+
+	var clearedArrTitle sql.NullString
+	_ = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT arr_title FROM synced_media WHERE anilist_id = 500;").Scan(&clearedArrTitle)
+	})
+	if clearedArrTitle.Valid {
+		t.Errorf("expected synced_media arr_title to be cleared (NULL) after delete, got %v", clearedArrTitle.String)
 	}
 
 	// 4. GET /api/v1/overrides is now empty
@@ -122,7 +154,7 @@ func TestConfigEndpoints(t *testing.T) {
 		t.Errorf("expected apiKey to be returned for viewing and copying, got %v", returnedCfg["apiKey"])
 	}
 
-	// 2. PUT /api/v1/config updates settings
+	// 2. PUT /api/v1/config updates settings (non-network fields do not require restart)
 	updatePayload, _ := json.Marshal(map[string]any{
 		"instanceName":      "My Anime Sync",
 		"syncIntervalHours": 6,
@@ -137,11 +169,35 @@ func TestConfigEndpoints(t *testing.T) {
 	if putRec.Code != http.StatusOK {
 		t.Fatalf("expected PUT /api/v1/config to return 200, got %d: %s", putRec.Code, putRec.Body.String())
 	}
+	var putResp map[string]any
+	_ = json.Unmarshal(putRec.Body.Bytes(), &putResp)
+	if restart, ok := putResp["restartRequired"].(bool); !ok || restart {
+		t.Errorf("expected restartRequired to be false when updating non-network fields, got %v", putResp["restartRequired"])
+	}
 	if srv.cfg.InstanceName != "My Anime Sync" {
 		t.Errorf("expected instanceName to be updated to 'My Anime Sync', got %s", srv.cfg.InstanceName)
 	}
 	if srv.cfg.SyncIntervalHours != 6 {
 		t.Errorf("expected syncIntervalHours to be 6, got %d", srv.cfg.SyncIntervalHours)
+	}
+
+	// 3. PUT /api/v1/config with Port change requires restart
+	portPayload, _ := json.Marshal(map[string]any{
+		"port": 7172,
+	})
+	putReq2 := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(portPayload))
+	putReq2.RemoteAddr = "127.0.0.1:1234"
+	putReq2.Header.Set("Content-Type", "application/json")
+	putReq2.Header.Set("X-Api-Key", "secret-key-to-mask")
+	putRec2 := httptest.NewRecorder()
+	handler.ServeHTTP(putRec2, putReq2)
+	if putRec2.Code != http.StatusOK {
+		t.Fatalf("expected PUT /api/v1/config to return 200, got %d: %s", putRec2.Code, putRec2.Body.String())
+	}
+	var putResp2 map[string]any
+	_ = json.Unmarshal(putRec2.Body.Bytes(), &putResp2)
+	if restart, ok := putResp2["restartRequired"].(bool); !ok || !restart {
+		t.Errorf("expected restartRequired to be true when updating port, got %v", putResp2["restartRequired"])
 	}
 }
 

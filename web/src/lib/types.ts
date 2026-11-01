@@ -80,6 +80,12 @@ export interface SyncHistoryItem {
   triggerType: string;
 }
 
+export interface UpdateConfigResponse {
+  status: string;
+  message?: string;
+  restartRequired?: boolean;
+}
+
 export interface AppConfig {
   bindAddress: string;
   port: number;

@@ -120,11 +120,16 @@
       if (formPassword) {
         payload.password = formPassword;
       }
-      await api.updateConfig(payload);
+      const res = await api.updateConfig(payload);
       savedConfig = JSON.parse(JSON.stringify(formConfig));
       formPassword = "";
       formPasswordConfirm = "";
-      successMsg = "Configuration changes saved successfully.";
+      if (res?.restartRequired) {
+        successMsg =
+          "Configuration changes saved. A service restart is required for network port or bind address changes to take effect.";
+      } else {
+        successMsg = "Configuration changes saved successfully.";
+      }
     } catch (e: any) {
       errorMsg = e.message || "Failed to save configuration";
     } finally {
@@ -365,7 +370,7 @@
         <FieldSet legend="Host">
           <FormGroup
             label="Port Number"
-            helpText="Port the internal HTTP web server listens on"
+            helpText="Port the internal HTTP web server listens on (requires service restart)"
             isDirty={isFieldDirty("port")}
           >
             <input
@@ -377,7 +382,7 @@
 
           <FormGroup
             label="URL Base"
-            helpText="For reverse proxy subpath support (e.g. /anilist-sync)"
+            helpText="For reverse proxy subpath support (e.g. /anilist-sync) (requires service restart)"
             isDirty={isFieldDirty("urlBase")}
           >
             <input
@@ -404,7 +409,7 @@
 
             <FormGroup
               label="Bind Address"
-              helpText="Network interface address the HTTP listener binds to (* or 0.0.0.0 for all interfaces)"
+              helpText="Network interface address the HTTP listener binds to (* or 0.0.0.0 for all interfaces, requires service restart)"
               isAdvanced={true}
               isDirty={isFieldDirty("bindAddress")}
             >
@@ -444,7 +449,7 @@
 
             <FormGroup
               label="Enable SSL"
-              helpText="Enables HTTPS listener on configured SSL port with certificates"
+              helpText="Enables HTTPS listener on configured SSL port with certificates (requires service restart)"
               isAdvanced={true}
               isDirty={isFieldDirty("enableSsl")}
             >
@@ -457,7 +462,7 @@
             {#if formConfig.enableSsl}
               <FormGroup
                 label="SSL Port"
-                helpText="Port the internal HTTPS listener listens on"
+                helpText="Port the internal HTTPS listener listens on (requires service restart)"
                 isAdvanced={true}
                 isDirty={isFieldDirty("sslPort")}
               >

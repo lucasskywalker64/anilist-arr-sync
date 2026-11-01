@@ -6,6 +6,7 @@ import type {
   SyncReport,
   SyncHistoryItem,
   AppConfig,
+  UpdateConfigResponse,
   BackupItem,
   UpdateStatus,
   NotificationItem,
@@ -303,7 +304,7 @@ export const api = {
     return request('/api/v1/config');
   },
 
-  async updateConfig(config: Partial<AppConfig>): Promise<{ status: string }> {
+  async updateConfig(config: Partial<AppConfig>): Promise<UpdateConfigResponse> {
     return request('/api/v1/config', {
       method: 'PUT',
       body: JSON.stringify(config),

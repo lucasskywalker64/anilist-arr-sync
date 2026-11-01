@@ -152,6 +152,10 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 				title_override = excluded.title_override,
 				updated_at = CURRENT_TIMESTAMP;
 		`, req.AniListID, req.MediaType, req.TVDBID, req.TMDBID, seasons, titleVal)
+		if execErr != nil {
+			return execErr
+		}
+		_, execErr = tx.ExecContext(ctx, "UPDATE synced_media SET arr_title = ? WHERE anilist_id = ?;", titleVal, req.AniListID)
 		return execErr
 	})
 	if err != nil {
@@ -183,7 +187,10 @@ func (s *Server) handleDeleteOverride(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = s.db.Write(r.Context(), func(ctx context.Context, tx *sql.Tx) error {
-		_, execErr := tx.ExecContext(ctx, "DELETE FROM mapping_overrides WHERE anilist_id = ?;", id)
+		if _, execErr := tx.ExecContext(ctx, "DELETE FROM mapping_overrides WHERE anilist_id = ?;", id); execErr != nil {
+			return execErr
+		}
+		_, execErr := tx.ExecContext(ctx, "UPDATE synced_media SET arr_title = NULL WHERE anilist_id = ?;", id)
 		return execErr
 	})
 	if err != nil {
@@ -537,14 +544,21 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	restartRequired := (s.cfg.Port != next.Port) ||
+		(s.cfg.BindAddress != next.BindAddress) ||
+		(s.cfg.URLBase != next.URLBase) ||
+		(s.cfg.EnableSsl != next.EnableSsl) ||
+		(s.cfg.SslPort != next.SslPort)
+
 	*s.cfg = next
 	s.trustedNets = newTrustedNets
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status":  "ok",
-		"message": "configuration updated",
+		"status":          "ok",
+		"message":         "configuration updated",
+		"restartRequired": restartRequired,
 	})
 }
 
