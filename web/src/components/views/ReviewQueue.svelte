@@ -27,6 +27,12 @@
     titleOverride: string;
   }
   let formState: Record<number, ItemState> = {};
+  let failedImages = new Set<number>();
+
+  function handleImageError(id: number) {
+    failedImages.add(id);
+    failedImages = new Set(failedImages);
+  }
 
   function initFormState(items: ReviewItem[]) {
     const next: Record<number, ItemState> = {};
@@ -148,8 +154,13 @@
             <div class="reviewCard">
               <!-- Left Poster (170x250px) -->
               <div class="posterContainer">
-                {#if item.posterUrl}
-                  <img src={item.posterUrl} alt={item.titleRomaji} class="poster" />
+                {#if item.posterUrl && !failedImages.has(item.id)}
+                  <img
+                    src={item.posterUrl}
+                    alt={item.titleRomaji}
+                    class="poster"
+                    on:error={() => handleImageError(item.id)}
+                  />
                 {:else}
                   <div class="poster posterFallback">
                     {#if item.mediaType === 'SERIES'}

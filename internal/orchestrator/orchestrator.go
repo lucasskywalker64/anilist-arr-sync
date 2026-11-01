@@ -63,6 +63,7 @@ type SyncReport struct {
 	QueuedReview      int         `json:"queuedReview"`
 	Errors            []string    `json:"errors"`
 	Trigger           TriggerType `json:"trigger"`
+	StartTime         time.Time   `json:"startTime"`
 }
 
 // Notifier defines the interface for dispatching notification events.
@@ -162,6 +163,7 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 	for _, entry := range entries {
 		// Step 1: Skip titles present in ignored_titles table before resolution
 		if ignoredSet[entry.Media.ID] {
+			o.upsertSyncedMedia(ctx, entry, "SERIES", "NONE", nil, nil, "", "IGNORED", "")
 			continue
 		}
 
@@ -181,6 +183,7 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 
 		if res.Diverted {
 			report.QueuedReview++
+			o.upsertSyncedMedia(ctx, entry, "SERIES", "NONE", nil, nil, "", "PENDING_REVIEW", "")
 			if o.notifier != nil {
 				title := entry.Media.Title.Romaji
 				if title == "" {
@@ -206,12 +209,26 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 			continue
 		}
 
-		// Dispatch to Servarr service
+		// Dispatch to Servarr service and record to synced_media
 		switch res.TargetService {
 		case "RADARR":
 			o.dispatchRadarr(ctx, entry, res, report)
+			monStatus := "MONITORED"
+			if entry.Status == anilist.StatusDropped {
+				monStatus = "UNMONITORED"
+			}
+			o.upsertSyncedMedia(ctx, entry, "MOVIE", "RADARR", nil, &res.TargetID, res.TitleOverride, monStatus, "")
 		case "SONARR":
 			o.dispatchSonarr(ctx, entry, res, report)
+			monStatus := "MONITORED"
+			if entry.Status == anilist.StatusDropped {
+				monStatus = "UNMONITORED"
+			}
+			seasonsStr := ""
+			if res.TVDBSeason > 0 {
+				seasonsStr = strconv.Itoa(res.TVDBSeason)
+			}
+			o.upsertSyncedMedia(ctx, entry, "SERIES", "SONARR", &res.TargetID, nil, res.TitleOverride, monStatus, seasonsStr)
 		}
 	}
 
@@ -757,6 +774,7 @@ func (o *Orchestrator) configuredStatuses() []anilist.MediaListStatus {
 func (o *Orchestrator) recordHistory(ctx context.Context, report *SyncReport, start time.Time) {
 	duration := time.Since(start)
 	report.DurationMs = duration.Milliseconds()
+	report.StartTime = start
 
 	var errsJSON *string
 	if len(report.Errors) > 0 {
@@ -784,6 +802,69 @@ func (o *Orchestrator) recordHistory(ctx context.Context, report *SyncReport, st
 			report.RunID = id
 		}
 		return nil
+	})
+}
+
+func (o *Orchestrator) upsertSyncedMedia(
+	ctx context.Context,
+	entry anilist.MediaListEntry,
+	mediaType string,
+	targetService string,
+	tvdbID *int,
+	tmdbID *int,
+	arrTitle string,
+	monitoredStatus string,
+	seasons string,
+) {
+	if o.db == nil {
+		return
+	}
+	_ = o.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		poster := entry.Media.CoverImageURL()
+		var eng *string
+		if entry.Media.Title.English != "" {
+			eng = &entry.Media.Title.English
+		}
+		var year *int
+		if entry.Media.StartDate.Year != nil {
+			year = entry.Media.StartDate.Year
+		}
+		var arrTitleVal *string
+		if arrTitle != "" {
+			arrTitleVal = &arrTitle
+		}
+		var seasonsVal *string
+		if seasons != "" {
+			seasonsVal = &seasons
+		}
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO synced_media (
+				anilist_id, media_type, format, title_romaji, title_english,
+				release_year, poster_url, anilist_status, target_service,
+				tvdb_id, tmdb_id, arr_title, monitored_status, seasons,
+				last_synced_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+			ON CONFLICT(anilist_id) DO UPDATE SET
+				media_type = excluded.media_type,
+				format = excluded.format,
+				title_romaji = excluded.title_romaji,
+				title_english = excluded.title_english,
+				release_year = excluded.release_year,
+				poster_url = excluded.poster_url,
+				anilist_status = excluded.anilist_status,
+				target_service = excluded.target_service,
+				tvdb_id = excluded.tvdb_id,
+				tmdb_id = excluded.tmdb_id,
+				arr_title = excluded.arr_title,
+				monitored_status = excluded.monitored_status,
+				seasons = excluded.seasons,
+				last_synced_at = CURRENT_TIMESTAMP,
+				updated_at = CURRENT_TIMESTAMP;
+		`, entry.Media.ID, mediaType, entry.Media.Format, entry.Media.Title.Romaji, eng,
+			year, poster, string(entry.Status), targetService,
+			tvdbID, tmdbID, arrTitleVal, monitoredStatus, seasonsVal,
+		)
+		return err
 	})
 }
 

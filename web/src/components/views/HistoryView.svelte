@@ -24,6 +24,31 @@
     isLogModalOpen = true;
   }
 
+  function formatDuration(ms: number): string {
+    if (!ms || ms < 1000) return `${ms || 0}ms`;
+    return `${(ms / 1000).toFixed(1)}s`;
+  }
+
+  function formatTrigger(trigger: string): string {
+    switch (trigger) {
+      case 'SCHEDULED': return 'Scheduled';
+      case 'MANUAL_WEB': return 'Manual';
+      case 'CLI': return 'CLI';
+      default: return trigger;
+    }
+  }
+
+  function parseErrors(errorsJson?: string | null): string[] {
+    if (!errorsJson) return [];
+    try {
+      const parsed = JSON.parse(errorsJson);
+      if (Array.isArray(parsed)) return parsed;
+      return [String(parsed)];
+    } catch {
+      return [errorsJson];
+    }
+  }
+
   async function loadData() {
     loading = true;
     errorMsg = '';
@@ -71,12 +96,12 @@
             <tr>
               <th>Status</th>
               <th>Trigger</th>
-              <th>Started At</th>
-              <th>Completed At</th>
-              <th>Total Titles</th>
-              <th>Matched</th>
-              <th>Unresolved</th>
-              <th>Staged</th>
+              <th>Timestamp</th>
+              <th>Duration</th>
+              <th>Scanned</th>
+              <th>Sonarr</th>
+              <th>Radarr</th>
+              <th>Review Queue</th>
               <th style="text-align: right;">Details</th>
             </tr>
           </thead>
@@ -92,18 +117,48 @@
                   </Label>
                 </td>
                 <td>
-                  <span class="triggerBadge">{item.triggerType}</span>
+                  <span class="triggerBadge">{formatTrigger(item.triggerType)}</span>
                 </td>
-                <td>{new Date(item.startedAt).toLocaleString()}</td>
-                <td>{item.completedAt ? new Date(item.completedAt).toLocaleString() : 'Running...'}</td>
-                <td>{item.totalTitles}</td>
-                <td>{item.matchedTitles}</td>
-                <td>{item.unresolvedTitles}</td>
-                <td>{item.stagedActions}</td>
+                <td>{item.runTimestamp ? new Date(item.runTimestamp).toLocaleString() : '-'}</td>
+                <td>{formatDuration(item.durationMs)}</td>
+                <td>{item.itemsScanned}</td>
+                <td>
+                  <div class="countDelta">
+                    {#if item.monitoredSonarr > 0}
+                      <span class="addCount">+{item.monitoredSonarr}</span>
+                    {/if}
+                    {#if item.unmonitoredSonarr > 0}
+                      <span class="removeCount">-{item.unmonitoredSonarr}</span>
+                    {/if}
+                    {#if item.monitoredSonarr === 0 && item.unmonitoredSonarr === 0}
+                      <span class="muted">0</span>
+                    {/if}
+                  </div>
+                </td>
+                <td>
+                  <div class="countDelta">
+                    {#if item.addedRadarr > 0}
+                      <span class="addCount">+{item.addedRadarr}</span>
+                    {/if}
+                    {#if item.unmonitoredRadarr > 0}
+                      <span class="removeCount">-{item.unmonitoredRadarr}</span>
+                    {/if}
+                    {#if item.addedRadarr === 0 && item.unmonitoredRadarr === 0}
+                      <span class="muted">0</span>
+                    {/if}
+                  </div>
+                </td>
+                <td>
+                  {#if item.queuedReview > 0}
+                    <span class="reviewQueued">{item.queuedReview}</span>
+                  {:else}
+                    <span class="muted">0</span>
+                  {/if}
+                </td>
                 <td style="text-align: right;">
-                  {#if item.errorLog}
+                  {#if parseErrors(item.errorsJson).length > 0}
                     <Button kind="default" size="small" on:click={() => viewLog(item)}>
-                      <FileText size={12} /> Log
+                      <FileText size={12} /> Log ({parseErrors(item.errorsJson).length})
                     </Button>
                   {:else}
                     <span class="muted">-</span>
@@ -125,8 +180,12 @@
     on:close={() => (isLogModalOpen = false)}
   >
     <div slot="body">
-      {#if selectedLog?.errorLog}
-        <pre class="logPre">{selectedLog.errorLog}</pre>
+      {#if selectedLog && parseErrors(selectedLog.errorsJson).length > 0}
+        <div class="logErrorsList">
+          {#each parseErrors(selectedLog.errorsJson) as err}
+            <pre class="logPre">{err}</pre>
+          {/each}
+        </div>
       {:else}
         <p>No error details recorded for this run.</p>
       {/if}
@@ -171,20 +230,46 @@
     font-size: var(--smallFontSize);
   }
 
+  .countDelta {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .addCount {
+    color: var(--successColor);
+  }
+
+  .removeCount {
+    color: var(--warningColor);
+  }
+
+  .reviewQueued {
+    color: var(--warningColor);
+    font-weight: 600;
+  }
+
   .muted {
     color: var(--disabledColor);
   }
 
+  .logErrorsList {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
   .logPre {
     background-color: var(--pageBackground);
-    padding: 15px;
+    padding: 12px;
     border-radius: 4px;
     color: var(--dangerColor);
     font-family: var(--monoSpaceFontFamily);
     font-size: var(--smallFontSize);
     overflow-x: auto;
     white-space: pre-wrap;
-    max-height: 400px;
+    max-height: 250px;
     border: 1px solid var(--borderColor);
+    margin: 0;
   }
 </style>

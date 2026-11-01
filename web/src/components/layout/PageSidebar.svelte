@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import {
+    Library,
     RefreshCw,
     Activity,
     Settings,
@@ -21,6 +22,7 @@
   }
 
   // Determine parent section
+  $: isLibrary = currentRoute === '/library';
   $: isSyncParent = currentRoute === '/' || currentRoute === '/staged' || currentRoute === '/overrides';
   $: isActivityParent = currentRoute.startsWith('/activity');
   $: isSettingsParent = currentRoute.startsWith('/settings');
@@ -123,7 +125,19 @@
       {/if}
     </div>
 
-    <!-- 3. Settings -->
+    <!-- 3. Library -->
+    <div class="item {isLibrary ? 'isActiveItem' : ''}">
+      <a
+        href="{urlBase}/library"
+        class="link {isLibrary ? 'isActiveLink' : ''}"
+        on:click|preventDefault={() => navigate('/library')}
+      >
+        <span class="iconContainer"><Library size={16} /></span>
+        <span class="title">Library</span>
+      </a>
+    </div>
+
+    <!-- 4. Settings -->
     <div class="item {isSettingsParent ? 'isActiveItem' : ''}">
       <a
         href="{urlBase}/settings/general"

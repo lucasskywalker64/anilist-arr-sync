@@ -6,24 +6,38 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"strings"
 )
 
 // Config represents the application configuration matching Servarr conventions.
 type Config struct {
 	// Server
-	BindAddress string `xml:"BindAddress"`
-	Port        int    `xml:"Port"`
-	URLBase     string `xml:"UrlBase"`
-	EnableSsl   bool   `xml:"EnableSsl"`
-	SslPort     int    `xml:"SslPort"`
-	SslCertPath string `xml:"SslCertPath"`
-	SslKeyPath  string `xml:"SslKeyPath"`
+	BindAddress    string `xml:"BindAddress"`
+	Port           int    `xml:"Port"`
+	URLBase        string `xml:"UrlBase"`
+	AllowedHosts   string `xml:"AllowedHosts"`
+	ApplicationURL string `xml:"ApplicationUrl"`
+	EnableSsl      bool   `xml:"EnableSsl"`
+	SslPort        int    `xml:"SslPort"`
+	SslCertPath    string `xml:"SslCertPath"`
+	SslKeyPath     string `xml:"SslKeyPath"`
 
 	// Auth
 	AuthenticationMethod   string `xml:"AuthenticationMethod"`
 	AuthenticationRequired string `xml:"AuthenticationRequired"`
 	APIKey                 string `xml:"ApiKey"`
+	TrustedNetworks        string `xml:"TrustedNetworks"`
+
+	// Proxy
+	UseProxy                  bool   `xml:"UseProxy"`
+	ProxyType                 string `xml:"ProxyType"`
+	ProxyHostname             string `xml:"ProxyHostname"`
+	ProxyPort                 int    `xml:"ProxyPort"`
+	ProxyUsername             string `xml:"ProxyUsername"`
+	ProxyPassword             string `xml:"ProxyPassword"`
+	ProxyIgnoredAddresses     string `xml:"ProxyIgnoredAddresses"`
+	ProxyBypassLocalAddresses bool   `xml:"ProxyBypassLocalAddresses"`
 
 	// Log
 	LogLevel        string `xml:"LogLevel"`
@@ -37,8 +51,14 @@ type Config struct {
 	EnableDesktopNotifications bool   `xml:"EnableDesktopNotifications"`
 
 	// Update
+	UpdateBranch        string `xml:"UpdateBranch"`
 	UpdateAutomatically bool   `xml:"UpdateAutomatically"`
 	UpdateMechanism     string `xml:"UpdateMechanism"`
+
+	// Backup
+	BackupFolder    string `xml:"BackupFolder"`
+	BackupInterval  int    `xml:"BackupInterval"`
+	BackupRetention int    `xml:"BackupRetention"`
 
 	// Storage
 	DatabasePath string `xml:"DatabasePath"`
@@ -79,6 +99,8 @@ func NewDefault() *Config {
 		BindAddress:                "0.0.0.0",
 		Port:                       7171,
 		URLBase:                    "",
+		AllowedHosts:               "*",
+		ApplicationURL:             "",
 		EnableSsl:                  false,
 		SslPort:                    7272,
 		SslCertPath:                "",
@@ -86,15 +108,28 @@ func NewDefault() *Config {
 		AuthenticationMethod:       "Forms",
 		AuthenticationRequired:     "DisabledForLocalAddresses",
 		APIKey:                     "",
+		TrustedNetworks:            "127.0.0.1/32,::1/128,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8",
+		UseProxy:                   false,
+		ProxyType:                  "Http",
+		ProxyHostname:              "",
+		ProxyPort:                  8080,
+		ProxyUsername:              "",
+		ProxyPassword:              "",
+		ProxyIgnoredAddresses:      "",
+		ProxyBypassLocalAddresses:  true,
 		LogLevel:                   "Info",
 		ConsoleLogLevel:            "Info",
-		LogSizeLimit:               10,
+		LogSizeLimit:               1,
 		LogRotate:                  5,
 		InstanceName:               "AniList Arr Sync",
 		LaunchBrowser:              true,
 		EnableDesktopNotifications: false,
-		UpdateAutomatically:        true,
-		UpdateMechanism:            "BuiltIn",
+		UpdateBranch:               "main",
+		UpdateAutomatically:        false,
+		UpdateMechanism:            "Docker",
+		BackupFolder:               "Backups",
+		BackupInterval:             7,
+		BackupRetention:            28,
 		DatabasePath:               "sync.db",
 		AniListUsername:            "",
 		AniListTvStatus:            "CURRENT",
@@ -140,15 +175,33 @@ func (c *Config) Validate() error {
 	}
 
 	switch c.AuthenticationMethod {
-	case "Forms", "External":
+	case "Forms", "Basic":
 	default:
-		check(false, "AuthenticationMethod must be Forms or External, got %q", c.AuthenticationMethod)
+		check(false, "AuthenticationMethod must be Forms or Basic, got %q", c.AuthenticationMethod)
 	}
 
 	switch c.AuthenticationRequired {
 	case "Enabled", "DisabledForLocalAddresses":
 	default:
 		check(false, "AuthenticationRequired must be Enabled or DisabledForLocalAddresses, got %q", c.AuthenticationRequired)
+	}
+
+	if strings.TrimSpace(c.TrustedNetworks) != "" {
+		for _, part := range strings.Split(c.TrustedNetworks, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if !strings.Contains(part, "/") {
+				if ip := net.ParseIP(part); ip == nil {
+					check(false, "TrustedNetworks contains invalid IP address: %q", part)
+				}
+			} else {
+				if _, _, err := net.ParseCIDR(part); err != nil {
+					check(false, "TrustedNetworks contains invalid CIDR %q: %v", part, err)
+				}
+			}
+		}
 	}
 
 	check(isValidLogLevel(c.LogLevel), "LogLevel must be Trace, Debug, Info, Warn, or Error, got %q", c.LogLevel)

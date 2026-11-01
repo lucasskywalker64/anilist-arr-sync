@@ -16,7 +16,7 @@ func TestApplyEnv_Overrides(t *testing.T) {
 		"ANILIST_SYNC__SERVER__ENABLESSL=true",
 		"ANILIST_SYNC__SERVER__SSLCERTPATH=/certs/app.crt",
 		"ANILIST_SYNC__SERVER__SSLKEYPATH=/certs/app.key",
-		"ANILIST_SYNC__AUTH__METHOD=External",
+		"ANILIST_SYNC__AUTH__METHOD=Basic",
 		"ANILIST_SYNC__AUTH__APIKEY=my-secret-token",
 		"ANILIST_SYNC__LOG__LEVEL=Debug",
 		"ANILIST_SYNC__LOG__SIZELIMIT=50",
@@ -44,7 +44,7 @@ func TestApplyEnv_Overrides(t *testing.T) {
 	check("EnableSsl", cfg.EnableSsl, true)
 	check("SslCertPath", cfg.SslCertPath, "/certs/app.crt")
 	check("SslKeyPath", cfg.SslKeyPath, "/certs/app.key")
-	check("AuthenticationMethod", cfg.AuthenticationMethod, "External")
+	check("AuthenticationMethod", cfg.AuthenticationMethod, "Basic")
 	check("APIKey", cfg.APIKey, "my-secret-token")
 	check("LogLevel", cfg.LogLevel, "Debug")
 	check("LogSizeLimit", cfg.LogSizeLimit, 50)

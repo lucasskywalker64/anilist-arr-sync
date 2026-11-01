@@ -75,27 +75,91 @@ func CheckPassword(password, hash string) bool {
 	return false
 }
 
+// ParseCIDRs parses a comma-separated list of IP addresses and CIDR networks.
+// Single IP addresses are automatically expanded to /32 (IPv4) or /128 (IPv6).
+func ParseCIDRs(raw string) ([]*net.IPNet, error) {
+	var nets []*net.IPNet
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if !strings.Contains(part, "/") {
+			ip := net.ParseIP(part)
+			if ip == nil {
+				return nil, fmt.Errorf("invalid IP address %q", part)
+			}
+			if ip.To4() != nil {
+				part += "/32"
+			} else {
+				part += "/128"
+			}
+		}
+		_, ipNet, err := net.ParseCIDR(part)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CIDR %q: %w", part, err)
+		}
+		nets = append(nets, ipNet)
+	}
+	return nets, nil
+}
+
+// IsLocalIP reports whether ip belongs to loopback, private, or link-local ranges.
+func IsLocalIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+}
+
 // IsLocalAddress checks if the given host or host:port string originates from a local or private network.
 func IsLocalAddress(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		host = addr
 	}
-
-	// Clean IPv6 brackets if present
 	host = strings.TrimPrefix(host, "[")
 	host = strings.TrimSuffix(host, "]")
+	return IsLocalIP(net.ParseIP(host))
+}
 
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return false
+// ResolveClientIP resolves the client IP from remoteAddr and X-Forwarded-For headers.
+// X-Forwarded-For is only evaluated when remoteAddr originates from one of the trusted networks.
+func ResolveClientIP(remoteAddr, xForwardedFor string, trustedNets []*net.IPNet) net.IP {
+	remoteHost, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		remoteHost = remoteAddr
+	}
+	remoteHost = strings.TrimPrefix(remoteHost, "[")
+	remoteHost = strings.TrimSuffix(remoteHost, "]")
+
+	remoteIP := net.ParseIP(remoteHost)
+	if remoteIP == nil {
+		return nil
 	}
 
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return true
+	trusted := false
+	for _, netBlock := range trustedNets {
+		if netBlock != nil && netBlock.Contains(remoteIP) {
+			trusted = true
+			break
+		}
 	}
 
-	return false
+	if trusted && xForwardedFor != "" {
+		parts := strings.Split(xForwardedFor, ",")
+		first := strings.TrimSpace(parts[0])
+		if h, _, err := net.SplitHostPort(first); err == nil {
+			first = h
+		}
+		first = strings.TrimPrefix(first, "[")
+		first = strings.TrimSuffix(first, "]")
+		if clientIP := net.ParseIP(first); clientIP != nil {
+			return clientIP
+		}
+	}
+
+	return remoteIP
 }
 
 // IsLoopbackAddress checks if the given host or host:port string is a loopback address.

@@ -118,8 +118,8 @@ func TestConfigEndpoints(t *testing.T) {
 	if err := json.Unmarshal(getRec.Body.Bytes(), &returnedCfg); err != nil {
 		t.Fatalf("failed to parse config JSON: %v", err)
 	}
-	if returnedCfg["apiKey"] == "secret-key-to-mask" {
-		t.Errorf("expected apiKey to be sanitized or masked, got raw key")
+	if returnedCfg["apiKey"] != "secret-key-to-mask" {
+		t.Errorf("expected apiKey to be returned for viewing and copying, got %v", returnedCfg["apiKey"])
 	}
 
 	// 2. PUT /api/v1/config updates settings

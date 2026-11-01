@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import Page from './components/layout/Page.svelte';
   import SyncDashboard from './components/views/SyncDashboard.svelte';
+  import LibraryView from './components/views/LibraryView.svelte';
   import StagedPreview from './components/views/StagedPreview.svelte';
   import OverridesManager from './components/views/OverridesManager.svelte';
   import ReviewQueue from './components/views/ReviewQueue.svelte';
@@ -141,16 +142,18 @@
   <Page
     {currentRoute}
     {instanceName}
-    username={currentUser?.username || ''}
-    isAuthenticated={!!currentUser?.authenticated}
     {isSyncing}
     reviewCount={reviewItems.length}
     stagedCount={stagedActions.length}
     on:navigate={(e) => navigate(e.detail)}
-    on:logout={handleLogout}
   >
     <!-- View Switcher -->
-    {#if currentRoute === '/staged'}
+    {#if currentRoute === '/library'}
+      <LibraryView
+        on:navigate={(e) => navigate(e.detail)}
+        on:refresh={loadGlobalData}
+      />
+    {:else if currentRoute === '/staged'}
       <StagedPreview
         bind:stagedActions
         on:refresh={loadGlobalData}

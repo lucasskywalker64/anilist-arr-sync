@@ -333,53 +333,6 @@ func TestReviewResolve_Validation(t *testing.T) {
 	}
 }
 
-func TestExternalAuth_NoBypassWhenDisabledForLocalAddresses(t *testing.T) {
-	cfg := config.NewDefault()
-	cfg.AuthenticationMethod = "External"
-	cfg.AuthenticationRequired = "DisabledForLocalAddresses"
-	cfg.APIKey = "secret-key"
-
-	srv := &Server{
-		cfg:      cfg,
-		sessions: NewSessionStore(1 * time.Hour),
-	}
-
-	var capturedUser string
-	handler := srv.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if u, ok := r.Context().Value(userContextKey).(string); ok {
-			capturedUser = u
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	// 1. Proxied request from local IP without external user header receives 401 (not bypassed as local_user)
-	{
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
-		req.RemoteAddr = "127.0.0.1:54321"
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("expected 401 when external header is missing despite local IP, got %d", rec.Code)
-		}
-	}
-
-	// 2. Proxied request from local IP with Remote-User receives 200 and captures username
-	{
-		capturedUser = ""
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
-		req.RemoteAddr = "127.0.0.1:54321"
-		req.Header.Set("Remote-User", "authelia_admin")
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Errorf("expected 200 with valid Remote-User header, got %d", rec.Code)
-		}
-		if capturedUser != "authelia_admin" {
-			t.Errorf("expected user 'authelia_admin', got %q", capturedUser)
-		}
-	}
-}
-
 func TestReviewResolve_NullableZeroIDs(t *testing.T) {
 	db := newTestStorage(t)
 	cfg := config.NewDefault()

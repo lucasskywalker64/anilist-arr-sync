@@ -133,4 +133,114 @@ describe('API Client', () => {
     expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/ignored/123');
     expect(fetchMock.mock.calls[1][1].method).toBe('DELETE');
   });
+
+  it('fetches sync status and history correctly', async () => {
+    const statusPayload = {
+      running: false,
+      lastReport: {
+        runId: 10,
+        durationMs: 1500,
+        status: 'SUCCESS',
+        itemsScanned: 42,
+        addedRadarr: 2,
+        monitoredSonarr: 5,
+        unmonitoredSonarr: 0,
+        unmonitoredRadarr: 0,
+        queuedReview: 1,
+        errors: [],
+        trigger: 'MANUAL_WEB',
+        startTime: '2026-10-31T01:00:00Z',
+      },
+    };
+    const historyPayload = [
+      {
+        id: 1,
+        runTimestamp: '2026-10-31T01:00:00Z',
+        durationMs: 1500,
+        status: 'SUCCESS',
+        itemsScanned: 42,
+        addedRadarr: 2,
+        monitoredSonarr: 5,
+        unmonitoredSonarr: 0,
+        unmonitoredRadarr: 0,
+        queuedReview: 1,
+        triggerType: 'MANUAL_WEB',
+      },
+    ];
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => statusPayload,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => historyPayload,
+      });
+    globalThis.fetch = fetchMock;
+
+    const status = await api.getSyncStatus();
+    expect(status.isSyncing).toBe(false);
+    expect(status.lastSync?.itemsScanned).toBe(42);
+    expect(status.lastSync?.monitoredSonarr).toBe(5);
+
+    const history = await api.getSyncHistory();
+    expect(history).toHaveLength(1);
+    expect(history[0].id).toBe(1);
+    expect(history[0].itemsScanned).toBe(42);
+  });
+
+  it('fetches library items with query parameters and stats', async () => {
+    const libraryData = [
+      {
+        anilistId: 101,
+        mediaType: 'SERIES',
+        format: 'TV',
+        titleRomaji: 'Attack on Titan',
+        anilistStatus: 'CURRENT',
+        targetService: 'SONARR',
+        monitoredStatus: 'MONITORED',
+        lastSyncedAt: '2026-10-31T01:00:00Z',
+        updatedAt: '2026-10-31T01:00:00Z',
+      },
+    ];
+    const statsData = {
+      total: 10,
+      monitored: 8,
+      unmonitored: 2,
+      sonarrCount: 7,
+      radarrCount: 3,
+      watchingCount: 4,
+      planningCount: 3,
+      completedCount: 3,
+    };
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => libraryData,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => statsData,
+      });
+    globalThis.fetch = fetchMock;
+
+    const items = await api.getLibrary({ status: 'CURRENT', service: 'SONARR', search: 'Titan' });
+    expect(items).toHaveLength(1);
+    expect(items[0].anilistId).toBe(101);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/library?status=CURRENT&service=SONARR&search=Titan');
+
+    const stats = await api.getLibraryStats();
+    expect(stats.total).toBe(10);
+    expect(stats.monitored).toBe(8);
+  });
 });

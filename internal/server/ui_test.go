@@ -109,7 +109,7 @@ func TestEmbeddedSPA_DeliveryAndRouting(t *testing.T) {
 	})
 
 	t.Run("Client-side route falls back to index.html", func(t *testing.T) {
-		routes := []string{"/staged", "/overrides", "/activity/review", "/activity/history", "/activity/blocklist", "/activity/ignored", "/settings/general", "/settings/sync", "/settings/servarr", "/settings/connect", "/system/status", "/system/backup", "/system/updates"}
+		routes := []string{"/library", "/staged", "/overrides", "/activity/review", "/activity/history", "/activity/blocklist", "/activity/ignored", "/settings/general", "/settings/sync", "/settings/servarr", "/settings/connect", "/system/status", "/system/backup", "/system/updates"}
 		for _, route := range routes {
 			req := httptest.NewRequest(http.MethodGet, route, nil)
 			rec := httptest.NewRecorder()
@@ -125,6 +125,36 @@ func TestEmbeddedSPA_DeliveryAndRouting(t *testing.T) {
 			if !strings.Contains(rec.Body.String(), "<div id=\"app\">") {
 				t.Errorf("route %s: expected body to contain app div", route)
 			}
+			if !strings.Contains(rec.Body.String(), "<base href=\"/\" />") {
+				t.Errorf("route %s: expected body to contain base tag", route)
+			}
+		}
+	})
+
+	t.Run("Nested path asset request resolves static asset", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/activity/assets/bundle.js", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d", rec.Code)
+		}
+		body, _ := io.ReadAll(rec.Body)
+		if string(body) != "console.log('spa bundle loaded');" {
+			t.Errorf("unexpected body content: %s", string(body))
+		}
+	})
+
+	t.Run("Missing static asset returns 404, never index.html", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/assets/missing.js", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected status 404, got %d", rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "<div id=\"app\">") {
+			t.Errorf("missing asset should return 404, not index.html")
 		}
 	})
 

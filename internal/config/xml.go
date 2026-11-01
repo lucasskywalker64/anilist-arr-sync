@@ -9,17 +9,19 @@ import (
 type xmlConfig struct {
 	XMLName xml.Name `xml:"Config"`
 
-	BindAddress string `xml:"BindAddress"`
-	Port        int    `xml:"Port"`
-	URLBase     string `xml:"UrlBase"`
-	EnableSsl   string `xml:"EnableSsl"`
-	SslPort     int    `xml:"SslPort"`
-	SslCertPath string `xml:"SslCertPath"`
-	SslKeyPath  string `xml:"SslKeyPath"`
+	BindAddress  string `xml:"BindAddress"`
+	Port         int    `xml:"Port"`
+	URLBase      string `xml:"UrlBase"`
+	AllowedHosts string `xml:"AllowedHosts"`
+	EnableSsl    string `xml:"EnableSsl"`
+	SslPort      int    `xml:"SslPort"`
+	SslCertPath  string `xml:"SslCertPath"`
+	SslKeyPath   string `xml:"SslKeyPath"`
 
 	AuthenticationMethod   string `xml:"AuthenticationMethod"`
 	AuthenticationRequired string `xml:"AuthenticationRequired"`
 	APIKey                 string `xml:"ApiKey"`
+	TrustedNetworks        string `xml:"TrustedNetworks"`
 
 	LogLevel        string `xml:"LogLevel"`
 	ConsoleLogLevel string `xml:"ConsoleLogLevel"`
@@ -89,6 +91,7 @@ func (c *Config) ToXML() ([]byte, error) {
 		BindAddress:                c.BindAddress,
 		Port:                       c.Port,
 		URLBase:                    c.URLBase,
+		AllowedHosts:               c.AllowedHosts,
 		EnableSsl:                  formatBool(c.EnableSsl),
 		SslPort:                    c.SslPort,
 		SslCertPath:                c.SslCertPath,
@@ -96,6 +99,7 @@ func (c *Config) ToXML() ([]byte, error) {
 		AuthenticationMethod:       c.AuthenticationMethod,
 		AuthenticationRequired:     c.AuthenticationRequired,
 		APIKey:                     c.APIKey,
+		TrustedNetworks:            c.TrustedNetworks,
 		LogLevel:                   c.LogLevel,
 		ConsoleLogLevel:            c.ConsoleLogLevel,
 		LogSizeLimit:               c.LogSizeLimit,

@@ -3,6 +3,7 @@ import type {
   OverrideItem,
   StagedAction,
   SyncStatus,
+  SyncReport,
   SyncHistoryItem,
   AppConfig,
   BackupItem,
@@ -12,6 +13,8 @@ import type {
   Candidate,
   MappingResolution,
   IgnoredItem,
+  LibraryItem,
+  LibraryStats,
 } from './types';
 
 import { writable } from 'svelte/store';
@@ -164,7 +167,11 @@ export const api = {
 
   // Sync
   async getSyncStatus(): Promise<SyncStatus> {
-    return request('/api/v1/sync/status');
+    const res = await request<{ running: boolean; lastReport?: SyncReport | null }>('/api/v1/sync/status');
+    return {
+      isSyncing: !!res.running,
+      lastSync: res.lastReport || null,
+    };
   },
 
   async startSync(): Promise<{ status: string }> {
@@ -216,6 +223,32 @@ export const api = {
     return request(`/api/v1/ignored/${anilistId}`, {
       method: 'DELETE',
     });
+  },
+
+  // Library
+  async getLibrary(params?: {
+    status?: string;
+    service?: string;
+    monitored?: string;
+    search?: string;
+    sort?: string;
+    order?: string;
+  }): Promise<LibraryItem[]> {
+    const searchParams = new URLSearchParams();
+    if (params) {
+      if (params.status && params.status !== 'all') searchParams.set('status', params.status);
+      if (params.service && params.service !== 'all') searchParams.set('service', params.service);
+      if (params.monitored && params.monitored !== 'all') searchParams.set('monitored', params.monitored);
+      if (params.search) searchParams.set('search', params.search);
+      if (params.sort) searchParams.set('sort', params.sort);
+      if (params.order) searchParams.set('order', params.order);
+    }
+    const qs = searchParams.toString();
+    return request<LibraryItem[]>(`/api/v1/library${qs ? `?${qs}` : ''}`);
+  },
+
+  async getLibraryStats(): Promise<LibraryStats> {
+    return request<LibraryStats>('/api/v1/library/stats');
   },
 
   // Overrides
@@ -298,20 +331,79 @@ export const api = {
 
   // Notifications
   async getNotifications(): Promise<NotificationItem[]> {
-    return request('/api/v1/notifications');
+    const list = await request<any[]>('/api/v1/notifications');
+    return (list || []).map((item) => {
+      let settings: Record<string, unknown> = {};
+      if (item.configJson) {
+        try {
+          settings = JSON.parse(item.configJson);
+          if (settings.url && !settings.webhookUrl) {
+            settings.webhookUrl = settings.url;
+          }
+        } catch {}
+      } else if (item.settings) {
+        settings = item.settings;
+      }
+      const provider = (item.provider || item.type || 'DISCORD').toUpperCase();
+      return {
+        ...item,
+        type: provider as 'DISCORD' | 'WEBHOOK',
+        provider,
+        onAdded: item.onAdded ?? true,
+        onReview: item.onReview ?? true,
+        onError: item.onError ?? true,
+        onComplete: item.onComplete ?? false,
+        onUpdate: item.onUpdate ?? true,
+        onSyncStart: item.onAdded ?? item.onSyncStart ?? true,
+        onSyncSuccess: item.onComplete ?? item.onSyncSuccess ?? false,
+        onSyncFailure: item.onError ?? item.onSyncFailure ?? true,
+        onReviewQueueNeeded: item.onReview ?? item.onReviewQueueNeeded ?? true,
+        settings,
+      };
+    });
   },
 
   async createNotification(notif: Partial<NotificationItem>): Promise<{ status: string; id?: number }> {
+    const provider = (notif.provider || notif.type || 'DISCORD').toUpperCase();
+    const webhookUrl = (notif.settings?.webhookUrl || notif.settings?.url || '') as string;
+    const payload = {
+      name: notif.name,
+      provider,
+      type: provider,
+      configJson: notif.configJson || JSON.stringify({ url: webhookUrl }),
+      settings: notif.settings || { webhookUrl },
+      url: webhookUrl,
+      onAdded: notif.onAdded ?? notif.onSyncStart ?? true,
+      onReview: notif.onReview ?? notif.onReviewQueueNeeded ?? true,
+      onError: notif.onError ?? notif.onSyncFailure ?? true,
+      onComplete: notif.onComplete ?? notif.onSyncSuccess ?? false,
+      onUpdate: notif.onUpdate ?? true,
+    };
     return request('/api/v1/notifications', {
       method: 'POST',
-      body: JSON.stringify(notif),
+      body: JSON.stringify(payload),
     });
   },
 
   async updateNotification(id: number, notif: Partial<NotificationItem>): Promise<{ status: string }> {
+    const provider = (notif.provider || notif.type || 'DISCORD').toUpperCase();
+    const webhookUrl = (notif.settings?.webhookUrl || notif.settings?.url || '') as string;
+    const payload = {
+      name: notif.name,
+      provider,
+      type: provider,
+      configJson: notif.configJson || JSON.stringify({ url: webhookUrl }),
+      settings: notif.settings || { webhookUrl },
+      url: webhookUrl,
+      onAdded: notif.onAdded ?? notif.onSyncStart,
+      onReview: notif.onReview ?? notif.onReviewQueueNeeded,
+      onError: notif.onError ?? notif.onSyncFailure,
+      onComplete: notif.onComplete ?? notif.onSyncSuccess,
+      onUpdate: notif.onUpdate,
+    };
     return request(`/api/v1/notifications/${id}`, {
       method: 'PUT',
-      body: JSON.stringify(notif),
+      body: JSON.stringify(payload),
     });
   },
 
@@ -322,9 +414,17 @@ export const api = {
   },
 
   async testNotificationPayload(payload: { type: string; settings: Record<string, unknown> }): Promise<{ status: string; message?: string }> {
+    const provider = (payload.type || 'DISCORD').toUpperCase();
+    const webhookUrl = (payload.settings?.webhookUrl || payload.settings?.url || '') as string;
     return request('/api/v1/notifications/test', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        provider,
+        type: provider,
+        configJson: JSON.stringify({ url: webhookUrl }),
+        settings: payload.settings,
+        url: webhookUrl,
+      }),
     });
   },
 

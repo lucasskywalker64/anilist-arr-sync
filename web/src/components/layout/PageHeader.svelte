@@ -1,17 +1,8 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  import { RotateCw, LogOut, User } from 'lucide-svelte';
+  import { RotateCw } from 'lucide-svelte';
 
   export let instanceName = 'AniList-Arr-Sync';
-  export let username = '';
   export let isSyncing = false;
-  export let isAuthenticated = false;
-
-  const dispatch = createEventDispatcher<{ logout: void }>();
-
-  function handleLogout() {
-    dispatch('logout');
-  }
 </script>
 
 <header class="header">
@@ -31,16 +22,6 @@
         <RotateCw size={16} class="spinning" />
         <span class="syncText">Syncing...</span>
       </div>
-    {/if}
-
-    {#if isAuthenticated && username}
-      <div class="userContainer" title="Authenticated user">
-        <User size={16} />
-        <span class="userName">{username}</span>
-      </div>
-      <button class="logoutBtn" on:click={handleLogout} title="Logout">
-        <LogOut size={16} />
-      </button>
     {/if}
   </div>
 </header>
@@ -107,36 +88,5 @@
     to {
       transform: rotate(360deg);
     }
-  }
-
-  .userContainer {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: var(--defaultFontSize);
-    color: var(--textColor);
-  }
-
-  .userName {
-    color: var(--white);
-    font-weight: 500;
-  }
-
-  .logoutBtn {
-    background: transparent;
-    border: none;
-    color: var(--textColor);
-    cursor: pointer;
-    padding: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 4px;
-    transition: color 150ms ease, background-color 150ms ease;
-  }
-
-  .logoutBtn:hover {
-    color: var(--dangerColor);
-    background-color: rgba(255, 255, 255, 0.05);
   }
 </style>

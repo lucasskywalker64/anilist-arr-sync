@@ -55,6 +55,20 @@
     }
   }
 
+  function formatDuration(ms?: number): string {
+    if (!ms || ms < 1000) return `${ms || 0}ms`;
+    return `${(ms / 1000).toFixed(1)}s`;
+  }
+
+  function formatTrigger(trigger?: string): string {
+    switch (trigger) {
+      case 'SCHEDULED': return 'Scheduled';
+      case 'MANUAL_WEB': return 'Manual';
+      case 'CLI': return 'CLI';
+      default: return trigger || 'Manual';
+    }
+  }
+
   onMount(() => {
     loadData();
     const interval = setInterval(() => {
@@ -119,7 +133,12 @@
               {#if isSyncing}
                 <span>Processing AniList library entries and comparing against Servarr...</span>
               {:else if syncStatus?.lastSync}
-                <span>Last synchronized: {new Date(syncStatus.lastSync.startedAt).toLocaleString()}</span>
+                <span>
+                  Last synchronized: {syncStatus.lastSync.startTime ? new Date(syncStatus.lastSync.startTime).toLocaleString() : 'Recently'}
+                  {#if syncStatus.lastSync.durationMs}
+                    ({formatDuration(syncStatus.lastSync.durationMs)})
+                  {/if}
+                </span>
                 <span class="statusBadge">
                   <Label
                     kind={syncStatus.lastSync.status === 'SUCCESS' ? 'success' : syncStatus.lastSync.status === 'FAILED' ? 'danger' : 'warning'}
@@ -185,30 +204,31 @@
       {#if syncStatus?.lastSync}
         <FieldSet legend="Last Execution Summary">
           <DescriptionList>
-            <dt>Started At</dt>
-            <dd>{new Date(syncStatus.lastSync.startedAt).toLocaleString()}</dd>
+            <dt>Executed At</dt>
+            <dd>{syncStatus.lastSync.startTime ? new Date(syncStatus.lastSync.startTime).toLocaleString() : '-'}</dd>
 
-            {#if syncStatus.lastSync.completedAt}
-              <dt>Completed At</dt>
-              <dd>{new Date(syncStatus.lastSync.completedAt).toLocaleString()}</dd>
-            {/if}
+            <dt>Duration</dt>
+            <dd>{formatDuration(syncStatus.lastSync.durationMs)}</dd>
 
-            <dt>Total Titles</dt>
-            <dd>{syncStatus.lastSync.totalTitles}</dd>
+            <dt>Trigger</dt>
+            <dd>{formatTrigger(syncStatus.lastSync.trigger)}</dd>
 
-            <dt>Matched Titles</dt>
-            <dd>{syncStatus.lastSync.matchedTitles}</dd>
+            <dt>Items Scanned</dt>
+            <dd>{syncStatus.lastSync.itemsScanned}</dd>
 
-            <dt>Unresolved Titles</dt>
-            <dd>{syncStatus.lastSync.unresolvedTitles}</dd>
+            <dt>Sonarr Updates</dt>
+            <dd>+{syncStatus.lastSync.monitoredSonarr} monitored, -{syncStatus.lastSync.unmonitoredSonarr} unmonitored</dd>
 
-            <dt>Staged Actions</dt>
-            <dd>{syncStatus.lastSync.stagedActions}</dd>
+            <dt>Radarr Updates</dt>
+            <dd>+{syncStatus.lastSync.addedRadarr} added, -{syncStatus.lastSync.unmonitoredRadarr} unmonitored</dd>
 
-            {#if syncStatus.lastSync.executionErrors && syncStatus.lastSync.executionErrors.length > 0}
+            <dt>Review Queue</dt>
+            <dd>{syncStatus.lastSync.queuedReview} queued</dd>
+
+            {#if syncStatus.lastSync.errors && syncStatus.lastSync.errors.length > 0}
               <dt>Errors</dt>
               <dd>
-                {#each syncStatus.lastSync.executionErrors as err}
+                {#each syncStatus.lastSync.errors as err}
                   <div class="errorItem">{err}</div>
                 {/each}
               </dd>

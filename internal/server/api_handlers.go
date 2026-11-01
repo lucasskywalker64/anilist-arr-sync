@@ -194,11 +194,8 @@ func (s *Server) handleDeleteOverride(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetConfig returns the sanitized runtime configuration.
-func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	sanitized := s.Config()
-	if sanitized.APIKey != "" {
-		sanitized.APIKey = "******"
-	}
 	if sanitized.RadarrAPIKey != "" {
 		sanitized.RadarrAPIKey = "******"
 	}
@@ -206,29 +203,55 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 		sanitized.SonarrAPIKey = "******"
 	}
 
+	var adminUsername string
+	if s.db != nil {
+		_ = s.db.Read(r.Context(), func(ctx context.Context, q storage.Querier) error {
+			return q.QueryRowContext(ctx, "SELECT username FROM users ORDER BY id ASC LIMIT 1;").Scan(&adminUsername)
+		})
+	}
+
 	// serialize to JSON map
 	m := map[string]any{
-		"bindAddress":            sanitized.BindAddress,
-		"port":                   sanitized.Port,
-		"urlBase":                sanitized.URLBase,
-		"enableSsl":              sanitized.EnableSsl,
-		"sslPort":                sanitized.SslPort,
-		"authenticationMethod":   sanitized.AuthenticationMethod,
-		"authenticationRequired": sanitized.AuthenticationRequired,
-		"apiKey":                 sanitized.APIKey,
-		"logLevel":               sanitized.LogLevel,
-		"consoleLogLevel":        sanitized.ConsoleLogLevel,
-		"instanceName":           sanitized.InstanceName,
-		"databasePath":           sanitized.DatabasePath,
-		"aniListUsername":        sanitized.AniListUsername,
-		"radarrUrl":              sanitized.RadarrURL,
-		"sonarrUrl":              sanitized.SonarrURL,
-		"tagName":                sanitized.TagName,
-		"syncIntervalHours":      sanitized.SyncIntervalHours,
-		"dateToleranceDays":      sanitized.DateToleranceDays,
-		"confidenceThreshold":    sanitized.ConfidenceThreshold,
-		"unmonitorDropped":       sanitized.UnmonitorDropped,
-		"firstRunDryRun":         sanitized.FirstRunDryRun,
+		"bindAddress":               sanitized.BindAddress,
+		"port":                      sanitized.Port,
+		"urlBase":                   sanitized.URLBase,
+		"allowedHosts":              sanitized.AllowedHosts,
+		"applicationUrl":            sanitized.ApplicationURL,
+		"enableSsl":                 sanitized.EnableSsl,
+		"sslPort":                   sanitized.SslPort,
+		"authenticationMethod":      sanitized.AuthenticationMethod,
+		"authenticationRequired":    sanitized.AuthenticationRequired,
+		"trustedNetworks":           sanitized.TrustedNetworks,
+		"apiKey":                    sanitized.APIKey,
+		"username":                  adminUsername,
+		"useProxy":                  sanitized.UseProxy,
+		"proxyType":                 sanitized.ProxyType,
+		"proxyHostname":             sanitized.ProxyHostname,
+		"proxyPort":                 sanitized.ProxyPort,
+		"proxyUsername":             sanitized.ProxyUsername,
+		"proxyPassword":             sanitized.ProxyPassword,
+		"proxyIgnoredAddresses":     sanitized.ProxyIgnoredAddresses,
+		"proxyBypassLocalAddresses": sanitized.ProxyBypassLocalAddresses,
+		"logLevel":                  sanitized.LogLevel,
+		"consoleLogLevel":           sanitized.ConsoleLogLevel,
+		"logSizeLimit":              sanitized.LogSizeLimit,
+		"instanceName":              sanitized.InstanceName,
+		"updateBranch":              sanitized.UpdateBranch,
+		"updateAutomatically":       sanitized.UpdateAutomatically,
+		"updateMechanism":           sanitized.UpdateMechanism,
+		"backupFolder":              sanitized.BackupFolder,
+		"backupInterval":            sanitized.BackupInterval,
+		"backupRetention":           sanitized.BackupRetention,
+		"databasePath":              sanitized.DatabasePath,
+		"aniListUsername":           sanitized.AniListUsername,
+		"radarrUrl":                 sanitized.RadarrURL,
+		"sonarrUrl":                 sanitized.SonarrURL,
+		"tagName":                   sanitized.TagName,
+		"syncIntervalHours":         sanitized.SyncIntervalHours,
+		"dateToleranceDays":         sanitized.DateToleranceDays,
+		"confidenceThreshold":       sanitized.ConfidenceThreshold,
+		"unmonitorDropped":          sanitized.UnmonitorDropped,
+		"firstRunDryRun":            sanitized.FirstRunDryRun,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -244,6 +267,10 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var newUsername, newPassword string
+	hasUsernameUpdate := false
+	hasPasswordUpdate := false
+
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
 
@@ -252,9 +279,127 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	// Apply known fields to copy
 	for k, v := range updates {
 		switch strings.ToLower(k) {
+		case "bindaddress":
+			if str, ok := v.(string); ok {
+				next.BindAddress = str
+			}
+		case "port":
+			if num, ok := v.(float64); ok {
+				next.Port = int(num)
+			}
+		case "urlbase":
+			if str, ok := v.(string); ok {
+				next.URLBase = str
+			}
+		case "allowedhosts":
+			if str, ok := v.(string); ok {
+				next.AllowedHosts = str
+			}
+		case "applicationurl":
+			if str, ok := v.(string); ok {
+				next.ApplicationURL = str
+			}
+		case "enablessl":
+			if b, ok := v.(bool); ok {
+				next.EnableSsl = b
+			}
+		case "sslport":
+			if num, ok := v.(float64); ok {
+				next.SslPort = int(num)
+			}
+		case "authenticationmethod":
+			if str, ok := v.(string); ok {
+				next.AuthenticationMethod = str
+			}
+		case "authenticationrequired":
+			if str, ok := v.(string); ok {
+				next.AuthenticationRequired = str
+			}
+		case "trustednetworks":
+			if str, ok := v.(string); ok {
+				next.TrustedNetworks = str
+			}
+		case "apikey":
+			if str, ok := v.(string); ok && str != "" && str != "******" {
+				next.APIKey = str
+			}
+		case "username":
+			if str, ok := v.(string); ok && strings.TrimSpace(str) != "" {
+				newUsername = strings.TrimSpace(str)
+				hasUsernameUpdate = true
+			}
+		case "password":
+			if str, ok := v.(string); ok && strings.TrimSpace(str) != "" {
+				newPassword = strings.TrimSpace(str)
+				hasPasswordUpdate = true
+			}
+		case "useproxy":
+			if b, ok := v.(bool); ok {
+				next.UseProxy = b
+			}
+		case "proxytype":
+			if str, ok := v.(string); ok {
+				next.ProxyType = str
+			}
+		case "proxyhostname":
+			if str, ok := v.(string); ok {
+				next.ProxyHostname = str
+			}
+		case "proxyport":
+			if num, ok := v.(float64); ok {
+				next.ProxyPort = int(num)
+			}
+		case "proxyusername":
+			if str, ok := v.(string); ok {
+				next.ProxyUsername = str
+			}
+		case "proxypassword":
+			if str, ok := v.(string); ok {
+				next.ProxyPassword = str
+			}
+		case "proxyignoredaddresses":
+			if str, ok := v.(string); ok {
+				next.ProxyIgnoredAddresses = str
+			}
+		case "proxybypasslocaladdresses":
+			if b, ok := v.(bool); ok {
+				next.ProxyBypassLocalAddresses = b
+			}
+		case "loglevel":
+			if str, ok := v.(string); ok {
+				next.LogLevel = str
+			}
+		case "logsizelimit":
+			if num, ok := v.(float64); ok {
+				next.LogSizeLimit = int(num)
+			}
 		case "instancename":
 			if str, ok := v.(string); ok {
 				next.InstanceName = str
+			}
+		case "updatebranch":
+			if str, ok := v.(string); ok {
+				next.UpdateBranch = str
+			}
+		case "updateautomatically":
+			if b, ok := v.(bool); ok {
+				next.UpdateAutomatically = b
+			}
+		case "updatemechanism":
+			if str, ok := v.(string); ok {
+				next.UpdateMechanism = str
+			}
+		case "backupfolder":
+			if str, ok := v.(string); ok {
+				next.BackupFolder = str
+			}
+		case "backupinterval":
+			if num, ok := v.(float64); ok {
+				next.BackupInterval = int(num)
+			}
+		case "backupretention":
+			if num, ok := v.(float64); ok {
+				next.BackupRetention = int(num)
 			}
 		case "syncintervalhours":
 			if num, ok := v.(float64); ok {
@@ -300,16 +445,66 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			if str, ok := v.(string); ok && str != "******" {
 				next.SonarrAPIKey = str
 			}
-		case "apikey":
-			if str, ok := v.(string); ok && str != "******" {
-				next.APIKey = str
-			}
 		}
 	}
 
 	if err := next.Validate(); err != nil {
 		s.writeJSONError(w, http.StatusBadRequest, "invalid configuration: "+err.Error())
 		return
+	}
+
+	newTrustedNets, err := ParseCIDRs(next.TrustedNetworks)
+	if err != nil {
+		s.writeJSONError(w, http.StatusBadRequest, "invalid trusted networks: "+err.Error())
+		return
+	}
+
+	// Update user credentials if requested
+	if (hasUsernameUpdate || hasPasswordUpdate) && s.db != nil {
+		err := s.db.Write(r.Context(), func(ctx context.Context, tx *sql.Tx) error {
+			var count int
+			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users;").Scan(&count); err != nil {
+				return err
+			}
+			if count == 0 {
+				if !hasUsernameUpdate {
+					newUsername = "admin"
+				}
+				if !hasPasswordUpdate {
+					newPassword = "admin"
+				}
+				hash, err := HashPassword(newPassword, "pbkdf2")
+				if err != nil {
+					return err
+				}
+				_, err = tx.ExecContext(ctx, "INSERT INTO users (username, password_hash) VALUES (?, ?);", newUsername, hash)
+				return err
+			}
+			if hasPasswordUpdate && hasUsernameUpdate {
+				hash, err := HashPassword(newPassword, "pbkdf2")
+				if err != nil {
+					return err
+				}
+				_, err = tx.ExecContext(ctx, "UPDATE users SET username = ?, password_hash = ? WHERE id = (SELECT id FROM users ORDER BY id ASC LIMIT 1);", newUsername, hash)
+				return err
+			} else if hasPasswordUpdate {
+				hash, err := HashPassword(newPassword, "pbkdf2")
+				if err != nil {
+					return err
+				}
+				_, err = tx.ExecContext(ctx, "UPDATE users SET password_hash = ? WHERE id = (SELECT id FROM users ORDER BY id ASC LIMIT 1);", hash)
+				return err
+			} else if hasUsernameUpdate {
+				_, err := tx.ExecContext(ctx, "UPDATE users SET username = ? WHERE id = (SELECT id FROM users ORDER BY id ASC LIMIT 1);", newUsername)
+				return err
+			}
+			return nil
+		})
+		if err != nil {
+			log.Printf("failed to update user credentials: %v", err)
+			s.writeJSONError(w, http.StatusInternalServerError, "failed to update user credentials")
+			return
+		}
 	}
 
 	if s.configPath != "" {
@@ -321,6 +516,8 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	*s.cfg = next
+	s.trustedNets = newTrustedNets
+	s.cleanURLBase = normalizeURLBase(next.URLBase)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -370,11 +567,51 @@ func (s *Server) handleStartSync(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleGetSyncStatus returns orchestrator progress and active sync state.
-func (s *Server) handleGetSyncStatus(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleGetSyncStatus(w http.ResponseWriter, r *http.Request) {
 	s.syncMu.Lock()
 	running := s.isSyncing
 	lastReport := s.lastSyncReport
 	s.syncMu.Unlock()
+
+	if lastReport == nil && s.db != nil {
+		_ = s.db.Read(r.Context(), func(ctx context.Context, q storage.Querier) error {
+			var rec SyncHistoryRecord
+			var errs sql.NullString
+			rowErr := q.QueryRowContext(ctx, `
+				SELECT id, run_timestamp, duration_ms, status, items_scanned, added_radarr,
+				       monitored_sonarr, unmonitored_sonarr, unmonitored_radarr, queued_review,
+				       errors_json, trigger_type
+				FROM sync_history
+				ORDER BY id DESC
+				LIMIT 1;
+			`).Scan(
+				&rec.ID, &rec.RunTimestamp, &rec.DurationMs, &rec.Status, &rec.ItemsScanned,
+				&rec.AddedRadarr, &rec.MonitoredSonarr, &rec.UnmonitoredSonarr, &rec.UnmonitoredRadarr,
+				&rec.QueuedReview, &errs, &rec.TriggerType,
+			)
+			if rowErr == nil {
+				var errList []string
+				if errs.Valid && errs.String != "" {
+					_ = json.Unmarshal([]byte(errs.String), &errList)
+				}
+				lastReport = &orchestrator.SyncReport{
+					RunID:             int64(rec.ID),
+					DurationMs:        rec.DurationMs,
+					Status:            orchestrator.SyncStatus(rec.Status),
+					ItemsScanned:      rec.ItemsScanned,
+					AddedRadarr:       rec.AddedRadarr,
+					MonitoredSonarr:   rec.MonitoredSonarr,
+					UnmonitoredSonarr: rec.UnmonitoredSonarr,
+					UnmonitoredRadarr: rec.UnmonitoredRadarr,
+					QueuedReview:      rec.QueuedReview,
+					Errors:            errList,
+					Trigger:           orchestrator.TriggerType(rec.TriggerType),
+					StartTime:         rec.RunTimestamp,
+				}
+			}
+			return nil
+		})
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

@@ -64,8 +64,9 @@
   .modal {
     position: relative;
     display: flex;
-    max-width: 90%;
-    max-height: 90%;
+    flex-direction: column;
+    max-width: 90vw;
+    max-height: 90vh;
     border-radius: 6px;
     overflow: hidden;
     box-shadow: 0 5px 25px rgba(0, 0, 0, 0.7);
@@ -86,8 +87,10 @@
   .modalContent {
     display: flex;
     flex-direction: column;
-    flex-grow: 1;
+    flex: 1 1 auto;
     width: 100%;
+    min-height: 0;
+    max-height: 90vh;
     background-color: var(--modalBackgroundColor);
     overflow: hidden;
   }
@@ -102,6 +105,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-shrink: 0;
   }
 
   .modalClose {
@@ -122,7 +126,8 @@
   }
 
   .modalBody {
-    flex: 1 0 1px;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
     padding: var(--modalBodyPadding);
   }
@@ -135,5 +140,6 @@
     padding: 15px 30px;
     border-top: 1px solid var(--borderColor);
     background-color: rgba(0, 0, 0, 0.1);
+    flex-shrink: 0;
   }
 </style>

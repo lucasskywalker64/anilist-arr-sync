@@ -1,6 +1,7 @@
 <script lang="ts">
   export let label = '';
   export let helpText = '';
+  export let warningText = '';
   export let isAdvanced = false;
   export let hasError = false;
   export let isDirty = false;
@@ -29,6 +30,9 @@
     </div>
     {#if hasError && errorMessage}
       <div class="errorMessage">{errorMessage}</div>
+    {/if}
+    {#if warningText}
+      <div class="warningText">{warningText}</div>
     {/if}
     {#if helpText}
       <div class="helpText">{helpText}</div>
@@ -103,6 +107,13 @@
     font-size: var(--smallFontSize);
   }
 
+  .warningText {
+    margin-top: 5px;
+    color: var(--warningColor);
+    line-height: 18px;
+    font-size: var(--smallFontSize);
+  }
+
   /* Global child styling for inputs within FormGroup */
   :global(.inputGroup input.formInput),
   :global(.inputGroup select.formInput) {
@@ -127,9 +138,28 @@
   }
 
   :global(.inputGroup input.formInput.hasButton),
-  :global(.inputGroup select.formInput.hasButton) {
+  :global(.inputGroup select.formInput.hasButton),
+  :global(.inputGroup input.formInput.hasAddon),
+  :global(.inputGroup select.formInput.hasAddon) {
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
+  }
+
+  :global(.inputGroup .formInputAddon) {
+    height: var(--inputHeight);
+    border: 1px solid var(--inputBorderColor);
+    border-left: none;
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+    background-color: var(--defaultBackgroundColor);
+    color: var(--textColor);
+    padding: 0 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--defaultFontSize);
+    user-select: none;
+    white-space: nowrap;
   }
 
   :global(.inputGroup .formInputButton) {
@@ -148,10 +178,34 @@
     align-items: center;
     justify-content: center;
     white-space: nowrap;
+    transition: background-color 150ms ease;
+  }
+
+  :global(.inputGroup .formInputButton:not(:last-child)) {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
   }
 
   :global(.inputGroup .formInputButton:hover) {
     background-color: var(--defaultHoverBackgroundColor);
+  }
+
+  :global(.inputGroup .formInputButton.dangerButton) {
+    background-color: var(--dangerBackgroundColor);
+    color: #ffffff;
+  }
+
+  :global(.inputGroup .formInputButton.dangerButton:hover) {
+    background-color: var(--dangerHoverBackgroundColor);
+  }
+
+  :global(.inputGroup .formInputButton.primaryButton) {
+    background-color: var(--themeBlue);
+    color: #ffffff;
+  }
+
+  :global(.inputGroup .formInputButton.primaryButton:hover) {
+    background-color: var(--primaryHoverBackgroundColor);
   }
 
   @media (max-width: 1200px) {

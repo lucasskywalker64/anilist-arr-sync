@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
+
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 )
 
 const sessionCookieName = "anilist_sync_session"
@@ -15,7 +18,7 @@ type contextKey string
 
 const userContextKey = contextKey("user")
 
-// authMiddleware handles user authentication across Forms, External headers, and Local LAN bypass.
+// authMiddleware handles user authentication across Forms, Basic, and Local LAN bypass.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
@@ -40,35 +43,17 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		// 2. External reverse proxy headers (Authelia / Authentik)
-		if s.getAuthMethod() == "External" {
-			if !IsLoopbackAddress(r.RemoteAddr) {
-				s.writeJSONError(w, http.StatusUnauthorized, "untrusted client address for external authentication")
-				return
-			}
-			remoteUser := r.Header.Get("Remote-User")
-			if remoteUser == "" {
-				remoteUser = r.Header.Get("X-authentik-username")
-			}
-			if remoteUser != "" {
-				ctx := context.WithValue(r.Context(), userContextKey, remoteUser)
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
-			}
-			s.writeJSONError(w, http.StatusUnauthorized, "external authentication header missing or invalid")
-			return
-		}
-
-		// 3. Local LAN address bypass (applies to Forms authentication)
+		// 2. Local LAN address bypass
 		if s.getAuthRequired() == "DisabledForLocalAddresses" {
-			if IsLocalAddress(r.RemoteAddr) {
+			clientIP := s.getClientIP(r)
+			if clientIP != nil && IsLocalIP(clientIP) {
 				ctx := context.WithValue(r.Context(), userContextKey, "local_user")
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 		}
 
-		// 4. Forms session cookie authentication
+		// 3. Forms session cookie authentication
 		if s.getAuthMethod() == "Forms" {
 			cookie, err := r.Cookie(sessionCookieName)
 			if err == nil && cookie.Value != "" {
@@ -78,6 +63,25 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 					return
 				}
 			}
+		}
+
+		// 5. Basic HTTP popup authentication
+		if s.getAuthMethod() == "Basic" {
+			user, pass, ok := r.BasicAuth()
+			if ok && s.db != nil {
+				var storedHash string
+				err := s.db.Read(r.Context(), func(ctx context.Context, q storage.Querier) error {
+					return q.QueryRowContext(ctx, "SELECT password_hash FROM users WHERE username = ?;", user).Scan(&storedHash)
+				})
+				if err == nil && CheckPassword(pass, storedHash) {
+					ctx := context.WithValue(r.Context(), userContextKey, user)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+			w.Header().Set("WWW-Authenticate", `Basic realm="AniList-Arr-Sync"`)
+			s.writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+			return
 		}
 
 		s.writeJSONError(w, http.StatusUnauthorized, "unauthorized")
@@ -100,6 +104,12 @@ func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 
 		// Login and initial setup endpoints are exempt from CSRF validation
 		if path == "/api/v1/auth/login" || path == "/api/v1/auth/setup" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Basic auth mode is exempt from session CSRF validation
+		if s.getAuthMethod() == "Basic" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -130,4 +140,57 @@ func (s *Server) writeJSONError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// allowedHostsMiddleware validates incoming HTTP Host headers against AllowedHosts to protect against DNS rebinding.
+func (s *Server) allowedHostsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isHostAllowed(r.Host, s.getAllowedHosts()) {
+			s.writeJSONError(w, http.StatusBadRequest, "invalid host header")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isHostAllowed checks if requestHost matches the comma-separated allowedHosts whitelist.
+// If allowedHosts is empty or "*", all hosts are permitted.
+func isHostAllowed(requestHost, allowedHosts string) bool {
+	allowedHosts = strings.TrimSpace(allowedHosts)
+	if allowedHosts == "" || allowedHosts == "*" {
+		return true
+	}
+
+	host, _, err := net.SplitHostPort(requestHost)
+	if err != nil {
+		host = requestHost
+	}
+	host = strings.ToLower(strings.TrimPrefix(strings.TrimSuffix(strings.TrimSpace(host), "]"), "["))
+
+	for _, entry := range strings.Split(allowedHosts, ",") {
+		entry = strings.ToLower(strings.TrimSpace(entry))
+		if entry == "" {
+			continue
+		}
+		if entry == "*" {
+			return true
+		}
+		entryHost, _, err := net.SplitHostPort(entry)
+		if err == nil {
+			entry = entryHost
+		}
+		entry = strings.TrimPrefix(strings.TrimSuffix(entry, "]"), "[")
+
+		if entry == host {
+			return true
+		}
+		if strings.HasPrefix(entry, "*.") {
+			suffix := entry[1:] // e.g. ".example.com"
+			if strings.HasSuffix(host, suffix) && host != suffix {
+				return true
+			}
+		}
+	}
+
+	return false
 }

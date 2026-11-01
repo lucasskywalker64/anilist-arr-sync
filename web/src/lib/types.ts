@@ -46,14 +46,18 @@ export interface StagedAction {
 }
 
 export interface SyncReport {
-  startedAt: string;
-  completedAt?: string;
-  status: string;
-  totalTitles: number;
-  matchedTitles: number;
-  unresolvedTitles: number;
-  stagedActions: number;
-  executionErrors?: string[];
+  runId?: number;
+  durationMs: number;
+  status: 'SUCCESS' | 'PARTIAL' | 'FAILED';
+  itemsScanned: number;
+  addedRadarr: number;
+  monitoredSonarr: number;
+  unmonitoredSonarr: number;
+  unmonitoredRadarr: number;
+  queuedReview: number;
+  errors?: string[];
+  trigger: string;
+  startTime?: string;
 }
 
 export interface SyncStatus {
@@ -63,31 +67,53 @@ export interface SyncStatus {
 
 export interface SyncHistoryItem {
   id: number;
-  startedAt: string;
-  completedAt: string;
-  status: 'SUCCESS' | 'PARTIAL' | 'FAILED' | 'RUNNING';
+  runTimestamp: string;
+  durationMs: number;
+  status: 'SUCCESS' | 'PARTIAL' | 'FAILED';
+  itemsScanned: number;
+  addedRadarr: number;
+  monitoredSonarr: number;
+  unmonitoredSonarr: number;
+  unmonitoredRadarr: number;
+  queuedReview: number;
+  errorsJson?: string | null;
   triggerType: string;
-  totalTitles: number;
-  matchedTitles: number;
-  unresolvedTitles: number;
-  stagedActions: number;
-  errorLog?: string | null;
 }
 
 export interface AppConfig {
   bindAddress: string;
   port: number;
   urlBase: string;
+  allowedHosts?: string;
+  applicationUrl?: string;
   enableSsl: boolean;
   sslPort: number;
   sslCertPath?: string;
   sslKeyPath?: string;
-  authenticationMethod: 'None' | 'Forms' | 'External';
-  authenticationRequired: 'Disabled' | 'Enabled' | 'DisabledForLocalAddresses';
+  authenticationMethod: 'Forms' | 'Basic';
+  authenticationRequired: 'Enabled' | 'DisabledForLocalAddresses';
+  trustedNetworks?: string;
   apiKey: string;
+  username?: string;
+  password?: string;
+  useProxy?: boolean;
+  proxyType?: 'Http' | 'Socks4' | 'Socks5' | string;
+  proxyHostname?: string;
+  proxyPort?: number;
+  proxyUsername?: string;
+  proxyPassword?: string;
+  proxyIgnoredAddresses?: string;
+  proxyBypassLocalAddresses?: boolean;
   logLevel: string;
-  consoleLogLevel: string;
+  consoleLogLevel?: string;
+  logSizeLimit?: number;
   instanceName: string;
+  updateBranch?: string;
+  updateAutomatically?: boolean;
+  updateMechanism?: string;
+  backupFolder?: string;
+  backupInterval?: number;
+  backupRetention?: number;
   aniListUsername: string;
   syncIntervalHours: number;
   dateToleranceDays: number;
@@ -119,11 +145,22 @@ export interface NotificationItem {
   id: number;
   name: string;
   type: 'DISCORD' | 'WEBHOOK';
-  onSyncStart: boolean;
-  onSyncSuccess: boolean;
-  onSyncFailure: boolean;
-  onReviewQueueNeeded: boolean;
-  settings: Record<string, unknown>;
+  provider?: string;
+  configJson?: string;
+  onAdded?: boolean;
+  onReview?: boolean;
+  onError?: boolean;
+  onComplete?: boolean;
+  onUpdate?: boolean;
+  onSyncStart?: boolean;
+  onSyncSuccess?: boolean;
+  onSyncFailure?: boolean;
+  onReviewQueueNeeded?: boolean;
+  settings?: {
+    webhookUrl?: string;
+    url?: string;
+    [key: string]: unknown;
+  };
 }
 
 export interface CurrentUser {
@@ -145,4 +182,34 @@ export interface IgnoredItem {
   titleRomaji: string;
   reason?: string;
   createdAt: string;
+}
+
+export interface LibraryItem {
+  anilistId: number;
+  mediaType: 'SERIES' | 'MOVIE';
+  format?: string;
+  titleRomaji: string;
+  titleEnglish?: string | null;
+  releaseYear?: number | null;
+  posterUrl?: string | null;
+  anilistStatus: string;
+  targetService: 'SONARR' | 'RADARR' | 'NONE';
+  tvdbId?: number | null;
+  tmdbId?: number | null;
+  arrTitle?: string | null;
+  monitoredStatus: 'MONITORED' | 'UNMONITORED' | 'NOT_FOUND' | 'PENDING_REVIEW' | 'IGNORED';
+  seasons?: string | null;
+  lastSyncedAt: string;
+  updatedAt: string;
+}
+
+export interface LibraryStats {
+  total: number;
+  monitored: number;
+  unmonitored: number;
+  sonarrCount: number;
+  radarrCount: number;
+  watchingCount: number;
+  planningCount: number;
+  completedCount: number;
 }

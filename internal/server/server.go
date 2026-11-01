@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,7 @@ type Server struct {
 	notifier     *notification.Dispatcher
 	notifStore   *notification.Store
 	sessions     *SessionStore
+	trustedNets  []*net.IPNet
 	cleanURLBase string
 	webFS        fs.FS
 	errChan      chan error
@@ -74,6 +76,11 @@ func NewServer(
 		defaultWebFS = dist
 	}
 
+	var trustedNets []*net.IPNet
+	if cfg != nil {
+		trustedNets, _ = ParseCIDRs(cfg.TrustedNetworks)
+	}
+
 	return &Server{
 		cfg:          cfg,
 		configPath:   configPath,
@@ -83,6 +90,7 @@ func NewServer(
 		notifier:     notifDispatcher,
 		notifStore:   notifStore,
 		sessions:     NewSessionStore(24 * time.Hour),
+		trustedNets:  trustedNets,
 		cleanURLBase: cleanBase,
 		webFS:        defaultWebFS,
 		errChan:      make(chan error, 2),
@@ -147,6 +155,22 @@ func (s *Server) isSslEnabled() bool {
 	return s.cfg.EnableSsl
 }
 
+func (s *Server) getTrustedNetworks() []*net.IPNet {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.trustedNets
+}
+
+func (s *Server) getAllowedHosts() string {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.AllowedHosts
+}
+
+func (s *Server) getClientIP(r *http.Request) net.IP {
+	return ResolveClientIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), s.getTrustedNetworks())
+}
+
 // normalizeURLBase strips trailing slashes and ensures a leading slash unless empty.
 func normalizeURLBase(base string) string {
 	b := strings.TrimSpace(base)
@@ -176,7 +200,7 @@ func (s *Server) Handler() http.Handler {
 		h = subMux
 	}
 
-	return s.authMiddleware(s.csrfMiddleware(h))
+	return s.allowedHostsMiddleware(s.authMiddleware(s.csrfMiddleware(h)))
 }
 
 // Start begins listening on configured HTTP and optional HTTPS ports.
@@ -271,6 +295,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/review/{id}/resolve", s.handleResolveReview)
 	mux.HandleFunc("POST /api/v1/review/{id}/ignore", s.handleIgnoreReview)
 
+	mux.HandleFunc("GET /api/v1/library", s.handleListLibrary)
+	mux.HandleFunc("GET /api/v1/library/stats", s.handleGetLibraryStats)
+
 	mux.HandleFunc("GET /api/v1/ignored", s.handleListIgnored)
 	mux.HandleFunc("DELETE /api/v1/ignored/{id}", s.handleDeleteIgnored)
 
@@ -331,12 +358,17 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try serving static file if it exists and is not a directory
-	f, err := s.webFS.Open(cleanPath)
+	lookupPath := cleanPath
+	if strings.Contains(cleanPath, "assets/") {
+		lookupPath = cleanPath[strings.Index(cleanPath, "assets/"):]
+	}
+
+	f, err := s.webFS.Open(lookupPath)
 	if err == nil {
 		stat, statErr := f.Stat()
 		if statErr == nil && !stat.IsDir() {
 			defer func() { _ = f.Close() }()
-			if strings.HasPrefix(cleanPath, "assets/") {
+			if strings.HasPrefix(lookupPath, "assets/") {
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			}
 			seeker, ok := f.(io.ReadSeeker)
@@ -354,8 +386,24 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// If this was an asset request (e.g. inside assets/ or has a static extension), return 404 rather than index.html
+	if strings.Contains(cleanPath, "assets/") || hasStaticFileExtension(cleanPath) {
+		http.NotFound(w, r)
+		return
+	}
+
 	// SPA fallback: serve index.html for client routes
 	s.serveIndexHTML(w, r)
+}
+
+func hasStaticFileExtension(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".map", ".json":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) serveIndexHTML(w http.ResponseWriter, r *http.Request) {
@@ -378,7 +426,13 @@ func (s *Server) serveIndexHTML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Inject runtime bootstrap config
+	// Inject runtime bootstrap config and document base href
+	baseHref := "/"
+	if s.cleanURLBase != "" {
+		baseHref = s.cleanURLBase + "/"
+	}
+	baseTag := fmt.Sprintf("<base href=\"%s\" />", baseHref)
+
 	bootstrapData := map[string]any{
 		"urlBase": s.cleanURLBase,
 		"version": "1.0.0",
@@ -388,7 +442,7 @@ func (s *Server) serveIndexHTML(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		bootstrapJSON = []byte(`{"urlBase":"","version":"1.0.0","apiKey":""}`)
 	}
-	bootstrapScript := fmt.Sprintf("<script id=\"arr-bootstrap\">window.AniListArrSync = %s;</script>", bootstrapJSON)
+	bootstrapScript := fmt.Sprintf("%s\n    <script id=\"arr-bootstrap\">window.AniListArrSync = %s;</script>", baseTag, bootstrapJSON)
 	if bytes.Contains(content, []byte("<!-- ANILIST_ARR_SYNC_CONFIG -->")) {
 		content = bytes.Replace(content, []byte("<!-- ANILIST_ARR_SYNC_CONFIG -->"), []byte(bootstrapScript), 1)
 	} else if bytes.Contains(content, []byte("</head>")) {

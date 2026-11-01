@@ -12,20 +12,30 @@ import (
 )
 
 type createNotificationRequest struct {
-	Name       string `json:"name"`
-	Provider   string `json:"provider"`
-	ConfigJSON string `json:"configJson"`
-	OnAdded    *bool  `json:"onAdded"`
-	OnReview   *bool  `json:"onReview"`
-	OnError    *bool  `json:"onError"`
-	OnComplete *bool  `json:"onComplete"`
-	OnUpdate   *bool  `json:"onUpdate"`
+	Name                string         `json:"name"`
+	Provider            string         `json:"provider"`
+	Type                string         `json:"type"`
+	ConfigJSON          string         `json:"configJson"`
+	Settings            map[string]any `json:"settings"`
+	URL                 string         `json:"url"`
+	OnAdded             *bool          `json:"onAdded"`
+	OnReview            *bool          `json:"onReview"`
+	OnError             *bool          `json:"onError"`
+	OnComplete          *bool          `json:"onComplete"`
+	OnUpdate            *bool          `json:"onUpdate"`
+	OnSyncStart         *bool          `json:"onSyncStart"`
+	OnSyncSuccess       *bool          `json:"onSyncSuccess"`
+	OnSyncFailure       *bool          `json:"onSyncFailure"`
+	OnReviewQueueNeeded *bool          `json:"onReviewQueueNeeded"`
 }
 
 type testNotificationRequest struct {
-	Name       string `json:"name"`
-	Provider   string `json:"provider"`
-	ConfigJSON string `json:"configJson"`
+	Name       string         `json:"name"`
+	Provider   string         `json:"provider"`
+	Type       string         `json:"type"`
+	ConfigJSON string         `json:"configJson"`
+	Settings   map[string]any `json:"settings"`
+	URL        string         `json:"url"`
 }
 
 func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request) {
@@ -63,6 +73,9 @@ func (s *Server) handleCreateNotification(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if req.Provider == "" && req.Type != "" {
+		req.Provider = req.Type
+	}
 	req.Provider = strings.ToUpper(strings.TrimSpace(req.Provider))
 	if req.Provider != "DISCORD" && req.Provider != "WEBHOOK" {
 		s.writeJSONError(w, http.StatusBadRequest, "provider must be DISCORD or WEBHOOK")
@@ -71,8 +84,35 @@ func (s *Server) handleCreateNotification(w http.ResponseWriter, r *http.Request
 
 	req.ConfigJSON = strings.TrimSpace(req.ConfigJSON)
 	if req.ConfigJSON == "" {
+		if req.Settings != nil {
+			if u, ok := req.Settings["webhookUrl"].(string); ok && u != "" {
+				b, _ := json.Marshal(map[string]string{"url": u})
+				req.ConfigJSON = string(b)
+			} else if u, ok := req.Settings["url"].(string); ok && u != "" {
+				b, _ := json.Marshal(map[string]string{"url": u})
+				req.ConfigJSON = string(b)
+			}
+		} else if req.URL != "" {
+			b, _ := json.Marshal(map[string]string{"url": req.URL})
+			req.ConfigJSON = string(b)
+		}
+	}
+	if req.ConfigJSON == "" {
 		s.writeJSONError(w, http.StatusBadRequest, "configJson is required")
 		return
+	}
+
+	if req.OnAdded == nil && req.OnSyncStart != nil {
+		req.OnAdded = req.OnSyncStart
+	}
+	if req.OnComplete == nil && req.OnSyncSuccess != nil {
+		req.OnComplete = req.OnSyncSuccess
+	}
+	if req.OnError == nil && req.OnSyncFailure != nil {
+		req.OnError = req.OnSyncFailure
+	}
+	if req.OnReview == nil && req.OnReviewQueueNeeded != nil {
+		req.OnReview = req.OnReviewQueueNeeded
 	}
 
 	conn := notification.Connection{
@@ -154,6 +194,9 @@ func (s *Server) handleUpdateNotification(w http.ResponseWriter, r *http.Request
 	if strings.TrimSpace(req.Name) != "" {
 		existing.Name = strings.TrimSpace(req.Name)
 	}
+	if req.Provider == "" && req.Type != "" {
+		req.Provider = req.Type
+	}
 	if strings.TrimSpace(req.Provider) != "" {
 		prov := strings.ToUpper(strings.TrimSpace(req.Provider))
 		if prov != "DISCORD" && prov != "WEBHOOK" {
@@ -164,7 +207,32 @@ func (s *Server) handleUpdateNotification(w http.ResponseWriter, r *http.Request
 	}
 	if strings.TrimSpace(req.ConfigJSON) != "" {
 		existing.ConfigJSON = strings.TrimSpace(req.ConfigJSON)
+	} else if req.Settings != nil {
+		if u, ok := req.Settings["webhookUrl"].(string); ok && u != "" {
+			b, _ := json.Marshal(map[string]string{"url": u})
+			existing.ConfigJSON = string(b)
+		} else if u, ok := req.Settings["url"].(string); ok && u != "" {
+			b, _ := json.Marshal(map[string]string{"url": u})
+			existing.ConfigJSON = string(b)
+		}
+	} else if req.URL != "" {
+		b, _ := json.Marshal(map[string]string{"url": req.URL})
+		existing.ConfigJSON = string(b)
 	}
+
+	if req.OnAdded == nil && req.OnSyncStart != nil {
+		req.OnAdded = req.OnSyncStart
+	}
+	if req.OnComplete == nil && req.OnSyncSuccess != nil {
+		req.OnComplete = req.OnSyncSuccess
+	}
+	if req.OnError == nil && req.OnSyncFailure != nil {
+		req.OnError = req.OnSyncFailure
+	}
+	if req.OnReview == nil && req.OnReviewQueueNeeded != nil {
+		req.OnReview = req.OnReviewQueueNeeded
+	}
+
 	if req.OnAdded != nil {
 		existing.OnAdded = *req.OnAdded
 	}
@@ -238,15 +306,34 @@ func (s *Server) handleTestNotificationPayload(w http.ResponseWriter, r *http.Re
 	}
 
 	prov := strings.ToUpper(strings.TrimSpace(req.Provider))
+	if prov == "" && req.Type != "" {
+		prov = strings.ToUpper(strings.TrimSpace(req.Type))
+	}
 	if prov != "DISCORD" && prov != "WEBHOOK" {
 		s.writeJSONError(w, http.StatusBadRequest, "provider must be DISCORD or WEBHOOK")
 		return
 	}
 
+	configJSON := strings.TrimSpace(req.ConfigJSON)
+	if configJSON == "" {
+		if req.Settings != nil {
+			if u, ok := req.Settings["webhookUrl"].(string); ok && u != "" {
+				b, _ := json.Marshal(map[string]string{"url": u})
+				configJSON = string(b)
+			} else if u, ok := req.Settings["url"].(string); ok && u != "" {
+				b, _ := json.Marshal(map[string]string{"url": u})
+				configJSON = string(b)
+			}
+		} else if req.URL != "" {
+			b, _ := json.Marshal(map[string]string{"url": req.URL})
+			configJSON = string(b)
+		}
+	}
+
 	conn := notification.Connection{
 		Name:       req.Name,
 		Provider:   prov,
-		ConfigJSON: req.ConfigJSON,
+		ConfigJSON: configJSON,
 	}
 
 	if err := s.notifier.TestConnection(r.Context(), conn); err != nil {

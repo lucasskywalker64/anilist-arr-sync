@@ -4,9 +4,7 @@
 
   export let currentRoute = '/';
   export let instanceName = 'AniList-Arr-Sync';
-  export let username = '';
   export let isSyncing = false;
-  export let isAuthenticated = false;
   export let stagedCount = 0;
   export let reviewCount = 0;
 </script>
@@ -14,10 +12,7 @@
 <div class="page">
   <PageHeader
     {instanceName}
-    {username}
     {isSyncing}
-    {isAuthenticated}
-    on:logout
   />
   <div class="main">
     <PageSidebar

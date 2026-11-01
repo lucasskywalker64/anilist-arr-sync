@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -109,65 +111,73 @@ func TestLocalLanBypass(t *testing.T) {
 	}
 }
 
-func TestExternalAuthHeaders(t *testing.T) {
+func TestBasicAuth(t *testing.T) {
+	db := newTestStorage(t)
+	hash, err := HashPassword("SecretPass123!", "pbkdf2")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+
+	_ = db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "INSERT INTO users (id, username, password_hash) VALUES (1, 'basicuser', ?);", hash)
+		return err
+	})
+
 	cfg := config.NewDefault()
-	cfg.AuthenticationMethod = "External"
+	cfg.AuthenticationMethod = "Basic"
 	cfg.AuthenticationRequired = "Enabled"
 	cfg.APIKey = "secret-api-key"
 
 	srv := &Server{
 		cfg:      cfg,
+		db:       db,
 		sessions: NewSessionStore(1 * time.Hour),
 	}
 
-	handler := srv.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var capturedUser string
+	handler := srv.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, ok := r.Context().Value(userContextKey).(string); ok {
+			capturedUser = u
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// Authelia Remote-User header from trusted local proxy
+	// 1. Missing Basic auth header returns 401 with WWW-Authenticate
 	{
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
-		req.RemoteAddr = "127.0.0.1:54321"
-		req.Header.Set("Remote-User", "authelia_user")
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Errorf("expected Authelia Remote-User to authenticate, got %d", rec.Code)
-		}
-	}
-
-	// Authentik X-authentik-username header from trusted local proxy
-	{
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
-		req.RemoteAddr = "127.0.0.1:54321"
-		req.Header.Set("X-authentik-username", "authentik_user")
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Errorf("expected Authentik header to authenticate, got %d", rec.Code)
-		}
-	}
-
-	// External header from untrusted public IP is rejected
-	{
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
-		req.RemoteAddr = "198.51.100.1:1234"
-		req.Header.Set("Remote-User", "hacker")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("expected spoofed external header from untrusted IP to return 401, got %d", rec.Code)
+			t.Errorf("expected 401 without basic auth, got %d", rec.Code)
+		}
+		if authHeader := rec.Header().Get("WWW-Authenticate"); authHeader == "" {
+			t.Errorf("expected WWW-Authenticate header, got empty")
 		}
 	}
 
-	// Missing external headers
+	// 2. Incorrect password returns 401
 	{
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
-		req.RemoteAddr = "127.0.0.1:54321"
+		req.SetBasicAuth("basicuser", "WrongPassword")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("expected missing external header to return 401, got %d", rec.Code)
+			t.Errorf("expected 401 with wrong password, got %d", rec.Code)
+		}
+	}
+
+	// 3. Correct credentials succeeds and sets user context
+	{
+		capturedUser = ""
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
+		req.SetBasicAuth("basicuser", "SecretPass123!")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected 200 with valid basic auth, got %d", rec.Code)
+		}
+		if capturedUser != "basicuser" {
+			t.Errorf("expected user 'basicuser', got %q", capturedUser)
 		}
 	}
 }
@@ -237,6 +247,144 @@ func TestCSRFProtection_ApiKeyRequiredForMutatingRequests(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Errorf("expected login POST to bypass X-Api-Key check, got %d", rec.Code)
+		}
+	}
+}
+
+func TestLocalLanBypass_ReverseProxyXForwardedFor(t *testing.T) {
+	cfg := config.NewDefault()
+	cfg.AuthenticationMethod = "Forms"
+	cfg.AuthenticationRequired = "DisabledForLocalAddresses"
+	cfg.APIKey = "secret-api-key"
+
+	trustedNets, err := ParseCIDRs(cfg.TrustedNetworks)
+	if err != nil {
+		t.Fatalf("failed to parse default trusted networks: %v", err)
+	}
+
+	srv := &Server{
+		cfg:         cfg,
+		trustedNets: trustedNets,
+		sessions:    NewSessionStore(1 * time.Hour),
+	}
+
+	var capturedUser string
+	handler := srv.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, ok := r.Context().Value(userContextKey).(string); ok {
+			capturedUser = u
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// 1. Untrusted remote RemoteAddr (203.0.113.195) with local X-Forwarded-For (192.168.1.50)
+	// Spoofed XFF must be ignored, client IP is 203.0.113.195 -> rejected with HTTP 401.
+	{
+		capturedUser = ""
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
+		req.RemoteAddr = "203.0.113.195:54321"
+		req.Header.Set("X-Forwarded-For", "192.168.1.50")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("expected untrusted remote with spoofed XFF to return 401, got %d", rec.Code)
+		}
+	}
+
+	// 2. Trusted remote RemoteAddr (127.0.0.1) with external X-Forwarded-For (203.0.113.195)
+	// External client IP is resolved -> rejected with HTTP 401 (triggers login challenge, does not bypass).
+	{
+		capturedUser = ""
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
+		req.RemoteAddr = "127.0.0.1:54321"
+		req.Header.Set("X-Forwarded-For", "203.0.113.195")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("expected trusted remote with external XFF to return 401, got %d", rec.Code)
+		}
+	}
+
+	// 3. Trusted remote RemoteAddr (127.0.0.1) with local LAN X-Forwarded-For (192.168.1.50)
+	// Local client IP is resolved -> successfully bypasses auth with HTTP 200 as local_user.
+	{
+		capturedUser = ""
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
+		req.RemoteAddr = "127.0.0.1:54321"
+		req.Header.Set("X-Forwarded-For", "192.168.1.50")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected trusted remote with local XFF to return 200, got %d", rec.Code)
+		}
+		if capturedUser != "local_user" {
+			t.Errorf("expected context user 'local_user', got %q", capturedUser)
+		}
+	}
+}
+
+func TestAllowedHostsMiddleware(t *testing.T) {
+	cfg := config.NewDefault()
+	srv := &Server{
+		cfg: cfg,
+	}
+
+	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	handler := srv.allowedHostsMiddleware(nextHandler)
+
+	// 1. Wildcard "*" allows any host
+	{
+		cfg.AllowedHosts = "*"
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		req.Host = "arbitrary.attacker.com:7171"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected wildcard AllowedHosts to return 200, got %d", rec.Code)
+		}
+	}
+
+	// 2. Specific host whitelist allows matching host (with and without port)
+	{
+		cfg.AllowedHosts = "localhost, myserver.lan, *.internal.net"
+
+		// Matching host with port
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		req.Host = "localhost:7171"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected matching localhost to return 200, got %d", rec.Code)
+		}
+
+		// Matching secondary host
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		req.Host = "myserver.lan"
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected matching myserver.lan to return 200, got %d", rec.Code)
+		}
+
+		// Matching wildcard subdomain
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		req.Host = "sub.internal.net"
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected matching sub.internal.net to return 200, got %d", rec.Code)
+		}
+
+		// Disallowed host rejected with 400 Bad Request
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		req.Host = "evil-rebinding.com"
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected disallowed host to return 400 Bad Request, got %d", rec.Code)
 		}
 	}
 }
