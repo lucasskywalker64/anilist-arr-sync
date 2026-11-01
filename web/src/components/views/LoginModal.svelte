@@ -51,12 +51,7 @@
 <div class="loginOverlay">
   <div class="loginCard">
     <div class="cardHeader">
-      <svg class="logo" viewBox="0 0 100 100" width="48" height="48">
-        <circle cx="50" cy="50" r="48" fill="#202020" stroke="#35c5f4" stroke-width="4" />
-        <circle cx="50" cy="50" r="32" fill="#2a2a2a" />
-        <path d="M50 25 L75 70 L25 70 Z" fill="#35c5f4" />
-        <circle cx="50" cy="55" r="9" fill="#202020" />
-      </svg>
+      <img class="logo" src="./favicon.svg" alt="AniList-Arr-Sync" width="48" height="48" />
       <h2 class="title">{isSetup ? 'Initial Administrator Setup' : 'AniList-Arr-Sync Login'}</h2>
       <p class="subtitle">
         {isSetup ? 'Configure an initial administrator account to protect your synchronization instance' : 'Sign in to access your instance'}
@@ -161,7 +156,11 @@
   }
 
   .logo {
-    margin-bottom: 15px;
+    display: block;
+    margin: 0 auto 15px;
+    width: 48px;
+    height: 48px;
+    object-fit: contain;
   }
 
   .title {

@@ -7,12 +7,7 @@
 
 <header class="header">
   <div class="logoContainer">
-    <svg class="logo" viewBox="0 0 100 100" width="32" height="32">
-      <circle cx="50" cy="50" r="48" fill="#202020" stroke="#35c5f4" stroke-width="4" />
-      <circle cx="50" cy="50" r="32" fill="#2a2a2a" />
-      <path d="M50 25 L75 70 L25 70 Z" fill="#35c5f4" />
-      <circle cx="50" cy="55" r="9" fill="#202020" />
-    </svg>
+    <img class="logo" src="./favicon.svg" alt="" width="32" height="32" />
     <span class="instanceName">{instanceName}</span>
   </div>
 
@@ -49,6 +44,9 @@
   .logo {
     display: block;
     flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    object-fit: contain;
   }
 
   .instanceName {
