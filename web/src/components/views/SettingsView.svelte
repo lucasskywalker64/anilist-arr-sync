@@ -390,14 +390,14 @@
           {#if showAdvanced}
             <FormGroup
               label="Allowed Hosts"
-              helpText="Allowed IPv4 / IPv6 hosts/IPs or '*' for all (separate multiple with comma)"
+              helpText="Allowed hostnames/domains or '*' for all (comma-separated). Localhost and IP addresses are always allowed."
               isAdvanced={true}
               isDirty={isFieldDirty("allowedHosts")}
             >
               <input
                 type="text"
                 class="formInput"
-                placeholder="*"
+                placeholder="e.g. sync.example.com or *"
                 bind:value={formConfig.allowedHosts}
               />
             </FormGroup>

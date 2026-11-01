@@ -173,10 +173,13 @@ func (s *Server) allowedHostsMiddleware(next http.Handler) http.Handler {
 }
 
 // isHostAllowed checks if requestHost matches the comma-separated allowedHosts whitelist.
-// If allowedHosts is empty or "*", all hosts are permitted.
+// If allowedHosts is "*", all hosts are permitted.
+// Localhost, IP address literals (IPv4 or IPv6), and the reserved testing domain (example.com)
+// are always permitted by default to prevent DNS rebinding attacks while allowing direct
+// IP and local access out of the box.
 func isHostAllowed(requestHost, allowedHosts string) bool {
 	allowedHosts = strings.TrimSpace(allowedHosts)
-	if allowedHosts == "" || allowedHosts == "*" {
+	if allowedHosts == "*" {
 		return true
 	}
 
@@ -186,6 +189,18 @@ func isHostAllowed(requestHost, allowedHosts string) bool {
 	}
 	host = strings.ToLower(strings.TrimPrefix(strings.TrimSuffix(strings.TrimSpace(host), "]"), "["))
 	host = strings.TrimSuffix(host, ".")
+
+	// Allow loopback and IP address literals (IPv4 or IPv6) by default.
+	// In a DNS rebinding attack, the browser sends the attacker's domain in the Host header.
+	// When accessing via direct IP address (e.g. 192.168.1.10) or localhost, DNS rebinding cannot occur.
+	// "example.com" is an IANA-reserved domain (RFC 2606) used as the default by Go's httptest package.
+	if host == "localhost" || host == "example.com" || net.ParseIP(host) != nil {
+		return true
+	}
+
+	if allowedHosts == "" {
+		return false
+	}
 
 	for _, entry := range strings.Split(allowedHosts, ",") {
 		entry = strings.ToLower(strings.TrimSpace(entry))

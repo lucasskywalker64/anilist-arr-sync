@@ -99,7 +99,7 @@ func NewDefault() *Config {
 		BindAddress:                "0.0.0.0",
 		Port:                       7171,
 		URLBase:                    "",
-		AllowedHosts:               "*",
+		AllowedHosts:               "",
 		ApplicationURL:             "",
 		EnableSsl:                  false,
 		SslPort:                    7272,

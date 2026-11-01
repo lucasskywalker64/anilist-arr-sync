@@ -457,4 +457,54 @@ func TestAllowedHostsMiddleware(t *testing.T) {
 			t.Errorf("expected disallowed host to return 400 Bad Request, got %d", rec.Code)
 		}
 	}
+
+	// 3. Default empty AllowedHosts ("") permits localhost and IP literals, but blocks arbitrary domains (DNS rebinding protection)
+	{
+		cfg.AllowedHosts = ""
+
+		// Localhost permitted
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		req.Host = "localhost:7171"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected localhost to return 200 with default AllowedHosts, got %d", rec.Code)
+		}
+
+		// IPv4 loopback literal permitted
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		req.Host = "127.0.0.1:7171"
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected 127.0.0.1 to return 200 with default AllowedHosts, got %d", rec.Code)
+		}
+
+		// IPv6 loopback literal permitted
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		req.Host = "[::1]:7171"
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected [::1] to return 200 with default AllowedHosts, got %d", rec.Code)
+		}
+
+		// Private LAN IP literal permitted
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		req.Host = "192.168.1.150:7171"
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected 192.168.1.150 to return 200 with default AllowedHosts, got %d", rec.Code)
+		}
+
+		// Arbitrary domain rejected with 400 Bad Request
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		req.Host = "evil-rebinding.com:7171"
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected evil-rebinding.com to return 400 with default AllowedHosts, got %d", rec.Code)
+		}
+	}
 }
