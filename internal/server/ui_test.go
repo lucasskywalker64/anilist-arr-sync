@@ -74,6 +74,30 @@ func TestEmbeddedSPA_DeliveryAndRouting(t *testing.T) {
 		if !strings.Contains(body, "test-api-key") {
 			t.Errorf("expected body to contain apiKey in AniListArrSync bootstrap script, got %s", body)
 		}
+		cacheControl := rec.Header().Get("Cache-Control")
+		if cacheControl != "no-store" {
+			t.Errorf("expected Cache-Control 'no-store', got %q", cacheControl)
+		}
+	})
+
+	t.Run("Root path omits apiKey for unauthenticated clients when auth is enabled", func(t *testing.T) {
+		sAuth := newTestServerWithUI(t, "", mockFS, "Forms")
+		hAuth := sAuth.Handler()
+
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		rec := httptest.NewRecorder()
+		hAuth.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d", rec.Code)
+		}
+		body := rec.Body.String()
+		if strings.Contains(body, "test-api-key") {
+			t.Errorf("expected apiKey to be omitted for unauthenticated client, got body: %s", body)
+		}
+		if !strings.Contains(body, `"apiKey":""`) {
+			t.Errorf("expected bootstrapData to contain empty apiKey, got body: %s", body)
+		}
 	})
 
 	t.Run("Static JS delivers file directly with cache header", func(t *testing.T) {
@@ -315,9 +339,9 @@ func TestEmbeddedSPA_SonarrThemeTokenVerification(t *testing.T) {
 		return nil
 	})
 
-	// If no CSS files in dist yet (before frontend build), this check will be run once built.
+	// If no CSS files in dist yet (before frontend build), fail test per requirements.
 	if !foundCSS {
-		t.Skip("no CSS files found in dist yet (run npm run build first)")
+		t.Fatal("no CSS files found in dist (run npm run build first)")
 	}
 
 	cssContent := combinedCSS.String()

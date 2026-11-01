@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, createEventDispatcher } from 'svelte';
+  import { onMount, onDestroy, createEventDispatcher } from 'svelte';
   import {
     RefreshCw,
     Search,
@@ -86,18 +86,45 @@
     isOverrideModalOpen = true;
   }
 
+  // Request sequence & search debounce
+  let loadSeq = 0;
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  onDestroy(() => {
+    clearSearchDebounce();
+  });
+
+  function clearSearchDebounce() {
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = null;
+    }
+  }
+
+  function handleSearchInput() {
+    clearSearchDebounce();
+    searchDebounceTimer = setTimeout(() => {
+      loadData();
+    }, 250);
+  }
+
   async function saveOverride() {
     if (!overrideItem) return;
     overrideSaving = true;
     errorMsg = '';
+    const tvdbStr = String(overrideTvdbId ?? '').trim();
+    const tmdbStr = String(overrideTmdbId ?? '').trim();
+    const seasonsStr = String(overrideSeasons ?? '').trim();
+    const titleStr = String(overrideTitle ?? '').trim();
+
     try {
       const payload: Partial<OverrideItem> = {
         anilistId: overrideItem.anilistId,
         mediaType: overrideMediaType,
-        tvdbId: overrideTvdbId ? parseInt(overrideTvdbId, 10) : null,
-        tmdbId: overrideTmdbId ? parseInt(overrideTmdbId, 10) : null,
-        seasons: overrideSeasons,
-        titleOverride: overrideTitle || undefined,
+        tvdbId: tvdbStr ? parseInt(tvdbStr, 10) : null,
+        tmdbId: tmdbStr ? parseInt(tmdbStr, 10) : null,
+        seasons: seasonsStr || '1',
+        titleOverride: titleStr || undefined,
       };
       await api.createOverride(payload);
       isOverrideModalOpen = false;
@@ -111,6 +138,7 @@
   }
 
   async function loadData() {
+    const seq = ++loadSeq;
     loading = true;
     errorMsg = '';
     try {
@@ -125,16 +153,21 @@
         }),
         api.getLibraryStats(),
       ]);
+      if (seq !== loadSeq) return;
       libraryItems = items;
       stats = s;
     } catch (e: any) {
+      if (seq !== loadSeq) return;
       errorMsg = e.message || 'Failed to load library';
     } finally {
-      loading = false;
+      if (seq === loadSeq) {
+        loading = false;
+      }
     }
   }
 
   function handleFilterChange() {
+    clearSearchDebounce();
     loadData();
   }
 
@@ -208,14 +241,14 @@
           type="text"
           placeholder="Filter anime..."
           bind:value={searchTerm}
-          on:input={handleFilterChange}
+          on:input={handleSearchInput}
           class="searchInput"
         />
         {#if searchTerm}
           <button
             type="button"
             class="clearBtn"
-            on:click={() => { searchTerm = ''; handleFilterChange(); }}
+            on:click={() => { clearSearchDebounce(); searchTerm = ''; handleFilterChange(); }}
           >
             ×
           </button>
@@ -322,11 +355,12 @@
           {#if searchTerm || statusFilter !== 'all' || serviceFilter !== 'all' || monitoredFilter !== 'all'}
             <p>No titles matched your selected search and filter criteria.</p>
             <Button kind="default" size="small" on:click={() => {
+              clearSearchDebounce();
               searchTerm = '';
               statusFilter = 'all';
               serviceFilter = 'all';
               monitoredFilter = 'all';
-              loadData();
+              handleFilterChange();
             }}>
               Clear Filters
             </Button>

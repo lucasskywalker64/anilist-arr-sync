@@ -125,6 +125,81 @@ func TestToXML_RoundTrip(t *testing.T) {
 	check("LaunchBrowser", loaded.LaunchBrowser, orig.LaunchBrowser)
 }
 
+func TestToXML_FullRoundTrip_AllFields(t *testing.T) {
+	orig := &config.Config{
+		BindAddress:                "10.0.0.1",
+		Port:                       8888,
+		URLBase:                    "/custom-base",
+		AllowedHosts:               "example.com,localhost",
+		ApplicationURL:             "https://example.com/custom-base",
+		EnableSsl:                  true,
+		SslPort:                    8889,
+		SslCertPath:                "/certs/cert.pem",
+		SslKeyPath:                 "/certs/key.pem",
+		AuthenticationMethod:       "Basic",
+		AuthenticationRequired:     "Enabled",
+		APIKey:                     "custom-secret-key-12345678901234",
+		TrustedNetworks:            "10.0.0.0/8,172.16.0.0/12",
+		UseProxy:                   true,
+		ProxyType:                  "Socks5",
+		ProxyHostname:              "proxy.example.com",
+		ProxyPort:                  1080,
+		ProxyUsername:              "puser",
+		ProxyPassword:              "ppass",
+		ProxyIgnoredAddresses:      "192.168.1.1",
+		ProxyBypassLocalAddresses:  false,
+		LogLevel:                   "Debug",
+		ConsoleLogLevel:            "Trace",
+		LogSizeLimit:               50,
+		LogRotate:                  15,
+		InstanceName:               "Non-Default Instance",
+		LaunchBrowser:              true,
+		EnableDesktopNotifications: true,
+		UpdateBranch:               "nightly",
+		UpdateAutomatically:        true,
+		UpdateMechanism:            "BuiltIn",
+		BackupFolder:               "/custom/backups",
+		BackupInterval:             48,
+		BackupRetention:            60,
+		DatabasePath:               "/custom/data/sync.db",
+		AniListUsername:            "custom_user",
+		AniListTvStatus:            "CURRENT",
+		AniListMovieStatus:         "PLANNING",
+		AniListIncludeUnreleased:   true,
+		RadarrURL:                  "http://radarr.local:7878",
+		RadarrAPIKey:               "radarr-key-999",
+		RadarrQualityProfileID:     5,
+		RadarrRootFolderPath:       "/media/movies",
+		RadarrSearchOnAdd:          true,
+		SonarrURL:                  "http://sonarr.local:8989",
+		SonarrAPIKey:               "sonarr-key-888",
+		SonarrQualityProfileID:     7,
+		SonarrRootFolderPath:       "/media/tv",
+		SonarrSeriesType:           "standard",
+		SonarrSearchOnAdd:          true,
+		TagName:                    "custom-tag-name",
+		SyncIntervalHours:          12,
+		DateToleranceDays:          14,
+		ConfidenceThreshold:        0.95,
+		UnmonitorDropped:           true,
+		FirstRunDryRun:             true,
+	}
+
+	data, err := orig.ToXML()
+	if err != nil {
+		t.Fatalf("ToXML failed: %v", err)
+	}
+
+	loaded, err := config.ParseXML(data)
+	if err != nil {
+		t.Fatalf("ParseXML failed: %v", err)
+	}
+
+	if *loaded != *orig {
+		t.Errorf("parsed config does not equal original config.\nLoaded: %+v\nOriginal: %+v", loaded, orig)
+	}
+}
+
 func TestParseXML_InvalidXML(t *testing.T) {
 	malformed := []byte(`<Config><Port>not-a-number</Port></Config>`)
 	_, err := config.ParseXML(malformed)

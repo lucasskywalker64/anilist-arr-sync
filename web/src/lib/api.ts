@@ -81,15 +81,17 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     ...(options.headers as Record<string, string>),
   };
 
+  const apiKey = getApiKey();
+  if (apiKey) {
+    headers['X-Api-Key'] = apiKey;
+  }
+
   const method = (options.method || 'GET').toUpperCase();
   if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
+    headers['X-Requested-With'] = 'XMLHttpRequest';
     const csrf = getCsrfToken();
     if (csrf) {
       headers['X-CSRF-Token'] = csrf;
-    }
-    const apiKey = getApiKey();
-    if (apiKey) {
-      headers['X-Api-Key'] = apiKey;
     }
     if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
       headers['Content-Type'] = 'application/json';
@@ -104,16 +106,23 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
   if (!res.ok) {
     let errorMessage = `Request failed with status ${res.status}`;
+    let setupRequired: boolean | undefined = undefined;
     try {
       const errData = await res.json();
       if (errData && errData.error) {
         errorMessage = errData.error;
       }
+      if (errData && typeof errData.setupRequired === 'boolean') {
+        setupRequired = errData.setupRequired;
+      }
     } catch {
       // not JSON
     }
-    const error = new Error(errorMessage) as Error & { status: number };
+    const error = new Error(errorMessage) as Error & { status: number; setupRequired?: boolean };
     error.status = res.status;
+    if (setupRequired !== undefined) {
+      error.setupRequired = setupRequired;
+    }
     throw error;
   }
 
@@ -185,7 +194,7 @@ export const api = {
   // Review Queue
   async getReviewQueue(): Promise<ReviewItem[]> {
     const items = await request<ReviewItem[]>('/api/v1/review');
-    return items.map((item) => {
+    return (items || []).map((item) => {
       let candidates: Candidate[] = [];
       if (item.candidatesJson) {
         try {

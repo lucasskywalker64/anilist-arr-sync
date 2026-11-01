@@ -2,10 +2,13 @@
 
 all: build
 
-frontend-install:
+web/node_modules/.package-lock.json: web/package.json web/package-lock.json
 	cd web && npm ci
+	@touch web/node_modules/.package-lock.json
 
-frontend-build:
+frontend-install: web/node_modules/.package-lock.json
+
+frontend-build: web/node_modules/.package-lock.json
 	cd web && npm run build
 
 frontend-test:

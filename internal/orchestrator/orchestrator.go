@@ -212,23 +212,19 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 		// Dispatch to Servarr service and record to synced_media
 		switch res.TargetService {
 		case "RADARR":
-			o.dispatchRadarr(ctx, entry, res, report)
-			monStatus := "MONITORED"
-			if entry.Status == anilist.StatusDropped {
-				monStatus = "UNMONITORED"
+			outcome := o.dispatchRadarr(ctx, entry, res, report)
+			if outcome.shouldUpsert {
+				o.upsertSyncedMedia(ctx, entry, "MOVIE", "RADARR", nil, &res.TargetID, res.TitleOverride, outcome.monitoredStatus, "")
 			}
-			o.upsertSyncedMedia(ctx, entry, "MOVIE", "RADARR", nil, &res.TargetID, res.TitleOverride, monStatus, "")
 		case "SONARR":
-			o.dispatchSonarr(ctx, entry, res, report)
-			monStatus := "MONITORED"
-			if entry.Status == anilist.StatusDropped {
-				monStatus = "UNMONITORED"
+			outcome := o.dispatchSonarr(ctx, entry, res, report)
+			if outcome.shouldUpsert {
+				seasonsStr := ""
+				if outcome.season > 0 {
+					seasonsStr = strconv.Itoa(outcome.season)
+				}
+				o.upsertSyncedMedia(ctx, entry, "SERIES", "SONARR", &res.TargetID, nil, res.TitleOverride, outcome.monitoredStatus, seasonsStr)
 			}
-			seasonsStr := ""
-			if res.TVDBSeason > 0 {
-				seasonsStr = strconv.Itoa(res.TVDBSeason)
-			}
-			o.upsertSyncedMedia(ctx, entry, "SERIES", "SONARR", &res.TargetID, nil, res.TitleOverride, monStatus, seasonsStr)
 		}
 	}
 
@@ -269,9 +265,15 @@ func (o *Orchestrator) finishSync(ctx context.Context, report *SyncReport, start
 	}
 }
 
-func (o *Orchestrator) dispatchRadarr(ctx context.Context, entry anilist.MediaListEntry, res *resolver.Result, report *SyncReport) {
+type dispatchOutcome struct {
+	monitoredStatus string
+	season          int
+	shouldUpsert    bool
+}
+
+func (o *Orchestrator) dispatchRadarr(ctx context.Context, entry anilist.MediaListEntry, res *resolver.Result, report *SyncReport) dispatchOutcome {
 	if o.radarr == nil {
-		return
+		return dispatchOutcome{shouldUpsert: false}
 	}
 
 	title := entry.Media.Title.Romaji
@@ -288,7 +290,7 @@ func (o *Orchestrator) dispatchRadarr(ctx context.Context, entry anilist.MediaLi
 	movie, lookupErr := o.radarr.LookupMovieByTMDBID(ctx, res.TargetID)
 	if lookupErr != nil && !errors.Is(lookupErr, servarr.ErrNotFound) {
 		report.Errors = append(report.Errors, fmt.Sprintf("lookup movie tmdb %d: %v", res.TargetID, lookupErr))
-		return
+		return dispatchOutcome{shouldUpsert: false}
 	}
 
 	movieExists := lookupErr == nil && movie != nil && movie.ID > 0
@@ -309,23 +311,37 @@ func (o *Orchestrator) dispatchRadarr(ctx context.Context, entry anilist.MediaLi
 						}); err != nil {
 							report.Errors = append(report.Errors, fmt.Sprintf("stage unmonitor movie %d: %v", movie.ID, err))
 						}
-					} else {
-						movie.Monitored = false
-						if _, updErr := o.radarr.UpdateMovie(ctx, movie); updErr == nil {
-							report.UnmonitoredRadarr++
-						} else {
-							report.Errors = append(report.Errors, fmt.Sprintf("unmonitor movie %d: %v", movie.ID, updErr))
-						}
+						return dispatchOutcome{shouldUpsert: false}
 					}
+					movie.Monitored = false
+					if _, updErr := o.radarr.UpdateMovie(ctx, movie); updErr != nil {
+						report.Errors = append(report.Errors, fmt.Sprintf("unmonitor movie %d: %v", movie.ID, updErr))
+						return dispatchOutcome{shouldUpsert: false}
+					}
+					report.UnmonitoredRadarr++
+					return dispatchOutcome{monitoredStatus: "UNMONITORED", shouldUpsert: true}
 				}
+				if !movie.Monitored {
+					return dispatchOutcome{monitoredStatus: "UNMONITORED", shouldUpsert: true}
+				}
+				return dispatchOutcome{monitoredStatus: "MONITORED", shouldUpsert: true}
 			}
+			if movie.Monitored {
+				return dispatchOutcome{monitoredStatus: "MONITORED", shouldUpsert: true}
+			}
+			return dispatchOutcome{monitoredStatus: "UNMONITORED", shouldUpsert: true}
 		}
-		return
+
+		monStatus := "MONITORED"
+		if !movie.Monitored {
+			monStatus = "UNMONITORED"
+		}
+		return dispatchOutcome{monitoredStatus: monStatus, shouldUpsert: true}
 	}
 
 	// Movie is not in Radarr library
 	if entry.Status == anilist.StatusDropped {
-		return
+		return dispatchOutcome{shouldUpsert: false}
 	}
 
 	var tags []int
@@ -358,13 +374,13 @@ func (o *Orchestrator) dispatchRadarr(ctx context.Context, entry anilist.MediaLi
 		if err := o.stageAction(ctx, ActionAddMovie, "MOVIE", title, "RADARR", addReq); err != nil {
 			report.Errors = append(report.Errors, fmt.Sprintf("stage add movie %q: %v", title, err))
 		}
-		return
+		return dispatchOutcome{shouldUpsert: false}
 	}
 
 	_, addErr := o.radarr.AddMovie(ctx, addReq)
 	if addErr != nil {
 		report.Errors = append(report.Errors, fmt.Sprintf("add movie %q: %v", title, addErr))
-		return
+		return dispatchOutcome{shouldUpsert: false}
 	}
 
 	report.AddedRadarr++
@@ -379,11 +395,12 @@ func (o *Orchestrator) dispatchRadarr(ctx context.Context, entry anilist.MediaLi
 			PosterURL:     entry.Media.CoverImageURL(),
 		})
 	}
+	return dispatchOutcome{monitoredStatus: "MONITORED", shouldUpsert: true}
 }
 
-func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaListEntry, res *resolver.Result, report *SyncReport) {
+func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaListEntry, res *resolver.Result, report *SyncReport) dispatchOutcome {
 	if o.sonarr == nil {
-		return
+		return dispatchOutcome{shouldUpsert: false}
 	}
 
 	title := entry.Media.Title.Romaji
@@ -405,14 +422,14 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 	series, lookupErr := o.sonarr.LookupSeriesByTVDBID(ctx, res.TargetID)
 	if lookupErr != nil && !errors.Is(lookupErr, servarr.ErrNotFound) {
 		report.Errors = append(report.Errors, fmt.Sprintf("lookup series tvdb %d: %v", res.TargetID, lookupErr))
-		return
+		return dispatchOutcome{shouldUpsert: false}
 	}
 
 	seriesExists := lookupErr == nil && series != nil && series.ID > 0
 
 	if !seriesExists {
 		if entry.Status == anilist.StatusDropped {
-			return
+			return dispatchOutcome{shouldUpsert: false}
 		}
 
 		var seasons []servarr.Season
@@ -464,13 +481,13 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 			if err := o.stageAction(ctx, ActionAddSeries, "SERIES", title, "SONARR", addReq); err != nil {
 				report.Errors = append(report.Errors, fmt.Sprintf("stage add series %q: %v", title, err))
 			}
-			return
+			return dispatchOutcome{shouldUpsert: false}
 		}
 
 		_, addErr := o.sonarr.AddSeries(ctx, addReq)
 		if addErr != nil {
 			report.Errors = append(report.Errors, fmt.Sprintf("add series %q: %v", title, addErr))
-			return
+			return dispatchOutcome{shouldUpsert: false}
 		}
 
 		report.MonitoredSonarr++
@@ -486,14 +503,14 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 				PosterURL:     entry.Media.CoverImageURL(),
 			})
 		}
-		return
+		return dispatchOutcome{monitoredStatus: "MONITORED", season: targetSeason, shouldUpsert: true}
 	}
 
 	// Series already exists in Sonarr library
 	episodes, epErr := o.sonarr.GetEpisodes(ctx, series.ID)
 	if epErr != nil {
 		report.Errors = append(report.Errors, fmt.Sprintf("get episodes series %d: %v", series.ID, epErr))
-		return
+		return dispatchOutcome{shouldUpsert: false}
 	}
 
 	var startDate time.Time
@@ -565,43 +582,68 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 						}); err != nil {
 							report.Errors = append(report.Errors, fmt.Sprintf("stage unmonitor episodes series %d: %v", series.ID, err))
 						}
-					} else {
-						if monErr := o.sonarr.MonitorEpisodes(ctx, sliceEpisodeIDs, false); monErr == nil {
-							report.UnmonitoredSonarr++
-						} else {
-							report.Errors = append(report.Errors, fmt.Sprintf("unmonitor episodes series %d: %v", series.ID, monErr))
-						}
+						return dispatchOutcome{shouldUpsert: false}
 					}
+					if monErr := o.sonarr.MonitorEpisodes(ctx, sliceEpisodeIDs, false); monErr != nil {
+						report.Errors = append(report.Errors, fmt.Sprintf("unmonitor episodes series %d: %v", series.ID, monErr))
+						return dispatchOutcome{shouldUpsert: false}
+					}
+					report.UnmonitoredSonarr++
+					return dispatchOutcome{monitoredStatus: "UNMONITORED", season: targetSeason, shouldUpsert: true}
 				}
-			} else {
-				seasonMonitored := false
-				for i := range series.Seasons {
-					if series.Seasons[i].SeasonNumber == targetSeason && series.Seasons[i].Monitored {
-						seasonMonitored = true
-						series.Seasons[i].Monitored = false
-						break
-					}
+				return dispatchOutcome{monitoredStatus: "UNMONITORED", season: targetSeason, shouldUpsert: true}
+			}
+
+			seasonMonitored := false
+			for i := range series.Seasons {
+				if series.Seasons[i].SeasonNumber == targetSeason && series.Seasons[i].Monitored {
+					seasonMonitored = true
+					series.Seasons[i].Monitored = false
+					break
 				}
-				if seasonMonitored {
-					if o.cfg.FirstRunDryRun {
-						if err := o.stageAction(ctx, ActionUnmonitorSeason, "SERIES", title, "SONARR", MonitorSeasonPayload{
-							SeriesID:     series.ID,
-							TVDBID:       series.TVDBID,
-							SeasonNumber: targetSeason,
-						}); err != nil {
-							report.Errors = append(report.Errors, fmt.Sprintf("stage unmonitor series %d season %d: %v", series.ID, targetSeason, err))
-						}
-					} else {
-						if _, updErr := o.sonarr.UpdateSeries(ctx, series); updErr == nil {
-							report.UnmonitoredSonarr++
-						} else {
-							report.Errors = append(report.Errors, fmt.Sprintf("unmonitor series %d season %d: %v", series.ID, targetSeason, updErr))
-						}
+			}
+			if seasonMonitored {
+				if o.cfg.FirstRunDryRun {
+					if err := o.stageAction(ctx, ActionUnmonitorSeason, "SERIES", title, "SONARR", MonitorSeasonPayload{
+						SeriesID:     series.ID,
+						TVDBID:       series.TVDBID,
+						SeasonNumber: targetSeason,
+					}); err != nil {
+						report.Errors = append(report.Errors, fmt.Sprintf("stage unmonitor series %d season %d: %v", series.ID, targetSeason, err))
 					}
+					return dispatchOutcome{shouldUpsert: false}
+				}
+				if _, updErr := o.sonarr.UpdateSeries(ctx, series); updErr != nil {
+					report.Errors = append(report.Errors, fmt.Sprintf("unmonitor series %d season %d: %v", series.ID, targetSeason, updErr))
+					return dispatchOutcome{shouldUpsert: false}
+				}
+				report.UnmonitoredSonarr++
+				return dispatchOutcome{monitoredStatus: "UNMONITORED", season: targetSeason, shouldUpsert: true}
+			}
+			return dispatchOutcome{monitoredStatus: "UNMONITORED", season: targetSeason, shouldUpsert: true}
+		}
+
+		isMon := false
+		if isSplitCour && len(sliceEpisodeIDs) > 0 {
+			for _, ep := range episodes {
+				if containsInt(sliceEpisodeIDs, ep.ID) && ep.Monitored {
+					isMon = true
+					break
+				}
+			}
+		} else {
+			for _, s := range series.Seasons {
+				if s.SeasonNumber == targetSeason && s.Monitored {
+					isMon = true
+					break
 				}
 			}
 		}
-		return
+		monStatus := "UNMONITORED"
+		if isMon {
+			monStatus = "MONITORED"
+		}
+		return dispatchOutcome{monitoredStatus: monStatus, season: targetSeason, shouldUpsert: true}
 	}
 
 	// Additive: selectively monitor target season / sub-season
@@ -623,31 +665,32 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 				}); err != nil {
 					report.Errors = append(report.Errors, fmt.Sprintf("stage monitor episodes series %d: %v", series.ID, err))
 				}
-			} else {
-				if monErr := o.sonarr.MonitorEpisodes(ctx, sliceEpisodeIDs, true); monErr == nil {
-					report.MonitoredSonarr++
-					if o.notifier != nil {
-						o.notifier.Dispatch(notification.SyncEvent{
-							Type:          notification.EventMediaAdded,
-							Timestamp:     time.Now().UTC(),
-							Title:         title,
-							MediaType:     "SERIES",
-							TargetService: "Sonarr",
-							AniListID:     entry.Media.ID,
-							Season:        &targetSeason,
-							Episodes:      sliceEpisodeIDs,
-							PosterURL:     entry.Media.CoverImageURL(),
-						})
-					}
-					if o.cfg.SonarrSearchOnAdd {
-						_, _ = o.sonarr.SearchSeason(ctx, series.ID, targetSeason)
-					}
-				} else {
-					report.Errors = append(report.Errors, fmt.Sprintf("monitor episodes series %d: %v", series.ID, monErr))
-				}
+				return dispatchOutcome{shouldUpsert: false}
 			}
+			if monErr := o.sonarr.MonitorEpisodes(ctx, sliceEpisodeIDs, true); monErr != nil {
+				report.Errors = append(report.Errors, fmt.Sprintf("monitor episodes series %d: %v", series.ID, monErr))
+				return dispatchOutcome{shouldUpsert: false}
+			}
+			report.MonitoredSonarr++
+			if o.notifier != nil {
+				o.notifier.Dispatch(notification.SyncEvent{
+					Type:          notification.EventMediaAdded,
+					Timestamp:     time.Now().UTC(),
+					Title:         title,
+					MediaType:     "SERIES",
+					TargetService: "Sonarr",
+					AniListID:     entry.Media.ID,
+					Season:        &targetSeason,
+					Episodes:      sliceEpisodeIDs,
+					PosterURL:     entry.Media.CoverImageURL(),
+				})
+			}
+			if o.cfg.SonarrSearchOnAdd {
+				_, _ = o.sonarr.SearchSeason(ctx, series.ID, targetSeason)
+			}
+			return dispatchOutcome{monitoredStatus: "MONITORED", season: targetSeason, shouldUpsert: true}
 		}
-		return
+		return dispatchOutcome{monitoredStatus: "MONITORED", season: targetSeason, shouldUpsert: true}
 	}
 
 	// Entire season selective monitoring
@@ -672,43 +715,46 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 			}); err != nil {
 				report.Errors = append(report.Errors, fmt.Sprintf("stage monitor series %d season %d: %v", series.ID, targetSeason, err))
 			}
-		} else {
-			found := false
-			for i := range series.Seasons {
-				if series.Seasons[i].SeasonNumber == targetSeason {
-					series.Seasons[i].Monitored = true
-					found = true
-					break
-				}
-			}
-			if !found {
-				series.Seasons = append(series.Seasons, servarr.Season{
-					SeasonNumber: targetSeason,
-					Monitored:    true,
-				})
-			}
-			if _, updErr := o.sonarr.UpdateSeries(ctx, series); updErr == nil {
-				report.MonitoredSonarr++
-				if o.notifier != nil {
-					o.notifier.Dispatch(notification.SyncEvent{
-						Type:          notification.EventMediaAdded,
-						Timestamp:     time.Now().UTC(),
-						Title:         title,
-						MediaType:     "SERIES",
-						TargetService: "Sonarr",
-						AniListID:     entry.Media.ID,
-						Season:        &targetSeason,
-						PosterURL:     entry.Media.CoverImageURL(),
-					})
-				}
-				if o.cfg.SonarrSearchOnAdd {
-					_, _ = o.sonarr.SearchSeason(ctx, series.ID, targetSeason)
-				}
-			} else {
-				report.Errors = append(report.Errors, fmt.Sprintf("update series %d season %d: %v", series.ID, targetSeason, updErr))
+			return dispatchOutcome{shouldUpsert: false}
+		}
+		found := false
+		for i := range series.Seasons {
+			if series.Seasons[i].SeasonNumber == targetSeason {
+				series.Seasons[i].Monitored = true
+				found = true
+				break
 			}
 		}
+		if !found {
+			series.Seasons = append(series.Seasons, servarr.Season{
+				SeasonNumber: targetSeason,
+				Monitored:    true,
+			})
+		}
+		if _, updErr := o.sonarr.UpdateSeries(ctx, series); updErr != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("update series %d season %d: %v", series.ID, targetSeason, updErr))
+			return dispatchOutcome{shouldUpsert: false}
+		}
+		report.MonitoredSonarr++
+		if o.notifier != nil {
+			o.notifier.Dispatch(notification.SyncEvent{
+				Type:          notification.EventMediaAdded,
+				Timestamp:     time.Now().UTC(),
+				Title:         title,
+				MediaType:     "SERIES",
+				TargetService: "Sonarr",
+				AniListID:     entry.Media.ID,
+				Season:        &targetSeason,
+				PosterURL:     entry.Media.CoverImageURL(),
+			})
+		}
+		if o.cfg.SonarrSearchOnAdd {
+			_, _ = o.sonarr.SearchSeason(ctx, series.ID, targetSeason)
+		}
+		return dispatchOutcome{monitoredStatus: "MONITORED", season: targetSeason, shouldUpsert: true}
 	}
+
+	return dispatchOutcome{monitoredStatus: "MONITORED", season: targetSeason, shouldUpsert: true}
 }
 
 func containsInt(slice []int, val int) bool {

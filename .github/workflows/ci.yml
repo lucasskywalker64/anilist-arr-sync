@@ -36,6 +36,7 @@ jobs:
 
       - name: Build frontend and test
         working-directory: web
+        shell: bash
         run: |
           npm ci
           npm run build

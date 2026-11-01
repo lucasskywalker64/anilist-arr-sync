@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -17,6 +18,8 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/orchestrator"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 )
+
+var errMissingInitialCredentials = errors.New("both username and password are required when creating initial user")
 
 // MappingOverride represents a row in mapping_overrides table.
 type MappingOverride struct {
@@ -202,6 +205,9 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	if sanitized.SonarrAPIKey != "" {
 		sanitized.SonarrAPIKey = "******"
 	}
+	if sanitized.ProxyPassword != "" {
+		sanitized.ProxyPassword = "******"
+	}
 
 	var adminUsername string
 	if s.db != nil {
@@ -330,7 +336,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		case "password":
 			if str, ok := v.(string); ok && strings.TrimSpace(str) != "" {
-				newPassword = strings.TrimSpace(str)
+				newPassword = str
 				hasPasswordUpdate = true
 			}
 		case "useproxy":
@@ -354,7 +360,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 				next.ProxyUsername = str
 			}
 		case "proxypassword":
-			if str, ok := v.(string); ok {
+			if str, ok := v.(string); ok && str != "******" {
 				next.ProxyPassword = str
 			}
 		case "proxyignoredaddresses":
@@ -467,11 +473,8 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 			if count == 0 {
-				if !hasUsernameUpdate {
-					newUsername = "admin"
-				}
-				if !hasPasswordUpdate {
-					newPassword = "admin"
+				if !hasUsernameUpdate || !hasPasswordUpdate {
+					return errMissingInitialCredentials
 				}
 				hash, err := HashPassword(newPassword, "pbkdf2")
 				if err != nil {
@@ -501,6 +504,10 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			return nil
 		})
 		if err != nil {
+			if errors.Is(err, errMissingInitialCredentials) {
+				s.writeJSONError(w, http.StatusBadRequest, err.Error())
+				return
+			}
 			log.Printf("failed to update user credentials: %v", err)
 			s.writeJSONError(w, http.StatusInternalServerError, "failed to update user credentials")
 			return

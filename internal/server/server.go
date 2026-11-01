@@ -5,6 +5,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -135,6 +136,73 @@ func (s *Server) getAPIKey() string {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
 	return s.cfg.APIKey
+}
+
+func (s *Server) getCleanURLBase() string {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cleanURLBase
+}
+
+func (s *Server) isSetupRequired(ctx context.Context) bool {
+	if s.db == nil {
+		return false
+	}
+	var count int
+	err := s.db.Read(ctx, func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM users;").Scan(&count)
+	})
+	if err != nil {
+		return false
+	}
+	return count == 0
+}
+
+func (s *Server) isRequestAuthorized(r *http.Request) bool {
+	// 1. Valid X-Api-Key header matching s.getAPIKey()
+	reqKey := r.Header.Get("X-Api-Key")
+	apiKey := s.getAPIKey()
+	if reqKey != "" && apiKey != "" && subtle.ConstantTimeCompare([]byte(reqKey), []byte(apiKey)) == 1 {
+		return true
+	}
+
+	// 2. Auth required == "Disabled"
+	if s.getAuthRequired() == "Disabled" {
+		return true
+	}
+
+	// 3. Auth required == "DisabledForLocalAddresses" and IsLocalIP(s.getClientIP(r))
+	if s.getAuthRequired() == "DisabledForLocalAddresses" {
+		clientIP := s.getClientIP(r)
+		if clientIP != nil && IsLocalIP(clientIP) {
+			return true
+		}
+	}
+
+	// 4. Auth method == "Forms" and valid session cookie in s.sessions
+	if s.getAuthMethod() == "Forms" && s.sessions != nil {
+		if cookie, err := r.Cookie(sessionCookieName); err == nil && cookie.Value != "" {
+			if _, ok := s.sessions.Validate(cookie.Value); ok {
+				return true
+			}
+		}
+	}
+
+	// 5. Auth method == "Basic" and valid basic auth credentials in s.db
+	if s.getAuthMethod() == "Basic" && s.db != nil {
+		user, pass, ok := r.BasicAuth()
+		if ok {
+			var storedHash string
+			err := s.db.Read(r.Context(), func(ctx context.Context, q storage.Querier) error {
+				return q.QueryRowContext(ctx, "SELECT password_hash FROM users WHERE username = ?;", user).Scan(&storedHash)
+			})
+			if err == nil && CheckPassword(pass, storedHash) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func (s *Server) getAuthMethod() string {
@@ -428,15 +496,21 @@ func (s *Server) serveIndexHTML(w http.ResponseWriter, r *http.Request) {
 
 	// Inject runtime bootstrap config and document base href
 	baseHref := "/"
-	if s.cleanURLBase != "" {
-		baseHref = s.cleanURLBase + "/"
+	cleanBase := s.getCleanURLBase()
+	if cleanBase != "" {
+		baseHref = cleanBase + "/"
 	}
 	baseTag := fmt.Sprintf("<base href=\"%s\" />", baseHref)
 
+	apiKeyVal := ""
+	if s.isRequestAuthorized(r) {
+		apiKeyVal = s.getAPIKey()
+	}
+
 	bootstrapData := map[string]any{
-		"urlBase": s.cleanURLBase,
+		"urlBase": cleanBase,
 		"version": "1.0.0",
-		"apiKey":  s.getAPIKey(),
+		"apiKey":  apiKeyVal,
 	}
 	bootstrapJSON, err := json.Marshal(bootstrapData)
 	if err != nil {
@@ -450,7 +524,7 @@ func (s *Server) serveIndexHTML(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "no-store")
 	http.ServeContent(w, r, "index.html", indexStat.ModTime(), bytes.NewReader(content))
 }
 

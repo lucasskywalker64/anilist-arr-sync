@@ -251,6 +251,53 @@ func TestCSRFProtection_ApiKeyRequiredForMutatingRequests(t *testing.T) {
 	}
 }
 
+func TestCSRFProtection_BasicAuthMode(t *testing.T) {
+	cfg := config.NewDefault()
+	cfg.AuthenticationMethod = "Basic"
+	cfg.APIKey = "valid-api-key-basic"
+
+	srv := &Server{
+		cfg: cfg,
+	}
+
+	handler := srv.csrfMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("basic mutating success"))
+	}))
+
+	// 1. POST without X-Requested-With or X-Api-Key is rejected with 401
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sync/start", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("expected POST in Basic mode without X-Requested-With or X-Api-Key to return 401, got %d", rec.Code)
+		}
+	}
+
+	// 2. POST with X-Requested-With: XMLHttpRequest succeeds with 200
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sync/start", nil)
+		req.Header.Set("X-Requested-With", "XMLHttpRequest")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected POST in Basic mode with X-Requested-With to return 200, got %d", rec.Code)
+		}
+	}
+
+	// 3. POST with valid X-Api-Key succeeds with 200
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sync/start", nil)
+		req.Header.Set("X-Api-Key", "valid-api-key-basic")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected POST in Basic mode with valid X-Api-Key to return 200, got %d", rec.Code)
+		}
+	}
+}
+
 func TestLocalLanBypass_ReverseProxyXForwardedFor(t *testing.T) {
 	cfg := config.NewDefault()
 	cfg.AuthenticationMethod = "Forms"
@@ -318,6 +365,20 @@ func TestLocalLanBypass_ReverseProxyXForwardedFor(t *testing.T) {
 		}
 		if capturedUser != "local_user" {
 			t.Errorf("expected context user 'local_user', got %q", capturedUser)
+		}
+	}
+
+	// 4. Trusted remote RemoteAddr (127.0.0.1) with spoofed local LAN preceding untrusted external IP
+	// Right-to-left parsing resolves untrusted external IP (203.0.113.195) -> rejected with HTTP 401.
+	{
+		capturedUser = ""
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
+		req.RemoteAddr = "127.0.0.1:54321"
+		req.Header.Set("X-Forwarded-For", "192.168.1.50, 203.0.113.195")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("expected spoofed XFF before untrusted hop to return 401, got %d", rec.Code)
 		}
 	}
 }

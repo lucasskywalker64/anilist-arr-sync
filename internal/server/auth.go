@@ -123,6 +123,18 @@ func IsLocalAddress(addr string) bool {
 	return IsLocalIP(net.ParseIP(host))
 }
 
+func ipInNets(ip net.IP, nets []*net.IPNet) bool {
+	if ip == nil {
+		return false
+	}
+	for _, n := range nets {
+		if n != nil && n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 // ResolveClientIP resolves the client IP from remoteAddr and X-Forwarded-For headers.
 // X-Forwarded-For is only evaluated when remoteAddr originates from one of the trusted networks.
 func ResolveClientIP(remoteAddr, xForwardedFor string, trustedNets []*net.IPNet) net.IP {
@@ -138,24 +150,28 @@ func ResolveClientIP(remoteAddr, xForwardedFor string, trustedNets []*net.IPNet)
 		return nil
 	}
 
-	trusted := false
-	for _, netBlock := range trustedNets {
-		if netBlock != nil && netBlock.Contains(remoteIP) {
-			trusted = true
-			break
-		}
-	}
-
-	if trusted && xForwardedFor != "" {
+	if ipInNets(remoteIP, trustedNets) && xForwardedFor != "" {
 		parts := strings.Split(xForwardedFor, ",")
-		first := strings.TrimSpace(parts[0])
-		if h, _, err := net.SplitHostPort(first); err == nil {
-			first = h
+		var candidate net.IP
+		for i := len(parts) - 1; i >= 0; i-- {
+			hop := strings.TrimSpace(parts[i])
+			if h, _, err := net.SplitHostPort(hop); err == nil {
+				hop = h
+			}
+			hop = strings.TrimPrefix(hop, "[")
+			hop = strings.TrimSuffix(hop, "]")
+
+			ip := net.ParseIP(hop)
+			if ip == nil {
+				break
+			}
+			candidate = ip
+			if !ipInNets(ip, trustedNets) {
+				return ip
+			}
 		}
-		first = strings.TrimPrefix(first, "[")
-		first = strings.TrimSuffix(first, "]")
-		if clientIP := net.ParseIP(first); clientIP != nil {
-			return clientIP
+		if candidate != nil {
+			return candidate
 		}
 	}
 

@@ -82,7 +82,8 @@
   }
 
   async function handleSaveOverride() {
-    const anilistIdNum = parseInt(formAnilistId.trim(), 10);
+    const aIdStr = String(formAnilistId ?? '').trim();
+    const anilistIdNum = parseInt(aIdStr, 10);
     if (!anilistIdNum || isNaN(anilistIdNum)) {
       formError = 'AniList ID must be a positive integer';
       return;
@@ -91,13 +92,18 @@
     formSaving = true;
     formError = '';
     try {
+      const tvdbStr = String(formTvdbId ?? '').trim();
+      const tmdbStr = String(formTmdbId ?? '').trim();
+      const seasonsStr = String(formSeasons ?? '').trim();
+      const titleStr = String(formTitleOverride ?? '').trim();
+
       const payload: Partial<OverrideItem> = {
         anilistId: anilistIdNum,
         mediaType: formMediaType,
-        tvdbId: formTvdbId.trim() ? parseInt(formTvdbId.trim(), 10) : null,
-        tmdbId: formTmdbId.trim() ? parseInt(formTmdbId.trim(), 10) : null,
-        seasons: formSeasons.trim() || '1',
-        titleOverride: formTitleOverride.trim() || null,
+        tvdbId: tvdbStr ? parseInt(tvdbStr, 10) : null,
+        tmdbId: tmdbStr ? parseInt(tmdbStr, 10) : null,
+        seasons: seasonsStr || '1',
+        titleOverride: titleStr || null,
       };
 
       await api.createOverride(payload);

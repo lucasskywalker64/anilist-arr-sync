@@ -1362,3 +1362,246 @@ func TestSync_UnmonitorZeroTagDoesNotMatchUntagged(t *testing.T) {
 		t.Fatalf("expected UnmonitoredRadarr=0, got %d", report.UnmonitoredRadarr)
 	}
 }
+
+func TestSync_SyncedMedia_DryRunNoUpsert(t *testing.T) {
+	db := setupTestDB(t)
+
+	err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		_, writeErr := tx.ExecContext(ctx, `
+			INSERT INTO mapping_overrides (anilist_id, media_type, tmdb_id)
+			VALUES (1001, 'MOVIE', 55555);
+		`)
+		return writeErr
+	})
+	if err != nil {
+		t.Fatalf("insert mapping failed: %v", err)
+	}
+
+	entries := []anilist.MediaListEntry{
+		{
+			ID:     1,
+			Status: anilist.StatusCurrent,
+			Media: anilist.Media{
+				ID:     1001,
+				Format: "MOVIE",
+				Title:  anilist.MediaTitle{Romaji: "Dry Run Movie"},
+			},
+		},
+	}
+
+	alSrv := setupMockAniList(t, entries)
+	radarrSrv := setupMockRadarr(t)
+	sonarrSrv := setupMockSonarr(t)
+
+	cfg := config.NewDefault()
+	cfg.AniListUsername = "testuser"
+	cfg.FirstRunDryRun = true
+
+	alClient := anilist.NewClient(alSrv.URL)
+	sonarrClient, _ := servarr.NewSonarrClient(sonarrSrv.URL, "key")
+	radarrClient, _ := servarr.NewRadarrClient(radarrSrv.URL, "key")
+
+	orc := orchestrator.New(db, cfg, alClient, sonarrClient, radarrClient)
+
+	_, syncErr := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+	if syncErr != nil {
+		t.Fatalf("Sync failed: %v", syncErr)
+	}
+
+	var count int
+	_ = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM synced_media WHERE anilist_id = 1001").Scan(&count)
+	})
+	if count != 0 {
+		t.Fatalf("expected 0 synced_media rows on dry run, got %d", count)
+	}
+}
+
+func TestSync_SyncedMedia_NilServarrClientNoUpsert(t *testing.T) {
+	db := setupTestDB(t)
+
+	err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		_, writeErr := tx.ExecContext(ctx, `
+			INSERT INTO mapping_overrides (anilist_id, media_type, tmdb_id)
+			VALUES (1002, 'MOVIE', 55556);
+		`)
+		return writeErr
+	})
+	if err != nil {
+		t.Fatalf("insert mapping failed: %v", err)
+	}
+
+	entries := []anilist.MediaListEntry{
+		{
+			ID:     1,
+			Status: anilist.StatusCurrent,
+			Media: anilist.Media{
+				ID:     1002,
+				Format: "MOVIE",
+				Title:  anilist.MediaTitle{Romaji: "Nil Client Movie"},
+			},
+		},
+	}
+
+	alSrv := setupMockAniList(t, entries)
+	cfg := config.NewDefault()
+	cfg.AniListUsername = "testuser"
+	cfg.FirstRunDryRun = false
+
+	alClient := anilist.NewClient(alSrv.URL)
+
+	// radarrClient is nil
+	orc := orchestrator.New(db, cfg, alClient, nil, nil)
+
+	_, syncErr := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+	if syncErr != nil {
+		t.Fatalf("Sync failed: %v", syncErr)
+	}
+
+	var count int
+	_ = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM synced_media WHERE anilist_id = 1002").Scan(&count)
+	})
+	if count != 0 {
+		t.Fatalf("expected 0 synced_media rows when client is nil, got %d", count)
+	}
+}
+
+func TestSync_SyncedMedia_ServarrAPIErrorNoUpsert(t *testing.T) {
+	db := setupTestDB(t)
+
+	err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		_, writeErr := tx.ExecContext(ctx, `
+			INSERT INTO mapping_overrides (anilist_id, media_type, tmdb_id)
+			VALUES (1003, 'MOVIE', 55557);
+		`)
+		return writeErr
+	})
+	if err != nil {
+		t.Fatalf("insert mapping failed: %v", err)
+	}
+
+	entries := []anilist.MediaListEntry{
+		{
+			ID:     1,
+			Status: anilist.StatusCurrent,
+			Media: anilist.Media{
+				ID:     1003,
+				Format: "MOVIE",
+				Title:  anilist.MediaTitle{Romaji: "Error Movie"},
+			},
+		},
+	}
+
+	alSrv := setupMockAniList(t, entries)
+	radarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
+			_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 1, Label: "anilist-sync"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/lookup/tmdb":
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer radarrSrv.Close()
+
+	cfg := config.NewDefault()
+	cfg.AniListUsername = "testuser"
+	cfg.FirstRunDryRun = false
+
+	alClient := anilist.NewClient(alSrv.URL)
+	radarrClient, _ := servarr.NewRadarrClient(radarrSrv.URL, "key")
+
+	orc := orchestrator.New(db, cfg, alClient, nil, radarrClient)
+
+	report, syncErr := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+	if syncErr != nil {
+		t.Fatalf("Sync failed: %v", syncErr)
+	}
+	if len(report.Errors) == 0 {
+		t.Fatal("expected report errors for API 500 error")
+	}
+
+	var count int
+	_ = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM synced_media WHERE anilist_id = 1003").Scan(&count)
+	})
+	if count != 0 {
+		t.Fatalf("expected 0 synced_media rows on Servarr API error, got %d", count)
+	}
+}
+
+func TestSync_SyncedMedia_StatusDropped_UnmonitorDroppedFalse(t *testing.T) {
+	db := setupTestDB(t)
+
+	err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		_, writeErr := tx.ExecContext(ctx, `
+			INSERT INTO mapping_overrides (anilist_id, media_type, tmdb_id)
+			VALUES (1004, 'MOVIE', 55558);
+		`)
+		return writeErr
+	})
+	if err != nil {
+		t.Fatalf("insert mapping failed: %v", err)
+	}
+
+	entries := []anilist.MediaListEntry{
+		{
+			ID:     1,
+			Status: anilist.StatusDropped,
+			Media: anilist.Media{
+				ID:     1004,
+				Format: "MOVIE",
+				Title:  anilist.MediaTitle{Romaji: "Dropped Keep Monitored Movie"},
+			},
+		},
+	}
+
+	alSrv := setupMockAniList(t, entries)
+	radarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
+			_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 1, Label: "anilist-sync"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/lookup/tmdb":
+			_ = json.NewEncoder(w).Encode(servarr.Movie{
+				ID:        777,
+				TMDBID:    55558,
+				Title:     "Dropped Keep Monitored Movie",
+				Monitored: true,
+				Tags:      []int{1},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer radarrSrv.Close()
+
+	cfg := config.NewDefault()
+	cfg.AniListUsername = "testuser"
+	cfg.FirstRunDryRun = false
+	cfg.UnmonitorDropped = false // explicitly false
+
+	alClient := anilist.NewClient(alSrv.URL)
+	radarrClient, _ := servarr.NewRadarrClient(radarrSrv.URL, "key")
+
+	orc := orchestrator.New(db, cfg, alClient, nil, radarrClient)
+
+	_, syncErr := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+	if syncErr != nil {
+		t.Fatalf("Sync failed: %v", syncErr)
+	}
+
+	var status string
+	err = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT monitored_status FROM synced_media WHERE anilist_id = 1004").Scan(&status)
+	})
+	if err != nil {
+		t.Fatalf("failed to query synced_media: %v", err)
+	}
+	if status != "MONITORED" {
+		t.Fatalf("expected monitored_status = MONITORED when UnmonitorDropped is false, got %q", status)
+	}
+}

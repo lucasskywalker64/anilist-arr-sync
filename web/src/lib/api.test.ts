@@ -47,8 +47,29 @@ describe('API Client', () => {
     const [url, options] = fetchMock.mock.calls[0];
     expect(url).toBe('/api/v1/sync/start');
     expect(options.method).toBe('POST');
+    expect(options.headers['X-Requested-With']).toBe('XMLHttpRequest');
     expect(options.headers['X-CSRF-Token']).toBe('test-csrf-token');
     expect(options.headers['X-Api-Key']).toBe('test-api-key');
+  });
+
+  it('sends X-Api-Key on GET requests when configured', async () => {
+    setApiKey('api-key-for-get');
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({ status: 'ok', version: '1.0.0' }),
+    });
+    globalThis.fetch = fetchMock;
+
+    const health = await api.getHealth();
+    expect(health.status).toBe('ok');
+
+    const [, options] = fetchMock.mock.calls[0];
+    expect(options.method).toBe('GET');
+    expect(options.headers['X-Api-Key']).toBe('api-key-for-get');
+    expect(options.headers['X-Requested-With']).toBeUndefined();
+    expect(options.headers['X-CSRF-Token']).toBeUndefined();
   });
 
   it('does not require mutating headers for GET requests', async () => {
@@ -90,6 +111,19 @@ describe('API Client', () => {
     const items = await api.getReviewQueue();
     expect(items).toHaveLength(1);
     expect(items[0].candidates).toEqual(candidates);
+  });
+
+  it('handles null response safely in getReviewQueue', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => null,
+    });
+    globalThis.fetch = fetchMock;
+
+    const items = await api.getReviewQueue();
+    expect(items).toEqual([]);
   });
 
   it('extracts error messages from JSON error responses', async () => {

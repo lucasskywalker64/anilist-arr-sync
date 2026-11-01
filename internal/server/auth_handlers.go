@@ -161,14 +161,16 @@ func (s *Server) handleCurrentUser(w http.ResponseWriter, r *http.Request) {
 		"username":      username,
 		"authenticated": username != "",
 		"csrfToken":     csrfToken,
+		"setupRequired": s.isSetupRequired(r.Context()),
 	})
 }
 
 // setSessionCookie configures HTTP-only session and CSRF cookies, honoring TLS and reverse proxy HTTPS.
 func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token, csrfToken string) {
 	path := "/"
-	if s.cleanURLBase != "" {
-		path = s.cleanURLBase + "/"
+	cleanBase := s.getCleanURLBase()
+	if cleanBase != "" {
+		path = cleanBase + "/"
 	}
 
 	ssl := s.isSslEnabled() || r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
@@ -199,8 +201,9 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token,
 // clearSessionCookie removes active session and CSRF cookies.
 func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	path := "/"
-	if s.cleanURLBase != "" {
-		path = s.cleanURLBase + "/"
+	cleanBase := s.getCleanURLBase()
+	if cleanBase != "" {
+		path = cleanBase + "/"
 	}
 
 	ssl := s.isSslEnabled() || r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"

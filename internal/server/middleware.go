@@ -22,8 +22,9 @@ const userContextKey = contextKey("user")
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-		if s.cleanURLBase != "" {
-			path = strings.TrimPrefix(path, s.cleanURLBase)
+		cleanBase := s.getCleanURLBase()
+		if cleanBase != "" {
+			path = strings.TrimPrefix(path, cleanBase)
 		}
 
 		// Public endpoints that do not require authentication (static assets, client-side SPA routes, health, and auth login/setup)
@@ -43,7 +44,14 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		// 2. Local LAN address bypass
+		// 2. Auth disabled globally
+		if s.getAuthRequired() == "Disabled" {
+			ctx := context.WithValue(r.Context(), userContextKey, "anonymous")
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
+		// 3. Local LAN address bypass
 		if s.getAuthRequired() == "DisabledForLocalAddresses" {
 			clientIP := s.getClientIP(r)
 			if clientIP != nil && IsLocalIP(clientIP) {
@@ -53,7 +61,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		// 3. Forms session cookie authentication
+		// 4. Forms session cookie authentication
 		if s.getAuthMethod() == "Forms" {
 			cookie, err := r.Cookie(sessionCookieName)
 			if err == nil && cookie.Value != "" {
@@ -80,11 +88,21 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				}
 			}
 			w.Header().Set("WWW-Authenticate", `Basic realm="AniList-Arr-Sync"`)
-			s.writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":         "unauthorized",
+				"setupRequired": s.isSetupRequired(r.Context()),
+			})
 			return
 		}
 
-		s.writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error":         "unauthorized",
+			"setupRequired": s.isSetupRequired(r.Context()),
+		})
 	})
 }
 
@@ -98,8 +116,9 @@ func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 		}
 
 		path := r.URL.Path
-		if s.cleanURLBase != "" {
-			path = strings.TrimPrefix(path, s.cleanURLBase)
+		cleanBase := s.getCleanURLBase()
+		if cleanBase != "" {
+			path = strings.TrimPrefix(path, cleanBase)
 		}
 
 		// Login and initial setup endpoints are exempt from CSRF validation
@@ -108,8 +127,8 @@ func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Basic auth mode is exempt from session CSRF validation
-		if s.getAuthMethod() == "Basic" {
+		// Basic auth mode requires X-Requested-With header to defend against CSRF
+		if s.getAuthMethod() == "Basic" && r.Header.Get("X-Requested-With") != "" {
 			next.ServeHTTP(w, r)
 			return
 		}

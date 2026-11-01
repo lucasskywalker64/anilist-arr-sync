@@ -92,7 +92,8 @@ func (s *Server) handleCreateNotification(w http.ResponseWriter, r *http.Request
 				b, _ := json.Marshal(map[string]string{"url": u})
 				req.ConfigJSON = string(b)
 			}
-		} else if req.URL != "" {
+		}
+		if req.ConfigJSON == "" && req.URL != "" {
 			b, _ := json.Marshal(map[string]string{"url": req.URL})
 			req.ConfigJSON = string(b)
 		}
@@ -207,17 +208,24 @@ func (s *Server) handleUpdateNotification(w http.ResponseWriter, r *http.Request
 	}
 	if strings.TrimSpace(req.ConfigJSON) != "" {
 		existing.ConfigJSON = strings.TrimSpace(req.ConfigJSON)
-	} else if req.Settings != nil {
-		if u, ok := req.Settings["webhookUrl"].(string); ok && u != "" {
-			b, _ := json.Marshal(map[string]string{"url": u})
-			existing.ConfigJSON = string(b)
-		} else if u, ok := req.Settings["url"].(string); ok && u != "" {
-			b, _ := json.Marshal(map[string]string{"url": u})
-			existing.ConfigJSON = string(b)
+	} else {
+		newConfigJSON := ""
+		if req.Settings != nil {
+			if u, ok := req.Settings["webhookUrl"].(string); ok && u != "" {
+				b, _ := json.Marshal(map[string]string{"url": u})
+				newConfigJSON = string(b)
+			} else if u, ok := req.Settings["url"].(string); ok && u != "" {
+				b, _ := json.Marshal(map[string]string{"url": u})
+				newConfigJSON = string(b)
+			}
 		}
-	} else if req.URL != "" {
-		b, _ := json.Marshal(map[string]string{"url": req.URL})
-		existing.ConfigJSON = string(b)
+		if newConfigJSON == "" && req.URL != "" {
+			b, _ := json.Marshal(map[string]string{"url": req.URL})
+			newConfigJSON = string(b)
+		}
+		if newConfigJSON != "" {
+			existing.ConfigJSON = newConfigJSON
+		}
 	}
 
 	if req.OnAdded == nil && req.OnSyncStart != nil {
@@ -324,7 +332,8 @@ func (s *Server) handleTestNotificationPayload(w http.ResponseWriter, r *http.Re
 				b, _ := json.Marshal(map[string]string{"url": u})
 				configJSON = string(b)
 			}
-		} else if req.URL != "" {
+		}
+		if configJSON == "" && req.URL != "" {
 			b, _ := json.Marshal(map[string]string{"url": req.URL})
 			configJSON = string(b)
 		}

@@ -167,6 +167,7 @@ export interface CurrentUser {
   username: string;
   authenticated: boolean;
   csrfToken?: string;
+  setupRequired?: boolean;
 }
 
 export interface MappingResolution {

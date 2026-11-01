@@ -63,9 +63,17 @@
   async function checkAuthAndBoot() {
     try {
       currentUser = await api.getUser();
-      needsLogin = !currentUser.authenticated;
+      if (currentUser.setupRequired) {
+        isSetupMode = true;
+        needsLogin = true;
+      } else {
+        needsLogin = !currentUser.authenticated;
+      }
     } catch (e: any) {
-      if (e.status === 401 || (e.message && e.message.includes('401'))) {
+      if (e?.setupRequired) {
+        isSetupMode = true;
+      }
+      if (e?.status === 401 || (e?.message && e.message.includes('401'))) {
         needsLogin = true;
       }
     }
@@ -84,6 +92,17 @@
         api.getSyncStatus(),
       ]);
 
+      const settled = [rev, stg, ovr, syncSt];
+      for (const res of settled) {
+        if (res.status === 'rejected') {
+          const reason = res.reason;
+          if (reason && (reason.status === 401 || (reason.message && reason.message.includes('401')))) {
+            needsLogin = true;
+            return;
+          }
+        }
+      }
+
       if (rev.status === 'fulfilled') reviewItems = rev.value;
       if (stg.status === 'fulfilled') stagedActions = stg.value;
       if (ovr.status === 'fulfilled') overrides = ovr.value;
@@ -92,8 +111,11 @@
       try {
         const cfg = await api.getConfig();
         if (cfg.instanceName) instanceName = cfg.instanceName;
-      } catch {
-        // config not readable yet
+      } catch (err: any) {
+        if (err && (err.status === 401 || (err.message && err.message.includes('401')))) {
+          needsLogin = true;
+          return;
+        }
       }
     } catch {
       // ignore global poll failure

@@ -82,12 +82,17 @@
     errorMsg = '';
     successMsg = '';
     try {
+      const tvdbStr = String(state.tvdbId ?? '').trim();
+      const tmdbStr = String(state.tmdbId ?? '').trim();
+      const seasonsStr = String(state.seasons ?? '').trim();
+      const titleStr = String(state.titleOverride ?? '').trim();
+
       await api.resolveReview(item.id, {
         mediaType: state.mediaType,
-        tvdbId: state.tvdbId.trim() ? parseInt(state.tvdbId.trim(), 10) : null,
-        tmdbId: state.tmdbId.trim() ? parseInt(state.tmdbId.trim(), 10) : null,
-        seasons: state.seasons.trim() || '1',
-        titleOverride: state.titleOverride.trim() || undefined,
+        tvdbId: tvdbStr ? parseInt(tvdbStr, 10) : null,
+        tmdbId: tmdbStr ? parseInt(tmdbStr, 10) : null,
+        seasons: seasonsStr || '1',
+        titleOverride: titleStr || undefined,
       });
 
       successMsg = `Resolved "${item.titleRomaji}" and saved manual override.`;
