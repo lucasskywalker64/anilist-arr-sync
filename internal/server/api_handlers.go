@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -480,26 +484,35 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					return err
 				}
-				_, err = tx.ExecContext(ctx, "INSERT INTO users (username, password_hash) VALUES (?, ?);", newUsername, hash)
-				return err
-			}
-			if hasPasswordUpdate && hasUsernameUpdate {
+				if _, err = tx.ExecContext(ctx, "INSERT INTO users (username, password_hash) VALUES (?, ?);", newUsername, hash); err != nil {
+					return err
+				}
+			} else if hasPasswordUpdate && hasUsernameUpdate {
 				hash, err := HashPassword(newPassword, "pbkdf2")
 				if err != nil {
 					return err
 				}
-				_, err = tx.ExecContext(ctx, "UPDATE users SET username = ?, password_hash = ? WHERE id = (SELECT id FROM users ORDER BY id ASC LIMIT 1);", newUsername, hash)
-				return err
+				if _, err = tx.ExecContext(ctx, "UPDATE users SET username = ?, password_hash = ? WHERE id = (SELECT id FROM users ORDER BY id ASC LIMIT 1);", newUsername, hash); err != nil {
+					return err
+				}
 			} else if hasPasswordUpdate {
 				hash, err := HashPassword(newPassword, "pbkdf2")
 				if err != nil {
 					return err
 				}
-				_, err = tx.ExecContext(ctx, "UPDATE users SET password_hash = ? WHERE id = (SELECT id FROM users ORDER BY id ASC LIMIT 1);", hash)
-				return err
+				if _, err = tx.ExecContext(ctx, "UPDATE users SET password_hash = ? WHERE id = (SELECT id FROM users ORDER BY id ASC LIMIT 1);", hash); err != nil {
+					return err
+				}
 			} else if hasUsernameUpdate {
-				_, err := tx.ExecContext(ctx, "UPDATE users SET username = ? WHERE id = (SELECT id FROM users ORDER BY id ASC LIMIT 1);", newUsername)
-				return err
+				if _, err := tx.ExecContext(ctx, "UPDATE users SET username = ? WHERE id = (SELECT id FROM users ORDER BY id ASC LIMIT 1);", newUsername); err != nil {
+					return err
+				}
+			}
+
+			if s.configPath != "" {
+				if err := config.Save(s.configPath, &next); err != nil {
+					return err
+				}
 			}
 			return nil
 		})
@@ -512,9 +525,11 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			s.writeJSONError(w, http.StatusInternalServerError, "failed to update user credentials")
 			return
 		}
-	}
 
-	if s.configPath != "" {
+		if s.sessions != nil {
+			s.sessions.RevokeAll()
+		}
+	} else if s.configPath != "" {
 		if err := config.Save(s.configPath, &next); err != nil {
 			log.Printf("save config failed: %v", err)
 			s.writeJSONError(w, http.StatusInternalServerError, "save config failed")
@@ -524,7 +539,6 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 	*s.cfg = next
 	s.trustedNets = newTrustedNets
-	s.cleanURLBase = normalizeURLBase(next.URLBase)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -976,5 +990,135 @@ func (s *Server) handleApplyUpdate(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status":  "up to date",
 		"message": "no newer version available",
+	})
+}
+
+// FilesystemDirectory represents a directory item returned in the filesystem listing.
+type FilesystemDirectory struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// FilesystemResponse represents the response containing directory listings for folder browsing.
+type FilesystemResponse struct {
+	Current     string                `json:"current"`
+	Parent      string                `json:"parent,omitempty"`
+	Roots       []string              `json:"roots"`
+	Directories []FilesystemDirectory `json:"directories"`
+}
+
+// getSystemRoots returns available drive roots on Windows or root directory on Unix.
+func getSystemRoots() []string {
+	var roots []string
+	if runtime.GOOS == "windows" {
+		for c := 'A'; c <= 'Z'; c++ {
+			drive := fmt.Sprintf("%c:\\", c)
+			if fi, err := os.Stat(drive); err == nil && fi.IsDir() {
+				roots = append(roots, drive)
+			}
+		}
+		if len(roots) == 0 {
+			roots = append(roots, "C:\\")
+		}
+	} else {
+		roots = []string{"/"}
+	}
+	return roots
+}
+
+// handleFilesystem lists directories for the folder browser.
+func (s *Server) handleFilesystem(w http.ResponseWriter, r *http.Request) {
+	roots := getSystemRoots()
+	reqPath := strings.TrimSpace(r.URL.Query().Get("path"))
+
+	target := reqPath
+	if target == "" {
+		cfg := s.Config()
+		if cfg.BackupFolder != "" {
+			if abs, err := filepath.Abs(cfg.BackupFolder); err == nil {
+				if fi, err := os.Stat(abs); err == nil && fi.IsDir() {
+					target = abs
+				}
+			}
+		}
+		if target == "" {
+			if wd, err := os.Getwd(); err == nil {
+				target = wd
+			} else if len(roots) > 0 {
+				target = roots[0]
+			}
+		}
+	}
+
+	// Normalize Windows drive letters ending without slash e.g. "C:" -> "C:\"
+	if len(target) == 2 && target[1] == ':' {
+		target += string(filepath.Separator)
+	}
+
+	target = filepath.Clean(target)
+	fi, err := os.Stat(target)
+	if err != nil || !fi.IsDir() {
+		// If path doesn't exist, try parent directory or first root
+		if parent := filepath.Dir(target); parent != target {
+			if pfi, perr := os.Stat(parent); perr == nil && pfi.IsDir() {
+				target = parent
+			} else if len(roots) > 0 {
+				target = roots[0]
+			}
+		} else if len(roots) > 0 {
+			target = roots[0]
+		}
+	}
+
+	// Re-check target after fallback
+	if len(target) == 2 && target[1] == ':' {
+		target += string(filepath.Separator)
+	}
+
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		s.writeJSONError(w, http.StatusForbidden, fmt.Sprintf("cannot read directory: %v", err))
+		return
+	}
+
+	var parent string
+	cleanDir := filepath.Dir(target)
+	if cleanDir != target && cleanDir != "." {
+		parent = cleanDir
+	}
+
+	dirs := make([]FilesystemDirectory, 0)
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "$") {
+			continue
+		}
+
+		isDir := entry.IsDir()
+		if !isDir && (entry.Type()&fs.ModeSymlink != 0) {
+			if resolved, err := os.Stat(filepath.Join(target, name)); err == nil && resolved.IsDir() {
+				isDir = true
+			}
+		}
+
+		if isDir {
+			dirs = append(dirs, FilesystemDirectory{
+				Name: name,
+				Path: filepath.Join(target, name),
+			})
+		}
+	}
+
+	sort.Slice(dirs, func(i, j int) bool {
+		return strings.ToLower(dirs[i].Name) < strings.ToLower(dirs[j].Name)
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(FilesystemResponse{
+		Current:     target,
+		Parent:      parent,
+		Roots:       roots,
+		Directories: dirs,
 	})
 }

@@ -277,4 +277,32 @@ describe('API Client', () => {
     expect(stats.total).toBe(10);
     expect(stats.monitored).toBe(8);
   });
+
+  it('fetches filesystem directory contents', async () => {
+    const fsData = {
+      current: 'C:\\Users\\lucas',
+      parent: 'C:\\Users',
+      roots: ['C:\\', 'D:\\'],
+      directories: [
+        { name: 'anilist-arr-sync', path: 'C:\\Users\\lucas\\anilist-arr-sync' },
+      ],
+    };
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => fsData,
+    });
+    globalThis.fetch = fetchMock;
+
+    const res = await api.getFilesystem('C:\\Users\\lucas');
+    expect(res.current).toBe('C:\\Users\\lucas');
+    expect(res.roots).toEqual(['C:\\', 'D:\\']);
+    expect(res.directories).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/filesystem?path=C%3A%5CUsers%5Clucas',
+      expect.anything()
+    );
+  });
 });

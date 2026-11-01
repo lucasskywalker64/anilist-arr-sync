@@ -163,7 +163,7 @@ func ResolveClientIP(remoteAddr, xForwardedFor string, trustedNets []*net.IPNet)
 
 			ip := net.ParseIP(hop)
 			if ip == nil {
-				break
+				return nil
 			}
 			candidate = ip
 			if !ipInNets(ip, trustedNets) {
@@ -340,6 +340,13 @@ func (s *SessionStore) Delete(token string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sessions, token)
+}
+
+// RevokeAll purges all active user sessions from memory.
+func (s *SessionStore) RevokeAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions = make(map[string]session)
 }
 
 // Authenticator provides user authentication operations against the database.

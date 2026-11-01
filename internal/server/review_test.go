@@ -212,6 +212,9 @@ func TestIgnoredTitlesEndpoints(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
 			t.Fatalf("failed to parse JSON: %v", err)
 		}
+		if list == nil {
+			t.Fatalf("expected a JSON array, got null")
+		}
 		if len(list) != 0 {
 			t.Errorf("expected empty list, got %d items", len(list))
 		}

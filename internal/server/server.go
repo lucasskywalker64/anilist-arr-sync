@@ -387,6 +387,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/backups", s.handleListBackups)
 	mux.HandleFunc("POST /api/v1/backups", s.handleCreateBackup)
 	mux.HandleFunc("POST /api/v1/backups/restore", s.handleRestoreBackup)
+	mux.HandleFunc("GET /api/v1/filesystem", s.handleFilesystem)
 
 	mux.HandleFunc("GET /api/v1/update/status", s.handleGetUpdateStatus)
 	mux.HandleFunc("POST /api/v1/update/apply", s.handleApplyUpdate)

@@ -85,8 +85,9 @@ func (s *Server) handleListLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if qSearch != "" {
-		likeTerm := "%" + qSearch + "%"
-		whereClauses = append(whereClauses, "(title_romaji LIKE ? OR title_english LIKE ? OR arr_title LIKE ?)")
+		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(qSearch)
+		likeTerm := "%" + escaped + "%"
+		whereClauses = append(whereClauses, "(title_romaji LIKE ? ESCAPE '\\' OR title_english LIKE ? ESCAPE '\\' OR arr_title LIKE ? ESCAPE '\\')")
 		args = append(args, likeTerm, likeTerm, likeTerm)
 	}
 

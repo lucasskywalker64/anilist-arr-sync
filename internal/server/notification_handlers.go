@@ -73,10 +73,11 @@ func (s *Server) handleCreateNotification(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if req.Provider == "" && req.Type != "" {
-		req.Provider = req.Type
+	prov := strings.TrimSpace(req.Provider)
+	if prov == "" && req.Type != "" {
+		prov = strings.TrimSpace(req.Type)
 	}
-	req.Provider = strings.ToUpper(strings.TrimSpace(req.Provider))
+	req.Provider = strings.ToUpper(prov)
 	if req.Provider != "DISCORD" && req.Provider != "WEBHOOK" {
 		s.writeJSONError(w, http.StatusBadRequest, "provider must be DISCORD or WEBHOOK")
 		return
@@ -85,16 +86,16 @@ func (s *Server) handleCreateNotification(w http.ResponseWriter, r *http.Request
 	req.ConfigJSON = strings.TrimSpace(req.ConfigJSON)
 	if req.ConfigJSON == "" {
 		if req.Settings != nil {
-			if u, ok := req.Settings["webhookUrl"].(string); ok && u != "" {
-				b, _ := json.Marshal(map[string]string{"url": u})
+			if u, ok := req.Settings["webhookUrl"].(string); ok && strings.TrimSpace(u) != "" {
+				b, _ := json.Marshal(map[string]string{"url": strings.TrimSpace(u)})
 				req.ConfigJSON = string(b)
-			} else if u, ok := req.Settings["url"].(string); ok && u != "" {
-				b, _ := json.Marshal(map[string]string{"url": u})
+			} else if u, ok := req.Settings["url"].(string); ok && strings.TrimSpace(u) != "" {
+				b, _ := json.Marshal(map[string]string{"url": strings.TrimSpace(u)})
 				req.ConfigJSON = string(b)
 			}
 		}
-		if req.ConfigJSON == "" && req.URL != "" {
-			b, _ := json.Marshal(map[string]string{"url": req.URL})
+		if req.ConfigJSON == "" && strings.TrimSpace(req.URL) != "" {
+			b, _ := json.Marshal(map[string]string{"url": strings.TrimSpace(req.URL)})
 			req.ConfigJSON = string(b)
 		}
 	}
@@ -195,11 +196,12 @@ func (s *Server) handleUpdateNotification(w http.ResponseWriter, r *http.Request
 	if strings.TrimSpace(req.Name) != "" {
 		existing.Name = strings.TrimSpace(req.Name)
 	}
-	if req.Provider == "" && req.Type != "" {
-		req.Provider = req.Type
+	prov := strings.TrimSpace(req.Provider)
+	if prov == "" && req.Type != "" {
+		prov = strings.TrimSpace(req.Type)
 	}
-	if strings.TrimSpace(req.Provider) != "" {
-		prov := strings.ToUpper(strings.TrimSpace(req.Provider))
+	if prov != "" {
+		prov = strings.ToUpper(prov)
 		if prov != "DISCORD" && prov != "WEBHOOK" {
 			s.writeJSONError(w, http.StatusBadRequest, "provider must be DISCORD or WEBHOOK")
 			return
@@ -211,20 +213,33 @@ func (s *Server) handleUpdateNotification(w http.ResponseWriter, r *http.Request
 	} else {
 		newConfigJSON := ""
 		if req.Settings != nil {
-			if u, ok := req.Settings["webhookUrl"].(string); ok && u != "" {
-				b, _ := json.Marshal(map[string]string{"url": u})
+			if u, ok := req.Settings["webhookUrl"].(string); ok && strings.TrimSpace(u) != "" {
+				b, _ := json.Marshal(map[string]string{"url": strings.TrimSpace(u)})
 				newConfigJSON = string(b)
-			} else if u, ok := req.Settings["url"].(string); ok && u != "" {
-				b, _ := json.Marshal(map[string]string{"url": u})
+			} else if u, ok := req.Settings["url"].(string); ok && strings.TrimSpace(u) != "" {
+				b, _ := json.Marshal(map[string]string{"url": strings.TrimSpace(u)})
 				newConfigJSON = string(b)
 			}
 		}
-		if newConfigJSON == "" && req.URL != "" {
-			b, _ := json.Marshal(map[string]string{"url": req.URL})
+		if newConfigJSON == "" && strings.TrimSpace(req.URL) != "" {
+			b, _ := json.Marshal(map[string]string{"url": strings.TrimSpace(req.URL)})
 			newConfigJSON = string(b)
 		}
 		if newConfigJSON != "" {
-			existing.ConfigJSON = newConfigJSON
+			merged := map[string]any{}
+			if err := json.Unmarshal([]byte(existing.ConfigJSON), &merged); err != nil || merged == nil {
+				merged = map[string]any{}
+			}
+			var urlOnly map[string]string
+			_ = json.Unmarshal([]byte(newConfigJSON), &urlOnly)
+			if u, ok := urlOnly["url"]; ok {
+				merged["url"] = u
+			}
+			if b, err := json.Marshal(merged); err == nil {
+				existing.ConfigJSON = string(b)
+			} else {
+				existing.ConfigJSON = newConfigJSON
+			}
 		}
 	}
 
@@ -325,16 +340,16 @@ func (s *Server) handleTestNotificationPayload(w http.ResponseWriter, r *http.Re
 	configJSON := strings.TrimSpace(req.ConfigJSON)
 	if configJSON == "" {
 		if req.Settings != nil {
-			if u, ok := req.Settings["webhookUrl"].(string); ok && u != "" {
-				b, _ := json.Marshal(map[string]string{"url": u})
+			if u, ok := req.Settings["webhookUrl"].(string); ok && strings.TrimSpace(u) != "" {
+				b, _ := json.Marshal(map[string]string{"url": strings.TrimSpace(u)})
 				configJSON = string(b)
-			} else if u, ok := req.Settings["url"].(string); ok && u != "" {
-				b, _ := json.Marshal(map[string]string{"url": u})
+			} else if u, ok := req.Settings["url"].(string); ok && strings.TrimSpace(u) != "" {
+				b, _ := json.Marshal(map[string]string{"url": strings.TrimSpace(u)})
 				configJSON = string(b)
 			}
 		}
-		if configJSON == "" && req.URL != "" {
-			b, _ := json.Marshal(map[string]string{"url": req.URL})
+		if configJSON == "" && strings.TrimSpace(req.URL) != "" {
+			b, _ := json.Marshal(map[string]string{"url": strings.TrimSpace(req.URL)})
 			configJSON = string(b)
 		}
 	}

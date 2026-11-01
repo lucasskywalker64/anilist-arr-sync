@@ -22,6 +22,14 @@
   let errorMsg = '';
   let successMsg = '';
 
+  $: if (stagedActions) {
+    const validIds = new Set(stagedActions.map((a) => a.id));
+    const pruned = [...selectedIds].filter((id) => validIds.has(id));
+    if (pruned.length !== selectedIds.size) {
+      selectedIds = new Set(pruned);
+    }
+  }
+
   $: allSelected = stagedActions.length > 0 && selectedIds.size === stagedActions.length;
   $: selectedCount = selectedIds.size;
 

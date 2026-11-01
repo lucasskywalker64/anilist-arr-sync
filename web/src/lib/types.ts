@@ -214,3 +214,15 @@ export interface LibraryStats {
   planningCount: number;
   completedCount: number;
 }
+
+export interface FilesystemDirectory {
+  name: string;
+  path: string;
+}
+
+export interface FilesystemResponse {
+  current: string;
+  parent?: string;
+  roots: string[];
+  directories: FilesystemDirectory[];
+}

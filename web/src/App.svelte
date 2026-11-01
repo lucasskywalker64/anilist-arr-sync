@@ -167,7 +167,9 @@
     {isSyncing}
     reviewCount={reviewItems.length}
     stagedCount={stagedActions.length}
+    authenticated={!!currentUser?.authenticated}
     on:navigate={(e) => navigate(e.detail)}
+    on:logout={handleLogout}
   >
     <!-- View Switcher -->
     {#if currentRoute === '/library'}

@@ -185,6 +185,7 @@ func isHostAllowed(requestHost, allowedHosts string) bool {
 		host = requestHost
 	}
 	host = strings.ToLower(strings.TrimPrefix(strings.TrimSuffix(strings.TrimSpace(host), "]"), "["))
+	host = strings.TrimSuffix(host, ".")
 
 	for _, entry := range strings.Split(allowedHosts, ",") {
 		entry = strings.ToLower(strings.TrimSpace(entry))
@@ -199,6 +200,7 @@ func isHostAllowed(requestHost, allowedHosts string) bool {
 			entry = entryHost
 		}
 		entry = strings.TrimPrefix(strings.TrimSuffix(entry, "]"), "[")
+		entry = strings.TrimSuffix(entry, ".")
 
 		if entry == host {
 			return true

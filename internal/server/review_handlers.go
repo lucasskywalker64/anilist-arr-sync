@@ -334,6 +334,13 @@ func (s *Server) handleIgnoreReview(w http.ResponseWriter, r *http.Request) {
 			return ignoreErr
 		}
 
+		_, _ = tx.ExecContext(ctx, `
+			UPDATE synced_media
+			SET monitored_status = 'IGNORED',
+			    updated_at = CURRENT_TIMESTAMP
+			WHERE anilist_id = ?;
+		`, anilistID)
+
 		res, updateErr := tx.ExecContext(ctx, `
 			UPDATE review_queue
 			SET status = 'RESOLVED',

@@ -430,6 +430,15 @@ func TestAllowedHostsMiddleware(t *testing.T) {
 			t.Errorf("expected matching myserver.lan to return 200, got %d", rec.Code)
 		}
 
+		// Matching host with trailing dot (FQDN)
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		req.Host = "myserver.lan."
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected matching myserver.lan. with trailing dot to return 200, got %d", rec.Code)
+		}
+
 		// Matching wildcard subdomain
 		req = httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 		req.Host = "sub.internal.net"

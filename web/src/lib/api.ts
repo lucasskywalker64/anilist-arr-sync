@@ -15,6 +15,7 @@ import type {
   IgnoredItem,
   LibraryItem,
   LibraryStats,
+  FilesystemResponse,
 } from './types';
 
 import { writable } from 'svelte/store';
@@ -441,5 +442,10 @@ export const api = {
     return request(`/api/v1/notifications/${id}/test`, {
       method: 'POST',
     });
+  },
+
+  async getFilesystem(path?: string): Promise<FilesystemResponse> {
+    const query = path ? `?path=${encodeURIComponent(path)}` : '';
+    return request(`/api/v1/filesystem${query}`);
   },
 };

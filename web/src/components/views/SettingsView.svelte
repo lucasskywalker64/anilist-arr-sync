@@ -21,6 +21,7 @@
   import Button from "../common/Button.svelte";
   import CheckInput from "../common/CheckInput.svelte";
   import Modal from "../common/Modal.svelte";
+  import FolderBrowserModal from "../common/FolderBrowserModal.svelte";
   import Alert from "../common/Alert.svelte";
   import Label from "../common/Label.svelte";
   import { api } from "../../lib/api";
@@ -43,6 +44,7 @@
 
   // Notifications modal state
   let isNotifModalOpen = false;
+  let isFolderBrowserOpen = false;
   let notifModalStep: "select" | "edit" = "select";
   let editingNotif: Partial<NotificationItem> | null = null;
   let notifName = "";
@@ -54,6 +56,7 @@
   let notifOnUpdate = true;
   let notifWebhookUrl = "";
   let notifTesting = false;
+  let notifSaving = false;
   let notifTestMsg = "";
   let notifError = "";
 
@@ -73,6 +76,18 @@
     return savedConfig[field] !== formConfig[field];
   }
 
+  async function loadNotifications() {
+    try {
+      notifications = await api.getNotifications();
+    } catch (e: any) {
+      errorMsg = e.message || "Failed to load notifications";
+    }
+  }
+
+  $: if (subTab === "connect") {
+    loadNotifications();
+  }
+
   async function loadConfig() {
     loading = true;
     errorMsg = "";
@@ -80,7 +95,7 @@
       savedConfig = await api.getConfig();
       formConfig = JSON.parse(JSON.stringify(savedConfig));
       if (subTab === "connect") {
-        notifications = await api.getNotifications();
+        await loadNotifications();
       }
     } catch (e: any) {
       errorMsg = e.message || "Failed to load configuration";
@@ -226,6 +241,7 @@
   }
 
   async function saveNotification() {
+    if (notifSaving) return;
     if (!notifName.trim()) {
       notifError = "Name is required";
       return;
@@ -235,7 +251,24 @@
       return;
     }
     notifError = "";
+    notifSaving = true;
     try {
+      let existingSettings: Record<string, any> = {};
+      if (editingNotif?.settings && typeof editingNotif.settings === 'object') {
+        existingSettings = { ...editingNotif.settings };
+      } else if (editingNotif?.configJson) {
+        try {
+          existingSettings = JSON.parse(editingNotif.configJson);
+        } catch {
+          // ignore invalid JSON
+        }
+      }
+      const updatedSettings = {
+        ...existingSettings,
+        webhookUrl: notifWebhookUrl.trim(),
+        url: notifWebhookUrl.trim(),
+      };
+
       const payload: Partial<NotificationItem> = {
         name: notifName.trim(),
         type: notifType,
@@ -249,11 +282,8 @@
         onSyncSuccess: notifOnComplete,
         onSyncFailure: notifOnError,
         onReviewQueueNeeded: notifOnReview,
-        configJson: JSON.stringify({ url: notifWebhookUrl.trim() }),
-        settings: {
-          webhookUrl: notifWebhookUrl.trim(),
-          url: notifWebhookUrl.trim(),
-        },
+        configJson: JSON.stringify(updatedSettings),
+        settings: updatedSettings,
       };
 
       if (editingNotif?.id) {
@@ -267,6 +297,8 @@
       successMsg = "Notification connection saved successfully.";
     } catch (e: any) {
       notifError = e.message || "Failed to save notification";
+    } finally {
+      notifSaving = false;
     }
   }
 
@@ -751,6 +783,7 @@
                 type="button"
                 class="formInputButton primaryButton"
                 title="Browse Folder"
+                on:click={() => (isFolderBrowserOpen = true)}
               >
                 <Folder size={16} />
               </button>
@@ -1274,13 +1307,23 @@
           <Button kind="default" on:click={() => (isNotifModalOpen = false)}>
             Cancel
           </Button>
-          <Button kind="primary" on:click={saveNotification}>
-            <Save size={14} /> Save Connection
+          <Button kind="primary" on:click={saveNotification} disabled={notifSaving}>
+            <Save size={14} /> {notifSaving ? 'Saving...' : 'Save Connection'}
           </Button>
         </div>
       {/if}
     </div>
   </Modal>
+
+  <FolderBrowserModal
+    isOpen={isFolderBrowserOpen}
+    initialPath={formConfig.backupFolder || ''}
+    on:close={() => (isFolderBrowserOpen = false)}
+    on:select={(e) => {
+      formConfig.backupFolder = e.detail;
+      formConfig = { ...formConfig };
+    }}
+  />
 </div>
 
 <style>

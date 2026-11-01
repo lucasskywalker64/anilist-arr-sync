@@ -34,17 +34,39 @@
     failedImages = new Set(failedImages);
   }
 
+  $: if (reviewItems) {
+    let changed = false;
+    for (const item of reviewItems) {
+      if (!formState[item.id]) {
+        const topCandidate = item.candidates && item.candidates.length > 0 ? item.candidates[0] : null;
+        formState[item.id] = {
+          mediaType: item.mediaType || 'SERIES',
+          tvdbId: topCandidate?.tvdbId ? String(topCandidate.tvdbId) : '',
+          tmdbId: topCandidate?.tmdbId ? String(topCandidate.tmdbId) : '',
+          seasons: '1',
+          titleOverride: '',
+        };
+        changed = true;
+      }
+    }
+    if (changed) {
+      formState = { ...formState };
+    }
+  }
+
   function initFormState(items: ReviewItem[]) {
-    const next: Record<number, ItemState> = {};
+    const next: Record<number, ItemState> = { ...formState };
     for (const item of items) {
-      const topCandidate = item.candidates && item.candidates.length > 0 ? item.candidates[0] : null;
-      next[item.id] = {
-        mediaType: item.mediaType || 'SERIES',
-        tvdbId: topCandidate?.tvdbId ? String(topCandidate.tvdbId) : '',
-        tmdbId: topCandidate?.tmdbId ? String(topCandidate.tmdbId) : '',
-        seasons: '1',
-        titleOverride: '',
-      };
+      if (!next[item.id]) {
+        const topCandidate = item.candidates && item.candidates.length > 0 ? item.candidates[0] : null;
+        next[item.id] = {
+          mediaType: item.mediaType || 'SERIES',
+          tvdbId: topCandidate?.tvdbId ? String(topCandidate.tvdbId) : '',
+          tmdbId: topCandidate?.tmdbId ? String(topCandidate.tmdbId) : '',
+          seasons: '1',
+          titleOverride: '',
+        };
+      }
     }
     formState = next;
   }

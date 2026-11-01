@@ -161,16 +161,23 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 	report.ItemsScanned = len(entries)
 
 	for _, entry := range entries {
-		// Step 1: Skip titles present in ignored_titles table before resolution
-		if ignoredSet[entry.Media.ID] {
-			o.upsertSyncedMedia(ctx, entry, "SERIES", "NONE", nil, nil, "", "IGNORED", "")
-			continue
-		}
-
-		// Step 2: Discard non-video entries immediately using router.Route without querying database
+		// Step 1: Discard non-video entries immediately using router.Route without querying database
 		normalizedFormat := router.MediaFormat(strings.ToUpper(strings.TrimSpace(entry.Media.Format)))
 		decision := router.Route(normalizedFormat)
 		if decision == router.RouteDiscard {
+			continue
+		}
+
+		mediaType := "SERIES"
+		if decision == router.RouteRadarr {
+			mediaType = "MOVIE"
+		}
+
+		// Step 2: Skip titles present in ignored_titles table before resolution
+		if ignoredSet[entry.Media.ID] {
+			if err := o.upsertSyncedMedia(ctx, entry, mediaType, "NONE", nil, nil, "", "IGNORED", ""); err != nil {
+				report.Errors = append(report.Errors, fmt.Sprintf("upsert synced media %d: %v", entry.Media.ID, err))
+			}
 			continue
 		}
 
@@ -183,7 +190,9 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 
 		if res.Diverted {
 			report.QueuedReview++
-			o.upsertSyncedMedia(ctx, entry, "SERIES", "NONE", nil, nil, "", "PENDING_REVIEW", "")
+			if err := o.upsertSyncedMedia(ctx, entry, mediaType, "NONE", nil, nil, "", "PENDING_REVIEW", ""); err != nil {
+				report.Errors = append(report.Errors, fmt.Sprintf("upsert synced media %d: %v", entry.Media.ID, err))
+			}
 			if o.notifier != nil {
 				title := entry.Media.Title.Romaji
 				if title == "" {
@@ -214,7 +223,9 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 		case "RADARR":
 			outcome := o.dispatchRadarr(ctx, entry, res, report)
 			if outcome.shouldUpsert {
-				o.upsertSyncedMedia(ctx, entry, "MOVIE", "RADARR", nil, &res.TargetID, res.TitleOverride, outcome.monitoredStatus, "")
+				if err := o.upsertSyncedMedia(ctx, entry, "MOVIE", "RADARR", nil, &res.TargetID, res.TitleOverride, outcome.monitoredStatus, ""); err != nil {
+					report.Errors = append(report.Errors, fmt.Sprintf("upsert synced media %d: %v", entry.Media.ID, err))
+				}
 			}
 		case "SONARR":
 			outcome := o.dispatchSonarr(ctx, entry, res, report)
@@ -223,7 +234,9 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 				if outcome.season > 0 {
 					seasonsStr = strconv.Itoa(outcome.season)
 				}
-				o.upsertSyncedMedia(ctx, entry, "SERIES", "SONARR", &res.TargetID, nil, res.TitleOverride, outcome.monitoredStatus, seasonsStr)
+				if err := o.upsertSyncedMedia(ctx, entry, "SERIES", "SONARR", &res.TargetID, nil, res.TitleOverride, outcome.monitoredStatus, seasonsStr); err != nil {
+					report.Errors = append(report.Errors, fmt.Sprintf("upsert synced media %d: %v", entry.Media.ID, err))
+				}
 			}
 		}
 	}
@@ -640,7 +653,7 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 			}
 		}
 		monStatus := "UNMONITORED"
-		if isMon {
+		if isMon && series.Monitored {
 			monStatus = "MONITORED"
 		}
 		return dispatchOutcome{monitoredStatus: monStatus, season: targetSeason, shouldUpsert: true}
@@ -688,9 +701,17 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 			if o.cfg.SonarrSearchOnAdd {
 				_, _ = o.sonarr.SearchSeason(ctx, series.ID, targetSeason)
 			}
-			return dispatchOutcome{monitoredStatus: "MONITORED", season: targetSeason, shouldUpsert: true}
+			monStatus := "UNMONITORED"
+			if series.Monitored {
+				monStatus = "MONITORED"
+			}
+			return dispatchOutcome{monitoredStatus: monStatus, season: targetSeason, shouldUpsert: true}
 		}
-		return dispatchOutcome{monitoredStatus: "MONITORED", season: targetSeason, shouldUpsert: true}
+		monStatus := "UNMONITORED"
+		if series.Monitored {
+			monStatus = "MONITORED"
+		}
+		return dispatchOutcome{monitoredStatus: monStatus, season: targetSeason, shouldUpsert: true}
 	}
 
 	// Entire season selective monitoring
@@ -717,6 +738,7 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 			}
 			return dispatchOutcome{shouldUpsert: false}
 		}
+		series.Monitored = true
 		found := false
 		for i := range series.Seasons {
 			if series.Seasons[i].SeasonNumber == targetSeason {
@@ -754,7 +776,11 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 		return dispatchOutcome{monitoredStatus: "MONITORED", season: targetSeason, shouldUpsert: true}
 	}
 
-	return dispatchOutcome{monitoredStatus: "MONITORED", season: targetSeason, shouldUpsert: true}
+	monStatus := "UNMONITORED"
+	if series.Monitored {
+		monStatus = "MONITORED"
+	}
+	return dispatchOutcome{monitoredStatus: monStatus, season: targetSeason, shouldUpsert: true}
 }
 
 func containsInt(slice []int, val int) bool {
@@ -833,12 +859,12 @@ func (o *Orchestrator) recordHistory(ctx context.Context, report *SyncReport, st
 	_ = o.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO sync_history (
-				duration_ms, status, items_scanned, added_radarr,
+				run_timestamp, duration_ms, status, items_scanned, added_radarr,
 				monitored_sonarr, unmonitored_sonarr, unmonitored_radarr,
 				queued_review, errors_json, trigger_type
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-		`, report.DurationMs, string(report.Status), report.ItemsScanned,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+		`, start.UTC(), report.DurationMs, string(report.Status), report.ItemsScanned,
 			report.AddedRadarr, report.MonitoredSonarr, report.UnmonitoredSonarr,
 			report.UnmonitoredRadarr, report.QueuedReview, errsJSON, string(report.Trigger))
 		if err != nil {
@@ -861,15 +887,22 @@ func (o *Orchestrator) upsertSyncedMedia(
 	arrTitle string,
 	monitoredStatus string,
 	seasons string,
-) {
+) error {
 	if o.db == nil {
-		return
+		return nil
 	}
-	_ = o.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+	return o.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		poster := entry.Media.CoverImageURL()
 		var eng *string
 		if entry.Media.Title.English != "" {
 			eng = &entry.Media.Title.English
+		}
+		romaji := entry.Media.Title.Romaji
+		if romaji == "" {
+			romaji = entry.Media.Title.UserPreferred
+		}
+		if romaji == "" {
+			romaji = entry.Media.Title.English
 		}
 		var year *int
 		if entry.Media.StartDate.Year != nil {
@@ -906,7 +939,7 @@ func (o *Orchestrator) upsertSyncedMedia(
 				seasons = excluded.seasons,
 				last_synced_at = CURRENT_TIMESTAMP,
 				updated_at = CURRENT_TIMESTAMP;
-		`, entry.Media.ID, mediaType, entry.Media.Format, entry.Media.Title.Romaji, eng,
+		`, entry.Media.ID, mediaType, entry.Media.Format, romaji, eng,
 			year, poster, string(entry.Status), targetService,
 			tvdbID, tmdbID, arrTitleVal, monitoredStatus, seasonsVal,
 		)

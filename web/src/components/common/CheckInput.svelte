@@ -23,6 +23,7 @@
 <div
   role="checkbox"
   aria-checked={checked}
+  aria-disabled={disabled}
   aria-label={ariaLabel}
   tabindex={disabled ? -1 : 0}
   class="checkInput {checked ? 'primaryIsChecked' : ''} {disabled ? 'disabled' : ''}"

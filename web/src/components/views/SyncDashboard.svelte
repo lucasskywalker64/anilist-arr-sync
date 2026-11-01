@@ -24,6 +24,7 @@
 
   let syncStatus: SyncStatus | null = null;
   let loading = false;
+  let startingSync = false;
   let errorMsg = '';
   let triggerMsg = '';
 
@@ -42,7 +43,8 @@
   }
 
   async function triggerSync() {
-    if (isSyncing) return;
+    if (isSyncing || startingSync) return;
+    startingSync = true;
     triggerMsg = '';
     errorMsg = '';
     try {
@@ -52,6 +54,8 @@
       setTimeout(loadData, 1000);
     } catch (e: any) {
       errorMsg = e.message || 'Failed to start sync';
+    } finally {
+      startingSync = false;
     }
   }
 
@@ -85,7 +89,7 @@
     <svelte:fragment slot="left">
       <PageToolbarButton
         label="Sync Now"
-        disabled={isSyncing}
+        disabled={isSyncing || startingSync}
         on:click={triggerSync}
       >
         <Play size={18} class={isSyncing ? 'spinning' : ''} />

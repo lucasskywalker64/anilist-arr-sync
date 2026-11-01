@@ -7,12 +7,15 @@
   export let isSyncing = false;
   export let stagedCount = 0;
   export let reviewCount = 0;
+  export let authenticated = false;
 </script>
 
 <div class="page">
   <PageHeader
     {instanceName}
     {isSyncing}
+    {authenticated}
+    on:logout
   />
   <div class="main">
     <PageSidebar

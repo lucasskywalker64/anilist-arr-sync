@@ -11,7 +11,7 @@ frontend-install: web/node_modules/.package-lock.json
 frontend-build: web/node_modules/.package-lock.json
 	cd web && npm run build
 
-frontend-test:
+frontend-test: web/node_modules/.package-lock.json
 	cd web && npm test
 
 build: frontend-build

@@ -1403,15 +1403,18 @@ func TestSync_SyncedMedia_DryRunNoUpsert(t *testing.T) {
 
 	orc := orchestrator.New(db, cfg, alClient, sonarrClient, radarrClient)
 
-	_, syncErr := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+	report, syncErr := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
 	if syncErr != nil {
 		t.Fatalf("Sync failed: %v", syncErr)
 	}
+	t.Logf("report: %+v", report)
 
 	var count int
-	_ = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+	if err := db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
 		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM synced_media WHERE anilist_id = 1001").Scan(&count)
-	})
+	}); err != nil {
+		t.Fatalf("failed to count synced_media rows: %v", err)
+	}
 	if count != 0 {
 		t.Fatalf("expected 0 synced_media rows on dry run, got %d", count)
 	}
@@ -1453,15 +1456,18 @@ func TestSync_SyncedMedia_NilServarrClientNoUpsert(t *testing.T) {
 	// radarrClient is nil
 	orc := orchestrator.New(db, cfg, alClient, nil, nil)
 
-	_, syncErr := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+	report, syncErr := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
 	if syncErr != nil {
 		t.Fatalf("Sync failed: %v", syncErr)
 	}
+	t.Logf("report: %+v", report)
 
 	var count int
-	_ = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+	if err := db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
 		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM synced_media WHERE anilist_id = 1002").Scan(&count)
-	})
+	}); err != nil {
+		t.Fatalf("failed to count synced_media rows: %v", err)
+	}
 	if count != 0 {
 		t.Fatalf("expected 0 synced_media rows when client is nil, got %d", count)
 	}
@@ -1525,9 +1531,11 @@ func TestSync_SyncedMedia_ServarrAPIErrorNoUpsert(t *testing.T) {
 	}
 
 	var count int
-	_ = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+	if err := db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
 		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM synced_media WHERE anilist_id = 1003").Scan(&count)
-	})
+	}); err != nil {
+		t.Fatalf("failed to count synced_media rows: %v", err)
+	}
 	if count != 0 {
 		t.Fatalf("expected 0 synced_media rows on Servarr API error, got %d", count)
 	}
@@ -1589,10 +1597,11 @@ func TestSync_SyncedMedia_StatusDropped_UnmonitorDroppedFalse(t *testing.T) {
 
 	orc := orchestrator.New(db, cfg, alClient, nil, radarrClient)
 
-	_, syncErr := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+	report, syncErr := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
 	if syncErr != nil {
 		t.Fatalf("Sync failed: %v", syncErr)
 	}
+	t.Logf("report: %+v", report)
 
 	var status string
 	err = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
@@ -1603,5 +1612,92 @@ func TestSync_SyncedMedia_StatusDropped_UnmonitorDroppedFalse(t *testing.T) {
 	}
 	if status != "MONITORED" {
 		t.Fatalf("expected monitored_status = MONITORED when UnmonitorDropped is false, got %q", status)
+	}
+}
+
+func TestSync_SyncedMedia_SonarrSuccess(t *testing.T) {
+	db := setupTestDB(t)
+
+	err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		_, writeErr := tx.ExecContext(ctx, `
+			INSERT INTO mapping_overrides (anilist_id, media_type, tvdb_id, seasons)
+			VALUES (1005, 'SERIES', 44444, '1');
+		`)
+		return writeErr
+	})
+	if err != nil {
+		t.Fatalf("insert mapping failed: %v", err)
+	}
+
+	entries := []anilist.MediaListEntry{
+		{
+			ID:     1,
+			Status: anilist.StatusCurrent,
+			Media: anilist.Media{
+				ID:     1005,
+				Format: "TV",
+				Title:  anilist.MediaTitle{Romaji: "Sonarr Synced Show"},
+			},
+		},
+	}
+
+	alSrv := setupMockAniList(t, entries)
+	sonarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
+			_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 1, Label: "anilist-sync"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/series/lookup":
+			_ = json.NewEncoder(w).Encode([]servarr.Series{
+				{
+					ID:        999,
+					TVDBID:    44444,
+					Title:     "Sonarr Synced Show",
+					Monitored: true,
+					Tags:      []int{1},
+					Seasons: []servarr.Season{
+						{SeasonNumber: 1, Monitored: true},
+					},
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
+			_ = json.NewEncoder(w).Encode([]servarr.Episode{})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer sonarrSrv.Close()
+
+	cfg := config.NewDefault()
+	cfg.AniListUsername = "testuser"
+	cfg.FirstRunDryRun = false
+
+	alClient := anilist.NewClient(alSrv.URL)
+	sonarrClient, _ := servarr.NewSonarrClient(sonarrSrv.URL, "key")
+
+	orc := orchestrator.New(db, cfg, alClient, sonarrClient, nil)
+
+	report, syncErr := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+	if syncErr != nil {
+		t.Fatalf("Sync failed: %v", syncErr)
+	}
+	t.Logf("report: %+v", report)
+
+	var status, targetService string
+	var seasons sql.NullString
+	err = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT monitored_status, target_service, seasons FROM synced_media WHERE anilist_id = 1005").Scan(&status, &targetService, &seasons)
+	})
+	if err != nil {
+		t.Fatalf("failed to query synced_media: %v", err)
+	}
+	if status != "MONITORED" {
+		t.Fatalf("expected monitored_status = MONITORED, got %q", status)
+	}
+	if targetService != "SONARR" {
+		t.Fatalf("expected target_service = SONARR, got %q", targetService)
+	}
+	if !seasons.Valid || seasons.String != "1" {
+		t.Fatalf("expected seasons = 1, got %v", seasons)
 	}
 }

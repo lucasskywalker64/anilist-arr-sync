@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { Archive, RefreshCw, Download, RotateCcw, CheckCircle, AlertTriangle } from 'lucide-svelte';
   import PageToolbar from '../layout/PageToolbar.svelte';
   import PageToolbarButton from '../layout/PageToolbarButton.svelte';
@@ -110,9 +109,7 @@
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
   }
 
-  onMount(() => {
-    loadData();
-  });
+  $: subTab, loadData();
 </script>
 
 <div class="viewContainer">
@@ -151,10 +148,14 @@
       {#if subTab === 'status'}
         <!-- Health FieldSet -->
         <FieldSet legend="Health">
-          <div class="healthBanner">
-            <span class="successIcon"><CheckCircle size={24} /></span>
-            <span class="healthText">All system health checks passing</span>
-          </div>
+          {#if health}
+            <div class="healthBanner">
+              <span class="successIcon"><CheckCircle size={24} /></span>
+              <span class="healthText">All system health checks passing</span>
+            </div>
+          {:else if loading}
+            <p>Loading health status...</p>
+          {/if}
         </FieldSet>
 
         <!-- About FieldSet using DescriptionList -->
@@ -180,7 +181,9 @@
       {:else if subTab === 'backup'}
         <!-- Backup Archives Table -->
         <FieldSet legend="Database Backups">
-          {#if backups.length === 0}
+          {#if loading && backups.length === 0}
+            <p>Loading backups...</p>
+          {:else if backups.length === 0}
             <div class="emptyState">
               <h3>No Backup Archives</h3>
               <p>Create a backup to archive current mapping tables, review queue, and configuration.</p>
@@ -225,15 +228,17 @@
             <div class="updateInfo">
               <div class="versionRow">
                 <span class="versionLabel">Current Version:</span>
-                <strong>{updateStatus?.currentVersion || '1.0.0'}</strong>
+                <strong>{updateStatus?.currentVersion || (loading ? 'Loading...' : 'Unknown')}</strong>
               </div>
               <div class="versionRow">
                 <span class="versionLabel">Latest Version:</span>
-                <strong>{updateStatus?.latestVersion || updateStatus?.currentVersion || '1.0.0'}</strong>
+                <strong>{updateStatus?.latestVersion || updateStatus?.currentVersion || (loading ? 'Loading...' : 'Unknown')}</strong>
                 {#if updateStatus?.updateAvailable}
                   <Label kind="success" size="small">Update Available</Label>
-                {:else}
+                {:else if updateStatus}
                   <Label kind="default" size="small">Up to Date</Label>
+                {:else}
+                  <Label kind="default" size="small">Unknown</Label>
                 {/if}
               </div>
               {#if updateStatus?.lastCheckedAt}

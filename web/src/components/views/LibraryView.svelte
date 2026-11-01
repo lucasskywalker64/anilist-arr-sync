@@ -142,7 +142,7 @@
     loading = true;
     errorMsg = '';
     try {
-      const [items, s] = await Promise.all([
+      const [itemsRes, statsRes] = await Promise.allSettled([
         api.getLibrary({
           status: statusFilter,
           service: serviceFilter,
@@ -154,8 +154,16 @@
         api.getLibraryStats(),
       ]);
       if (seq !== loadSeq) return;
-      libraryItems = items;
-      stats = s;
+
+      if (itemsRes.status === 'fulfilled') {
+        libraryItems = itemsRes.value;
+      } else {
+        errorMsg = itemsRes.reason?.message || 'Failed to load library items';
+      }
+
+      if (statsRes.status === 'fulfilled') {
+        stats = statsRes.value;
+      }
     } catch (e: any) {
       if (seq !== loadSeq) return;
       errorMsg = e.message || 'Failed to load library';
@@ -849,7 +857,7 @@
   }
 
   .card {
-    background-color: var(--cardBackground);
+    background-color: var(--cardBackgroundColor);
     border: 1px solid var(--borderColor);
     border-radius: 6px;
     overflow: hidden;

@@ -1,8 +1,12 @@
 <script lang="ts">
-  import { RotateCw } from 'lucide-svelte';
+  import { RotateCw, LogOut } from 'lucide-svelte';
+  import { createEventDispatcher } from 'svelte';
 
   export let instanceName = 'AniList-Arr-Sync';
   export let isSyncing = false;
+  export let authenticated = false;
+
+  const dispatch = createEventDispatcher<{ logout: void }>();
 </script>
 
 <header class="header">
@@ -17,6 +21,17 @@
         <RotateCw size={16} class="spinning" />
         <span class="syncText">Syncing...</span>
       </div>
+    {/if}
+    {#if authenticated}
+      <button
+        type="button"
+        class="logoutButton"
+        title="Sign Out"
+        on:click={() => dispatch('logout')}
+      >
+        <LogOut size={16} />
+        <span>Sign Out</span>
+      </button>
     {/if}
   </div>
 </header>
@@ -73,6 +88,25 @@
     gap: 6px;
     color: var(--sonarrBlue);
     font-size: var(--smallFontSize);
+  }
+
+  .logoutButton {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: var(--white);
+    padding: 4px 10px;
+    border-radius: var(--borderRadius);
+    cursor: pointer;
+    font-size: var(--smallFontSize);
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+  }
+
+  .logoutButton:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.4);
   }
 
   :global(.spinning) {
