@@ -323,8 +323,9 @@ func (o *Orchestrator) dispatchRadarr(ctx context.Context, entry anilist.MediaLi
 							Title:   movie.Title,
 						}); err != nil {
 							report.Errors = append(report.Errors, fmt.Sprintf("stage unmonitor movie %d: %v", movie.ID, err))
+							return dispatchOutcome{shouldUpsert: false}
 						}
-						return dispatchOutcome{shouldUpsert: false}
+						return dispatchOutcome{monitoredStatus: "MONITORED", shouldUpsert: true}
 					}
 					movie.Monitored = false
 					if _, updErr := o.radarr.UpdateMovie(ctx, movie); updErr != nil {
@@ -386,8 +387,9 @@ func (o *Orchestrator) dispatchRadarr(ctx context.Context, entry anilist.MediaLi
 	if o.cfg.FirstRunDryRun {
 		if err := o.stageAction(ctx, ActionAddMovie, "MOVIE", title, "RADARR", addReq); err != nil {
 			report.Errors = append(report.Errors, fmt.Sprintf("stage add movie %q: %v", title, err))
+			return dispatchOutcome{shouldUpsert: false}
 		}
-		return dispatchOutcome{shouldUpsert: false}
+		return dispatchOutcome{monitoredStatus: "UNMONITORED", shouldUpsert: true}
 	}
 
 	_, addErr := o.radarr.AddMovie(ctx, addReq)
@@ -493,8 +495,9 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 		if o.cfg.FirstRunDryRun {
 			if err := o.stageAction(ctx, ActionAddSeries, "SERIES", title, "SONARR", addReq); err != nil {
 				report.Errors = append(report.Errors, fmt.Sprintf("stage add series %q: %v", title, err))
+				return dispatchOutcome{shouldUpsert: false}
 			}
-			return dispatchOutcome{shouldUpsert: false}
+			return dispatchOutcome{monitoredStatus: "UNMONITORED", season: targetSeason, shouldUpsert: true}
 		}
 
 		_, addErr := o.sonarr.AddSeries(ctx, addReq)
@@ -594,8 +597,13 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 							EpisodeIDs:   sliceEpisodeIDs,
 						}); err != nil {
 							report.Errors = append(report.Errors, fmt.Sprintf("stage unmonitor episodes series %d: %v", series.ID, err))
+							return dispatchOutcome{shouldUpsert: false}
 						}
-						return dispatchOutcome{shouldUpsert: false}
+						monStatus := "UNMONITORED"
+						if series.Monitored {
+							monStatus = "MONITORED"
+						}
+						return dispatchOutcome{monitoredStatus: monStatus, season: targetSeason, shouldUpsert: true}
 					}
 					if monErr := o.sonarr.MonitorEpisodes(ctx, sliceEpisodeIDs, false); monErr != nil {
 						report.Errors = append(report.Errors, fmt.Sprintf("unmonitor episodes series %d: %v", series.ID, monErr))
@@ -623,8 +631,13 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 						SeasonNumber: targetSeason,
 					}); err != nil {
 						report.Errors = append(report.Errors, fmt.Sprintf("stage unmonitor series %d season %d: %v", series.ID, targetSeason, err))
+						return dispatchOutcome{shouldUpsert: false}
 					}
-					return dispatchOutcome{shouldUpsert: false}
+					monStatus := "UNMONITORED"
+					if series.Monitored {
+						monStatus = "MONITORED"
+					}
+					return dispatchOutcome{monitoredStatus: monStatus, season: targetSeason, shouldUpsert: true}
 				}
 				if _, updErr := o.sonarr.UpdateSeries(ctx, series); updErr != nil {
 					report.Errors = append(report.Errors, fmt.Sprintf("unmonitor series %d season %d: %v", series.ID, targetSeason, updErr))
@@ -677,8 +690,16 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 					EpisodeIDs:   sliceEpisodeIDs,
 				}); err != nil {
 					report.Errors = append(report.Errors, fmt.Sprintf("stage monitor episodes series %d: %v", series.ID, err))
+					return dispatchOutcome{shouldUpsert: false}
 				}
-				return dispatchOutcome{shouldUpsert: false}
+				return dispatchOutcome{monitoredStatus: "UNMONITORED", season: targetSeason, shouldUpsert: true}
+			}
+			if !series.Monitored {
+				series.Monitored = true
+				if _, updErr := o.sonarr.UpdateSeries(ctx, series); updErr != nil {
+					report.Errors = append(report.Errors, fmt.Sprintf("update series %d: %v", series.ID, updErr))
+					return dispatchOutcome{shouldUpsert: false}
+				}
 			}
 			if monErr := o.sonarr.MonitorEpisodes(ctx, sliceEpisodeIDs, true); monErr != nil {
 				report.Errors = append(report.Errors, fmt.Sprintf("monitor episodes series %d: %v", series.ID, monErr))
@@ -701,11 +722,7 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 			if o.cfg.SonarrSearchOnAdd {
 				_, _ = o.sonarr.SearchSeason(ctx, series.ID, targetSeason)
 			}
-			monStatus := "UNMONITORED"
-			if series.Monitored {
-				monStatus = "MONITORED"
-			}
-			return dispatchOutcome{monitoredStatus: monStatus, season: targetSeason, shouldUpsert: true}
+			return dispatchOutcome{monitoredStatus: "MONITORED", season: targetSeason, shouldUpsert: true}
 		}
 		monStatus := "UNMONITORED"
 		if series.Monitored {
@@ -735,8 +752,9 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 				SeasonNumber: targetSeason,
 			}); err != nil {
 				report.Errors = append(report.Errors, fmt.Sprintf("stage monitor series %d season %d: %v", series.ID, targetSeason, err))
+				return dispatchOutcome{shouldUpsert: false}
 			}
-			return dispatchOutcome{shouldUpsert: false}
+			return dispatchOutcome{monitoredStatus: "UNMONITORED", season: targetSeason, shouldUpsert: true}
 		}
 		series.Monitored = true
 		found := false
@@ -931,12 +949,12 @@ func (o *Orchestrator) upsertSyncedMedia(
 				release_year = excluded.release_year,
 				poster_url = excluded.poster_url,
 				anilist_status = excluded.anilist_status,
-				target_service = excluded.target_service,
-				tvdb_id = excluded.tvdb_id,
-				tmdb_id = excluded.tmdb_id,
-				arr_title = excluded.arr_title,
+				target_service = CASE WHEN excluded.monitored_status = 'IGNORED' THEN synced_media.target_service ELSE excluded.target_service END,
+				tvdb_id = CASE WHEN excluded.monitored_status = 'IGNORED' THEN synced_media.tvdb_id ELSE excluded.tvdb_id END,
+				tmdb_id = CASE WHEN excluded.monitored_status = 'IGNORED' THEN synced_media.tmdb_id ELSE excluded.tmdb_id END,
+				arr_title = CASE WHEN excluded.monitored_status = 'IGNORED' THEN synced_media.arr_title ELSE excluded.arr_title END,
 				monitored_status = excluded.monitored_status,
-				seasons = excluded.seasons,
+				seasons = CASE WHEN excluded.monitored_status = 'IGNORED' THEN synced_media.seasons ELSE excluded.seasons END,
 				last_synced_at = CURRENT_TIMESTAMP,
 				updated_at = CURRENT_TIMESTAMP;
 		`, entry.Media.ID, mediaType, entry.Media.Format, romaji, eng,

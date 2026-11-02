@@ -544,11 +544,11 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	restartRequired := (s.cfg.Port != next.Port) ||
-		(s.cfg.BindAddress != next.BindAddress) ||
-		(s.cfg.URLBase != next.URLBase) ||
-		(s.cfg.EnableSsl != next.EnableSsl) ||
-		(s.cfg.SslPort != next.SslPort)
+	restartRequired := (s.boundPort != next.Port) ||
+		(s.boundBindAddress != next.BindAddress) ||
+		(s.boundURLBase != next.URLBase) ||
+		(s.boundEnableSsl != next.EnableSsl) ||
+		(s.boundSslPort != next.SslPort)
 
 	*s.cfg = next
 	s.trustedNets = newTrustedNets

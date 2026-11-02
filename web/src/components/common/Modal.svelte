@@ -71,7 +71,7 @@
 
 {#if isOpen}
   <div class="modalBackdrop" on:click={handleBackdropClick} role="presentation">
-    <div class="modal {size}" role="dialog" aria-modal="true" bind:this={modalElement}>
+    <div class="modal {size}" role="dialog" aria-modal="true" aria-label={title} bind:this={modalElement}>
       <div class="modalContent">
         <div class="modalHeader">
           <span>{title}</span>

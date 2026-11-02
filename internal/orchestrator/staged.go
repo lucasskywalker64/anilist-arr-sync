@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
@@ -169,6 +170,8 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		return fmt.Errorf("query staged action %d: %w", id, err)
 	}
 
+	var syncUpdateFn func(ctx context.Context, tx *sql.Tx) error
+
 	switch action.ActionType {
 	case ActionAddMovie:
 		var req servarr.AddMovieRequest
@@ -187,6 +190,14 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		if addErr != nil {
 			return fmt.Errorf("execute add movie: %w", addErr)
 		}
+		syncUpdateFn = func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `
+				UPDATE synced_media
+				SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
+				WHERE tmdb_id = ?;
+			`, req.TMDBID)
+			return err
+		}
 
 	case ActionAddSeries:
 		var req servarr.AddSeriesRequest
@@ -204,6 +215,29 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		_, addErr := o.sonarr.AddSeries(ctx, req)
 		if addErr != nil {
 			return fmt.Errorf("execute add series: %w", addErr)
+		}
+		var targetSeasonStr string
+		for _, s := range req.Seasons {
+			if s.Monitored {
+				targetSeasonStr = strconv.Itoa(s.SeasonNumber)
+				break
+			}
+		}
+		syncUpdateFn = func(ctx context.Context, tx *sql.Tx) error {
+			if targetSeasonStr != "" {
+				_, err := tx.ExecContext(ctx, `
+					UPDATE synced_media
+					SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
+					WHERE tvdb_id = ? AND (seasons = ? OR seasons IS NULL OR seasons = '');
+				`, req.TVDBID, targetSeasonStr)
+				return err
+			}
+			_, err := tx.ExecContext(ctx, `
+				UPDATE synced_media
+				SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
+				WHERE tvdb_id = ?;
+			`, req.TVDBID)
+			return err
 		}
 
 	case ActionMonitorSeason:
@@ -244,6 +278,15 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		if o.cfg.SonarrSearchOnAdd && payload.SeriesID > 0 && payload.SeasonNumber > 0 {
 			_, _ = o.sonarr.SearchSeason(ctx, payload.SeriesID, payload.SeasonNumber)
 		}
+		seasonStr := strconv.Itoa(payload.SeasonNumber)
+		syncUpdateFn = func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `
+				UPDATE synced_media
+				SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
+				WHERE tvdb_id = ? AND (seasons = ? OR seasons IS NULL OR seasons = '');
+			`, payload.TVDBID, seasonStr)
+			return err
+		}
 
 	case ActionUnmonitorSeason:
 		var payload MonitorSeasonPayload
@@ -272,6 +315,15 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 				return fmt.Errorf("update series season monitoring: %w", updateErr)
 			}
 		}
+		seasonStr := strconv.Itoa(payload.SeasonNumber)
+		syncUpdateFn = func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `
+				UPDATE synced_media
+				SET monitored_status = 'UNMONITORED', updated_at = CURRENT_TIMESTAMP
+				WHERE tvdb_id = ? AND (seasons = ? OR seasons IS NULL OR seasons = '');
+			`, payload.TVDBID, seasonStr)
+			return err
+		}
 
 	case ActionUnmonitorMovie:
 		var payload UnmonitorMoviePayload
@@ -288,6 +340,14 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		movie.Monitored = false
 		if _, updateErr := o.radarr.UpdateMovie(ctx, movie); updateErr != nil {
 			return fmt.Errorf("update movie monitoring: %w", updateErr)
+		}
+		syncUpdateFn = func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `
+				UPDATE synced_media
+				SET monitored_status = 'UNMONITORED', updated_at = CURRENT_TIMESTAMP
+				WHERE tmdb_id = ?;
+			`, payload.TMDBID)
+			return err
 		}
 
 	default:
@@ -309,6 +369,11 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		}
 		if n == 0 {
 			return fmt.Errorf("staged action %d changed state during apply", id)
+		}
+		if syncUpdateFn != nil {
+			if err := syncUpdateFn(ctx, tx); err != nil {
+				return err
+			}
 		}
 		return nil
 	})

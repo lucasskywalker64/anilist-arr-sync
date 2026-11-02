@@ -33,20 +33,28 @@
     lastOpenState = false;
   }
 
+  let navigationId = 0;
+
   async function navigate(targetPath?: string) {
+    const requestId = ++navigationId;
     loading = true;
     errorMsg = '';
     try {
       const res = await api.getFilesystem(targetPath);
+      if (requestId !== navigationId) return;
       currentPath = res.current;
       inputPath = res.current;
       parentPath = res.parent || '';
       roots = res.roots || [];
       directories = res.directories || [];
     } catch (e: any) {
+      if (requestId !== navigationId) return;
       errorMsg = e.message || 'Failed to navigate directory';
+      currentPath = '';
     } finally {
-      loading = false;
+      if (requestId === navigationId) {
+        loading = false;
+      }
     }
   }
 

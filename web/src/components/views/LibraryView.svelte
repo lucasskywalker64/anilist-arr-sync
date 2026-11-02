@@ -158,11 +158,14 @@
       if (itemsRes.status === 'fulfilled') {
         libraryItems = itemsRes.value;
       } else {
+        libraryItems = [];
         errorMsg = itemsRes.reason?.message || 'Failed to load library items';
       }
 
       if (statsRes.status === 'fulfilled') {
         stats = statsRes.value;
+      } else {
+        stats = null;
       }
     } catch (e: any) {
       if (seq !== loadSeq) return;

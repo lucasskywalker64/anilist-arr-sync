@@ -43,7 +43,12 @@ func TestReviewQueueEndpoints(t *testing.T) {
 			return err
 		}
 		item2ID, _ = res2.LastInsertId()
-		return nil
+
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO synced_media (anilist_id, media_type, format, title_romaji, anilist_status, target_service, monitored_status)
+			VALUES (101, 'SERIES', 'TV', 'Frieren: Beyond Journeys End', 'CURRENT', 'NONE', 'PENDING_REVIEW');
+		`)
+		return err
 	})
 	if err != nil {
 		t.Fatalf("failed to seed review queue: %v", err)
@@ -121,6 +126,26 @@ func TestReviewQueueEndpoints(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatalf("failed to query review_queue: %v", err)
+		}
+
+		// Verify synced_media row for 101 moved from PENDING_REVIEW to UNMONITORED with mapping populated
+		err = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+			var monStatus, targetSvc string
+			var tvdbID int
+			var arrTitle, seasons sql.NullString
+			err := q.QueryRowContext(ctx, "SELECT monitored_status, target_service, tvdb_id, arr_title, seasons FROM synced_media WHERE anilist_id = 101;").
+				Scan(&monStatus, &targetSvc, &tvdbID, &arrTitle, &seasons)
+			if err != nil {
+				return err
+			}
+			if monStatus != "UNMONITORED" || targetSvc != "SONARR" || tvdbID != 414833 || arrTitle.String != "Frieren" || seasons.String != "1" {
+				t.Errorf("unexpected synced_media after resolve: status=%s, service=%s, tvdb=%d, arrTitle=%v, seasons=%v",
+					monStatus, targetSvc, tvdbID, arrTitle, seasons)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("failed to query synced_media after resolve: %v", err)
 		}
 	}
 
@@ -220,11 +245,17 @@ func TestIgnoredTitlesEndpoints(t *testing.T) {
 		}
 	}
 
-	// Seed an ignored title
+	// Seed an ignored title and matching synced_media row
 	err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
-		_, execErr := tx.ExecContext(ctx, `
+		if _, execErr := tx.ExecContext(ctx, `
 			INSERT INTO ignored_titles (anilist_id, title_romaji, reason)
 			VALUES (12345, 'Steins;Gate', 'Already watched');
+		`); execErr != nil {
+			return execErr
+		}
+		_, execErr := tx.ExecContext(ctx, `
+			INSERT INTO synced_media (anilist_id, media_type, format, title_romaji, anilist_status, target_service, monitored_status)
+			VALUES (12345, 'SERIES', 'TV', 'Steins;Gate', 'CURRENT', 'NONE', 'IGNORED');
 		`)
 		return execErr
 	})
@@ -293,6 +324,21 @@ func TestIgnoredTitlesEndpoints(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatalf("failed to query ignored_titles: %v", err)
+		}
+
+		// Verify synced_media row moved from IGNORED to UNMONITORED
+		err = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+			var monStatus string
+			if qErr := q.QueryRowContext(ctx, "SELECT monitored_status FROM synced_media WHERE anilist_id = 12345;").Scan(&monStatus); qErr != nil {
+				return qErr
+			}
+			if monStatus != "UNMONITORED" {
+				t.Errorf("expected synced_media monitored_status = UNMONITORED after delete ignored, got %s", monStatus)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("failed to query synced_media after delete ignored: %v", err)
 		}
 	}
 

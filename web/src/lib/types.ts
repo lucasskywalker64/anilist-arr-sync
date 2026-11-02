@@ -174,6 +174,7 @@ export interface CurrentUser {
   authenticated: boolean;
   csrfToken?: string;
   setupRequired?: boolean;
+  authMethod?: 'Forms' | 'Basic' | string;
 }
 
 export interface MappingResolution {

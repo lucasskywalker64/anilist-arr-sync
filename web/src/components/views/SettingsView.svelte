@@ -76,11 +76,19 @@
     return savedConfig[field] !== formConfig[field];
   }
 
+  let notifRequestId = 0;
+
   async function loadNotifications() {
+    const requestId = ++notifRequestId;
     try {
-      notifications = await api.getNotifications();
+      const result = await api.getNotifications();
+      if (requestId === notifRequestId) {
+        notifications = result;
+      }
     } catch (e: any) {
-      errorMsg = e.message || "Failed to load notifications";
+      if (requestId === notifRequestId) {
+        errorMsg = e.message || "Failed to load notifications";
+      }
     }
   }
 
@@ -126,7 +134,7 @@
       formPasswordConfirm = "";
       if (res?.restartRequired) {
         successMsg =
-          "Configuration changes saved. A service restart is required for network port or bind address changes to take effect.";
+          "Configuration changes saved. A service restart is required for these changes to take effect.";
       } else {
         successMsg = "Configuration changes saved successfully.";
       }
@@ -298,7 +306,7 @@
       }
 
       isNotifModalOpen = false;
-      notifications = await api.getNotifications();
+      await loadNotifications();
       successMsg = "Notification connection saved successfully.";
     } catch (e: any) {
       notifError = e.message || "Failed to save notification";
@@ -314,7 +322,7 @@
       return;
     try {
       await api.deleteNotification(id);
-      notifications = await api.getNotifications();
+      await loadNotifications();
       successMsg = "Notification connection removed.";
     } catch (e: any) {
       errorMsg = e.message || "Failed to delete notification";

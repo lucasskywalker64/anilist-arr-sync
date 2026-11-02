@@ -30,21 +30,31 @@
   // Updates data
   let updateStatus: UpdateStatus | null = null;
 
+  let latestRequestId = 0;
+
   async function loadData() {
+    const requestId = ++latestRequestId;
     loading = true;
     errorMsg = '';
     try {
       if (subTab === 'status') {
-        health = await api.getHealth();
+        const result = await api.getHealth();
+        if (requestId === latestRequestId) health = result;
       } else if (subTab === 'backup') {
-        backups = await api.getBackups();
+        const result = await api.getBackups();
+        if (requestId === latestRequestId) backups = result;
       } else if (subTab === 'updates') {
-        updateStatus = await api.getUpdateStatus();
+        const result = await api.getUpdateStatus();
+        if (requestId === latestRequestId) updateStatus = result;
       }
     } catch (e: any) {
-      errorMsg = e.message || 'Failed to load system data';
+      if (requestId === latestRequestId) {
+        errorMsg = e.message || 'Failed to load system data';
+      }
     } finally {
-      loading = false;
+      if (requestId === latestRequestId) {
+        loading = false;
+      }
     }
   }
 

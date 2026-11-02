@@ -162,6 +162,7 @@ func (s *Server) handleCurrentUser(w http.ResponseWriter, r *http.Request) {
 		"authenticated": username != "",
 		"csrfToken":     csrfToken,
 		"setupRequired": s.isSetupRequired(r.Context()),
+		"authMethod":    s.getAuthMethod(),
 	})
 }
 

@@ -61,12 +61,50 @@ func TestOverridesEndpoints(t *testing.T) {
 	}
 
 	var seededArrTitle sql.NullString
-	_ = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+	if readErr := db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
 		return q.QueryRowContext(ctx, "SELECT arr_title FROM synced_media WHERE anilist_id = 500;").Scan(&seededArrTitle)
-	})
+	}); readErr != nil {
+		t.Fatalf("failed to query synced_media: %v", readErr)
+	}
 	if !seededArrTitle.Valid || seededArrTitle.String != "Custom Title" {
 		t.Errorf("expected synced_media arr_title to be updated to 'Custom Title', got %v", seededArrTitle)
 	}
+
+	// 1b. Update mapping override without titleOverride clears arr_title to NULL
+	noTitlePayload, _ := json.Marshal(map[string]any{
+		"anilistId":     500,
+		"mediaType":     "SERIES",
+		"tvdbId":        123456,
+		"tmdbId":        0,
+		"seasons":       "1-2",
+		"titleOverride": "",
+	})
+	noTitleReq := httptest.NewRequest(http.MethodPost, "/api/v1/overrides", bytes.NewReader(noTitlePayload))
+	noTitleReq.RemoteAddr = "127.0.0.1:1234"
+	noTitleReq.Header.Set("Content-Type", "application/json")
+	noTitleReq.Header.Set("X-Api-Key", "test-key")
+	noTitleRec := httptest.NewRecorder()
+	handler.ServeHTTP(noTitleRec, noTitleReq)
+	if noTitleRec.Code != http.StatusCreated && noTitleRec.Code != http.StatusOK {
+		t.Fatalf("expected override update without titleOverride to succeed, got %d: %s", noTitleRec.Code, noTitleRec.Body.String())
+	}
+
+	var blankArrTitle sql.NullString
+	if readErr := db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT arr_title FROM synced_media WHERE anilist_id = 500;").Scan(&blankArrTitle)
+	}); readErr != nil {
+		t.Fatalf("failed to query synced_media after blank titleOverride: %v", readErr)
+	}
+	if blankArrTitle.Valid {
+		t.Errorf("expected synced_media arr_title to be NULL when titleOverride is omitted/empty, got %v", blankArrTitle.String)
+	}
+
+	// Re-apply Custom Title before testing DELETE
+	reqReapply := httptest.NewRequest(http.MethodPost, "/api/v1/overrides", bytes.NewReader(createPayload))
+	reqReapply.RemoteAddr = "127.0.0.1:1234"
+	reqReapply.Header.Set("Content-Type", "application/json")
+	reqReapply.Header.Set("X-Api-Key", "test-key")
+	handler.ServeHTTP(httptest.NewRecorder(), reqReapply)
 
 	// 2. GET /api/v1/overrides
 	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/overrides", nil)
@@ -100,9 +138,11 @@ func TestOverridesEndpoints(t *testing.T) {
 	}
 
 	var clearedArrTitle sql.NullString
-	_ = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+	if readErr := db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
 		return q.QueryRowContext(ctx, "SELECT arr_title FROM synced_media WHERE anilist_id = 500;").Scan(&clearedArrTitle)
-	})
+	}); readErr != nil {
+		t.Fatalf("failed to query synced_media after delete: %v", readErr)
+	}
 	if clearedArrTitle.Valid {
 		t.Errorf("expected synced_media arr_title to be cleared (NULL) after delete, got %v", clearedArrTitle.String)
 	}
@@ -198,6 +238,22 @@ func TestConfigEndpoints(t *testing.T) {
 	_ = json.Unmarshal(putRec2.Body.Bytes(), &putResp2)
 	if restart, ok := putResp2["restartRequired"].(bool); !ok || !restart {
 		t.Errorf("expected restartRequired to be true when updating port, got %v", putResp2["restartRequired"])
+	}
+
+	// 4. Subsequent PUT /api/v1/config keeping the modified port still reports restartRequired: true
+	putReq3 := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(updatePayload))
+	putReq3.RemoteAddr = "127.0.0.1:1234"
+	putReq3.Header.Set("Content-Type", "application/json")
+	putReq3.Header.Set("X-Api-Key", "secret-key-to-mask")
+	putRec3 := httptest.NewRecorder()
+	handler.ServeHTTP(putRec3, putReq3)
+	if putRec3.Code != http.StatusOK {
+		t.Fatalf("expected PUT /api/v1/config to return 200, got %d: %s", putRec3.Code, putRec3.Body.String())
+	}
+	var putResp3 map[string]any
+	_ = json.Unmarshal(putRec3.Body.Bytes(), &putResp3)
+	if restart, ok := putResp3["restartRequired"].(bool); !ok || !restart {
+		t.Errorf("expected restartRequired to remain true while bound port differs from saved port, got %v", putResp3["restartRequired"])
 	}
 }
 

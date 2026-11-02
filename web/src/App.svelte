@@ -111,6 +111,9 @@
       try {
         const cfg = await api.getConfig();
         if (cfg.instanceName) instanceName = cfg.instanceName;
+        if (cfg.authenticationMethod && currentUser) {
+          currentUser = { ...currentUser, authMethod: cfg.authenticationMethod };
+        }
       } catch (err: any) {
         if (err && (err.status === 401 || (err.message && err.message.includes('401')))) {
           needsLogin = true;
@@ -126,7 +129,7 @@
     try {
       await api.logout();
     } catch {
-      // ignore
+      return;
     }
     currentUser = null;
     needsLogin = true;
@@ -134,7 +137,7 @@
 
   function handleLoginSuccess(e: CustomEvent<{ username: string }>) {
     needsLogin = false;
-    currentUser = { username: e.detail.username, authenticated: true };
+    currentUser = { username: e.detail.username, authenticated: true, authMethod: 'Forms' };
     loadGlobalData();
   }
 
@@ -167,7 +170,7 @@
     {isSyncing}
     reviewCount={reviewItems.length}
     stagedCount={stagedActions.length}
-    authenticated={!!currentUser?.authenticated}
+    authenticated={Boolean(currentUser?.authenticated && (currentUser?.authMethod ?? 'Forms') === 'Forms')}
     on:navigate={(e) => navigate(e.detail)}
     on:logout={handleLogout}
   >

@@ -20,6 +20,7 @@
 
   // Per-item resolution state
   interface ItemState {
+    anilistId: number;
     mediaType: 'SERIES' | 'MOVIE';
     tvdbId: string;
     tmdbId: string;
@@ -36,10 +37,13 @@
 
   $: if (reviewItems) {
     let changed = false;
+    const activeIds = new Set<number>();
     for (const item of reviewItems) {
-      if (!formState[item.id]) {
+      activeIds.add(item.id);
+      if (formState[item.id]?.anilistId !== item.anilistId) {
         const topCandidate = item.candidates && item.candidates.length > 0 ? item.candidates[0] : null;
         formState[item.id] = {
+          anilistId: item.anilistId,
           mediaType: item.mediaType || 'SERIES',
           tvdbId: topCandidate?.tvdbId ? String(topCandidate.tvdbId) : '',
           tmdbId: topCandidate?.tmdbId ? String(topCandidate.tmdbId) : '',
@@ -49,17 +53,27 @@
         changed = true;
       }
     }
+    for (const key of Object.keys(formState)) {
+      const id = Number(key);
+      if (!activeIds.has(id)) {
+        delete formState[id];
+        changed = true;
+      }
+    }
     if (changed) {
       formState = { ...formState };
     }
   }
 
   function initFormState(items: ReviewItem[]) {
-    const next: Record<number, ItemState> = { ...formState };
+    const next: Record<number, ItemState> = {};
     for (const item of items) {
-      if (!next[item.id]) {
+      if (formState[item.id]?.anilistId === item.anilistId) {
+        next[item.id] = formState[item.id];
+      } else {
         const topCandidate = item.candidates && item.candidates.length > 0 ? item.candidates[0] : null;
         next[item.id] = {
+          anilistId: item.anilistId,
           mediaType: item.mediaType || 'SERIES',
           tvdbId: topCandidate?.tvdbId ? String(topCandidate.tvdbId) : '',
           tmdbId: topCandidate?.tmdbId ? String(topCandidate.tmdbId) : '',

@@ -46,6 +46,12 @@ type Server struct {
 	httpServer  *http.Server
 	httpsServer *http.Server
 
+	boundBindAddress string
+	boundPort        int
+	boundURLBase     string
+	boundEnableSsl   bool
+	boundSslPort     int
+
 	syncMu         sync.Mutex
 	isSyncing      bool
 	lastSyncReport *orchestrator.SyncReport
@@ -78,23 +84,36 @@ func NewServer(
 	}
 
 	var trustedNets []*net.IPNet
+	var bindAddr, urlBase string
+	var port, sslPort int
+	var enableSsl bool
 	if cfg != nil {
 		trustedNets, _ = ParseCIDRs(cfg.TrustedNetworks)
+		bindAddr = cfg.BindAddress
+		port = cfg.Port
+		urlBase = cfg.URLBase
+		enableSsl = cfg.EnableSsl
+		sslPort = cfg.SslPort
 	}
 
 	return &Server{
-		cfg:          cfg,
-		configPath:   configPath,
-		db:           db,
-		orch:         orch,
-		backup:       backupEngine,
-		notifier:     notifDispatcher,
-		notifStore:   notifStore,
-		sessions:     NewSessionStore(24 * time.Hour),
-		trustedNets:  trustedNets,
-		cleanURLBase: cleanBase,
-		webFS:        defaultWebFS,
-		errChan:      make(chan error, 2),
+		cfg:              cfg,
+		configPath:       configPath,
+		db:               db,
+		orch:             orch,
+		backup:           backupEngine,
+		notifier:         notifDispatcher,
+		notifStore:       notifStore,
+		sessions:         NewSessionStore(24 * time.Hour),
+		trustedNets:      trustedNets,
+		cleanURLBase:     cleanBase,
+		webFS:            defaultWebFS,
+		errChan:          make(chan error, 2),
+		boundBindAddress: bindAddr,
+		boundPort:        port,
+		boundURLBase:     urlBase,
+		boundEnableSsl:   enableSsl,
+		boundSslPort:     sslPort,
 	}
 }
 
@@ -273,6 +292,14 @@ func (s *Server) Handler() http.Handler {
 
 // Start begins listening on configured HTTP and optional HTTPS ports.
 func (s *Server) Start() error {
+	s.cfgMu.Lock()
+	s.boundBindAddress = s.cfg.BindAddress
+	s.boundPort = s.cfg.Port
+	s.boundURLBase = s.cfg.URLBase
+	s.boundEnableSsl = s.cfg.EnableSsl
+	s.boundSslPort = s.cfg.SslPort
+	s.cfgMu.Unlock()
+
 	handler := s.Handler()
 
 	httpAddr := fmt.Sprintf("%s:%d", s.cfg.BindAddress, s.cfg.Port)

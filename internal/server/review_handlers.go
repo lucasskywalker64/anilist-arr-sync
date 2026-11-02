@@ -245,6 +245,27 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 			return overrideErr
 		}
 
+		targetService := "SONARR"
+		var seasonsCol any = seasons
+		if mediaType == "MOVIE" {
+			targetService = "RADARR"
+			seasonsCol = nil
+		}
+		if _, syncErr := tx.ExecContext(ctx, `
+			UPDATE synced_media
+			SET media_type = ?,
+			    target_service = ?,
+			    tvdb_id = ?,
+			    tmdb_id = ?,
+			    arr_title = ?,
+			    seasons = ?,
+			    monitored_status = CASE WHEN monitored_status = 'PENDING_REVIEW' THEN 'UNMONITORED' ELSE monitored_status END,
+			    updated_at = CURRENT_TIMESTAMP
+			WHERE anilist_id = ?;
+		`, mediaType, targetService, tvdbVal, tmdbVal, titleVal, seasonsCol, anilistID); syncErr != nil {
+			return syncErr
+		}
+
 		res, updateErr := tx.ExecContext(ctx, `
 			UPDATE review_queue
 			SET status = 'RESOLVED',
@@ -334,12 +355,14 @@ func (s *Server) handleIgnoreReview(w http.ResponseWriter, r *http.Request) {
 			return ignoreErr
 		}
 
-		_, _ = tx.ExecContext(ctx, `
+		if _, syncErr := tx.ExecContext(ctx, `
 			UPDATE synced_media
 			SET monitored_status = 'IGNORED',
 			    updated_at = CURRENT_TIMESTAMP
 			WHERE anilist_id = ?;
-		`, anilistID)
+		`, anilistID); syncErr != nil {
+			return syncErr
+		}
 
 		res, updateErr := tx.ExecContext(ctx, `
 			UPDATE review_queue
@@ -456,7 +479,13 @@ func (s *Server) handleDeleteIgnored(w http.ResponseWriter, r *http.Request) {
 		if rows == 0 {
 			return sql.ErrNoRows
 		}
-		return nil
+		_, syncErr := tx.ExecContext(ctx, `
+			UPDATE synced_media
+			SET monitored_status = 'UNMONITORED',
+			    updated_at = CURRENT_TIMESTAMP
+			WHERE anilist_id = ? AND monitored_status = 'IGNORED';
+		`, id)
+		return syncErr
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
