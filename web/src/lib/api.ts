@@ -282,21 +282,36 @@ export const api = {
 
   // Staged Actions
   async getStaged(): Promise<StagedAction[]> {
-    return request('/api/v1/staged');
+    const items = await request<StagedAction[]>('/api/v1/staged');
+    return (items || []).map((item) => ({
+      ...item,
+      service: item.service || item.targetService || '',
+      payload: item.payload ?? item.payloadJson ?? '',
+    }));
   },
 
-  async applyStaged(ids: number[]): Promise<{ status: string; appliedCount: number }> {
-    return request('/api/v1/staged/apply', {
+  async applyStaged(ids: number[]): Promise<{ status: string; applied?: number[]; appliedCount: number }> {
+    const res = await request<{ status: string; applied?: number[]; appliedCount?: number }>('/api/v1/staged/apply', {
       method: 'POST',
       body: JSON.stringify({ ids }),
     });
+    return {
+      status: res.status,
+      applied: res.applied,
+      appliedCount: res.appliedCount ?? (Array.isArray(res.applied) ? res.applied.length : ids.length),
+    };
   },
 
-  async rejectStaged(ids: number[]): Promise<{ status: string; rejectedCount: number }> {
-    return request('/api/v1/staged/reject', {
+  async rejectStaged(ids: number[]): Promise<{ status: string; rejected?: number[]; rejectedCount: number }> {
+    const res = await request<{ status: string; rejected?: number[]; rejectedCount?: number }>('/api/v1/staged/reject', {
       method: 'POST',
       body: JSON.stringify({ ids }),
     });
+    return {
+      status: res.status,
+      rejected: res.rejected,
+      rejectedCount: res.rejectedCount ?? (Array.isArray(res.rejected) ? res.rejected.length : ids.length),
+    };
   },
 
   // Config

@@ -39,8 +39,10 @@ export interface StagedAction {
   actionType: 'ADD_SERIES' | 'ADD_MOVIE' | 'MONITOR_SEASON' | 'UNMONITOR_SEASON' | 'UNMONITOR_MOVIE';
   mediaType: 'SERIES' | 'MOVIE';
   title: string;
-  service: 'Sonarr' | 'Radarr';
-  payload: string | Record<string, unknown>;
+  targetService?: string;
+  service?: 'Sonarr' | 'Radarr' | string;
+  payloadJson?: string;
+  payload?: string | Record<string, unknown>;
   status: 'PENDING' | 'APPLIED' | 'REJECTED';
   createdAt: string;
 }

@@ -243,10 +243,10 @@
                 </td>
                 <td class="boldTitle">{action.title}</td>
                 <td>
-                  <span class="serviceBadge">{action.service}</span>
+                  <span class="serviceBadge">{action.targetService || action.service || '-'}</span>
                 </td>
-                <td class="payloadCell" title={formatPayload(action.payload)}>
-                  <code>{formatPayload(action.payload)}</code>
+                <td class="payloadCell" title={formatPayload(action.payloadJson ?? action.payload)}>
+                  <code>{formatPayload(action.payloadJson ?? action.payload)}</code>
                 </td>
                 <td class="timestamp">{new Date(action.createdAt).toLocaleTimeString()}</td>
                 <td style="text-align: right;">

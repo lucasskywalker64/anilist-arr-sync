@@ -305,4 +305,51 @@ describe('API Client', () => {
       expect.anything()
     );
   });
+
+  it('normalizes staged preview items and apply/reject counts', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => [
+          {
+            id: 1,
+            actionType: 'ADD_MOVIE',
+            mediaType: 'MOVIE',
+            title: 'The Boy and the Heron',
+            targetService: 'Radarr',
+            payloadJson: '{"tmdbId":653851}',
+            status: 'PENDING',
+            createdAt: '2026-11-02T23:00:00Z',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ status: 'ok', applied: [1, 2] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ status: 'ok', rejected: [3] }),
+      });
+    globalThis.fetch = fetchMock;
+
+    const staged = await api.getStaged();
+    expect(staged).toHaveLength(1);
+    expect(staged[0].service).toBe('Radarr');
+    expect(staged[0].targetService).toBe('Radarr');
+    expect(staged[0].payload).toBe('{"tmdbId":653851}');
+    expect(staged[0].payloadJson).toBe('{"tmdbId":653851}');
+
+    const applyRes = await api.applyStaged([1, 2]);
+    expect(applyRes.appliedCount).toBe(2);
+
+    const rejectRes = await api.rejectStaged([3]);
+    expect(rejectRes.rejectedCount).toBe(1);
+  });
 });
