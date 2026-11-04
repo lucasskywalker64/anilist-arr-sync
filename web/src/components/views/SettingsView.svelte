@@ -77,6 +77,7 @@
   }
 
   let notifRequestId = 0;
+  let notifLoadError = "";
 
   async function loadNotifications() {
     const requestId = ++notifRequestId;
@@ -84,10 +85,15 @@
       const result = await api.getNotifications();
       if (requestId === notifRequestId) {
         notifications = result;
+        if (notifLoadError && errorMsg === notifLoadError) {
+          errorMsg = "";
+        }
+        notifLoadError = "";
       }
     } catch (e: any) {
       if (requestId === notifRequestId) {
-        errorMsg = e.message || "Failed to load notifications";
+        notifLoadError = e.message || "Failed to load notifications";
+        errorMsg = notifLoadError;
       }
     }
   }
@@ -102,9 +108,6 @@
     try {
       savedConfig = await api.getConfig();
       formConfig = JSON.parse(JSON.stringify(savedConfig));
-      if (subTab === "connect") {
-        await loadNotifications();
-      }
     } catch (e: any) {
       errorMsg = e.message || "Failed to load configuration";
     } finally {
@@ -322,7 +325,12 @@
       return;
     try {
       await api.deleteNotification(id);
-      await loadNotifications();
+      notifications = notifications.filter((n) => n.id !== id);
+      try {
+        await loadNotifications();
+      } catch {
+        // list already reconciled locally
+      }
       successMsg = "Notification connection removed.";
     } catch (e: any) {
       errorMsg = e.message || "Failed to delete notification";

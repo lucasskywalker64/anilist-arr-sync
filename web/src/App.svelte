@@ -11,7 +11,7 @@
   import SettingsView from './components/views/SettingsView.svelte';
   import SystemView from './components/views/SystemView.svelte';
   import LoginModal from './components/views/LoginModal.svelte';
-  import { api, getBaseUrl } from './lib/api';
+  import { api, getBaseUrl, setApiKey } from './lib/api';
   import type { ReviewItem, StagedAction, OverrideItem, CurrentUser } from './lib/types';
 
   let currentRoute = '/';
@@ -128,6 +128,7 @@
   async function handleLogout() {
     try {
       await api.logout();
+      setApiKey('');
     } catch {
       return;
     }

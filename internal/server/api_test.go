@@ -5,10 +5,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/backup"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
@@ -104,7 +106,21 @@ func TestOverridesEndpoints(t *testing.T) {
 	reqReapply.RemoteAddr = "127.0.0.1:1234"
 	reqReapply.Header.Set("Content-Type", "application/json")
 	reqReapply.Header.Set("X-Api-Key", "test-key")
-	handler.ServeHTTP(httptest.NewRecorder(), reqReapply)
+	reapplyRec := httptest.NewRecorder()
+	handler.ServeHTTP(reapplyRec, reqReapply)
+	if reapplyRec.Code != http.StatusCreated && reapplyRec.Code != http.StatusOK {
+		t.Fatalf("expected override reapply to succeed, got %d: %s", reapplyRec.Code, reapplyRec.Body.String())
+	}
+
+	var reappliedArrTitle sql.NullString
+	if readErr := db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT arr_title FROM synced_media WHERE anilist_id = 500;").Scan(&reappliedArrTitle)
+	}); readErr != nil {
+		t.Fatalf("failed to query synced_media after reapply: %v", readErr)
+	}
+	if !reappliedArrTitle.Valid || reappliedArrTitle.String != "Custom Title" {
+		t.Fatalf("expected synced_media arr_title to be 'Custom Title' before delete, got %v", reappliedArrTitle)
+	}
 
 	// 2. GET /api/v1/overrides
 	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/overrides", nil)
@@ -254,6 +270,88 @@ func TestConfigEndpoints(t *testing.T) {
 	_ = json.Unmarshal(putRec3.Body.Bytes(), &putResp3)
 	if restart, ok := putResp3["restartRequired"].(bool); !ok || !restart {
 		t.Errorf("expected restartRequired to remain true while bound port differs from saved port, got %v", putResp3["restartRequired"])
+	}
+}
+
+func TestConfigEndpoints_RestartBaselineRefreshedOnStart(t *testing.T) {
+	l1, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen on port: %v", err)
+	}
+	port1 := l1.Addr().(*net.TCPAddr).Port
+	_ = l1.Close()
+
+	l2, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen on second port: %v", err)
+	}
+	port2 := l2.Addr().(*net.TCPAddr).Port
+	_ = l2.Close()
+
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.xml")
+
+	cfg := config.NewDefault()
+	cfg.BindAddress = "127.0.0.1"
+	cfg.Port = port1
+	cfg.EnableSsl = false
+	cfg.AuthenticationRequired = "DisabledForLocalAddresses"
+	cfg.APIKey = "secret-key"
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("failed to save config: %v", err)
+	}
+
+	db := newTestStorage(t)
+	srv := NewServer(cfg, configPath, db, nil, nil)
+	handler := srv.Handler()
+
+	// 1. PUT port change to port2 before Start() returns restartRequired: true
+	portPayload, _ := json.Marshal(map[string]any{
+		"port": port2,
+	})
+	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(portPayload))
+	putReq.RemoteAddr = "127.0.0.1:1234"
+	putReq.Header.Set("Content-Type", "application/json")
+	putReq.Header.Set("X-Api-Key", "secret-key")
+	putRec := httptest.NewRecorder()
+	handler.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("expected PUT /api/v1/config to return 200, got %d: %s", putRec.Code, putRec.Body.String())
+	}
+	var putResp map[string]any
+	_ = json.Unmarshal(putRec.Body.Bytes(), &putResp)
+	if restart, ok := putResp["restartRequired"].(bool); !ok || !restart {
+		t.Fatalf("expected restartRequired true before start, got %v", putResp["restartRequired"])
+	}
+
+	// 2. Start() binds port2 and refreshes the baseline
+	if err := srv.Start(); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}()
+
+	// 3. Subsequent PUT keeping port2 now returns restartRequired: false
+	updatePayload, _ := json.Marshal(map[string]any{
+		"instanceName": "Updated Name",
+		"port":         port2,
+	})
+	putReq2 := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(updatePayload))
+	putReq2.RemoteAddr = "127.0.0.1:1234"
+	putReq2.Header.Set("Content-Type", "application/json")
+	putReq2.Header.Set("X-Api-Key", "secret-key")
+	putRec2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(putRec2, putReq2)
+	if putRec2.Code != http.StatusOK {
+		t.Fatalf("expected PUT /api/v1/config to return 200, got %d: %s", putRec2.Code, putRec2.Body.String())
+	}
+	var putResp2 map[string]any
+	_ = json.Unmarshal(putRec2.Body.Bytes(), &putResp2)
+	if restart, ok := putResp2["restartRequired"].(bool); !ok || restart {
+		t.Errorf("expected restartRequired false after Start() refreshed baseline, got %v", putResp2["restartRequired"])
 	}
 }
 

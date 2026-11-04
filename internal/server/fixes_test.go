@@ -309,7 +309,7 @@ func TestReviewResolve_Validation(t *testing.T) {
 
 	// 3. Valid resolve succeeds
 	goodBody, _ := json.Marshal(map[string]any{
-		"tvdbId": 12345,
+		"tmdbId": 12345,
 	})
 	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/review/1/resolve", bytes.NewReader(goodBody))
 	req3.RemoteAddr = "127.0.0.1:1234"

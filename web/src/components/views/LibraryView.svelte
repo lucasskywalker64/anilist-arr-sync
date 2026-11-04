@@ -32,6 +32,7 @@
   let libraryItems: LibraryItem[] = [];
   let stats: LibraryStats | null = null;
   let loading = false;
+  let itemsError = false;
   let errorMsg = '';
   let successMsg = '';
 
@@ -141,6 +142,7 @@
     const seq = ++loadSeq;
     loading = true;
     errorMsg = '';
+    itemsError = false;
     try {
       const [itemsRes, statsRes] = await Promise.allSettled([
         api.getLibrary({
@@ -159,6 +161,7 @@
         libraryItems = itemsRes.value;
       } else {
         libraryItems = [];
+        itemsError = true;
         errorMsg = itemsRes.reason?.message || 'Failed to load library items';
       }
 
@@ -169,6 +172,7 @@
       }
     } catch (e: any) {
       if (seq !== loadSeq) return;
+      itemsError = true;
       errorMsg = e.message || 'Failed to load library';
     } finally {
       if (seq === loadSeq) {
@@ -342,7 +346,7 @@
         </button>
       </div>
 
-      {#if stats}
+      {#if stats && !itemsError}
         <div class="statsBadge" title="Total synchronized library count">
           {libraryItems.length} of {stats.total}
         </div>
@@ -360,7 +364,7 @@
         <Alert kind="success">{successMsg}</Alert>
       {/if}
 
-      {#if libraryItems.length === 0}
+      {#if !loading && !itemsError && libraryItems.length === 0}
         <div class="emptyState">
           <h3>No Anime in Library</h3>
           {#if searchTerm || statusFilter !== 'all' || serviceFilter !== 'all' || monitoredFilter !== 'all'}

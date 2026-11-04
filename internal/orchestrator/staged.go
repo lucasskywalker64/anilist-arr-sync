@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -194,7 +195,7 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 			_, err := tx.ExecContext(ctx, `
 				UPDATE synced_media
 				SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
-				WHERE tmdb_id = ?;
+				WHERE tmdb_id = ? AND monitored_status != 'IGNORED';
 			`, req.TMDBID)
 			return err
 		}
@@ -228,14 +229,16 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 				_, err := tx.ExecContext(ctx, `
 					UPDATE synced_media
 					SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
-					WHERE tvdb_id = ? AND (seasons = ? OR seasons IS NULL OR seasons = '');
-				`, req.TVDBID, targetSeasonStr)
+					WHERE tvdb_id = ?
+					  AND monitored_status != 'IGNORED'
+					  AND (seasons IS NULL OR seasons = '' OR seasons = ? OR (',' || REPLACE(seasons, ' ', '') || ',') LIKE ('%,' || ? || ',%'));
+				`, req.TVDBID, targetSeasonStr, targetSeasonStr)
 				return err
 			}
 			_, err := tx.ExecContext(ctx, `
 				UPDATE synced_media
 				SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
-				WHERE tvdb_id = ?;
+				WHERE tvdb_id = ? AND monitored_status != 'IGNORED';
 			`, req.TVDBID)
 			return err
 		}
@@ -249,6 +252,12 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 			return errors.New("sonarr client is nil")
 		}
 		if len(payload.EpisodeIDs) > 0 {
+			if payload.SeriesID > 0 {
+				if series, getErr := o.sonarr.GetSeriesByID(ctx, payload.SeriesID); getErr == nil && !series.Monitored {
+					series.Monitored = true
+					_, _ = o.sonarr.UpdateSeries(ctx, series)
+				}
+			}
 			if monErr := o.sonarr.MonitorEpisodes(ctx, payload.EpisodeIDs, true); monErr != nil {
 				return fmt.Errorf("execute monitor episodes: %w", monErr)
 			}
@@ -257,6 +266,7 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 			if getErr != nil {
 				return fmt.Errorf("get series %d: %w", payload.SeriesID, getErr)
 			}
+			series.Monitored = true
 			found := false
 			for i := range series.Seasons {
 				if series.Seasons[i].SeasonNumber == payload.SeasonNumber {
@@ -283,8 +293,10 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 			_, err := tx.ExecContext(ctx, `
 				UPDATE synced_media
 				SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
-				WHERE tvdb_id = ? AND (seasons = ? OR seasons IS NULL OR seasons = '');
-			`, payload.TVDBID, seasonStr)
+				WHERE tvdb_id = ?
+				  AND monitored_status != 'IGNORED'
+				  AND (seasons IS NULL OR seasons = '' OR seasons = ? OR (',' || REPLACE(seasons, ' ', '') || ',') LIKE ('%,' || ? || ',%'));
+			`, payload.TVDBID, seasonStr, seasonStr)
 			return err
 		}
 
@@ -320,8 +332,10 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 			_, err := tx.ExecContext(ctx, `
 				UPDATE synced_media
 				SET monitored_status = 'UNMONITORED', updated_at = CURRENT_TIMESTAMP
-				WHERE tvdb_id = ? AND (seasons = ? OR seasons IS NULL OR seasons = '');
-			`, payload.TVDBID, seasonStr)
+				WHERE tvdb_id = ?
+				  AND monitored_status != 'IGNORED'
+				  AND (seasons IS NULL OR seasons = '' OR seasons = ? OR (',' || REPLACE(seasons, ' ', '') || ',') LIKE ('%,' || ? || ',%'));
+			`, payload.TVDBID, seasonStr, seasonStr)
 			return err
 		}
 
@@ -345,7 +359,7 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 			_, err := tx.ExecContext(ctx, `
 				UPDATE synced_media
 				SET monitored_status = 'UNMONITORED', updated_at = CURRENT_TIMESTAMP
-				WHERE tmdb_id = ?;
+				WHERE tmdb_id = ? AND monitored_status != 'IGNORED';
 			`, payload.TMDBID)
 			return err
 		}
@@ -371,8 +385,8 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 			return fmt.Errorf("staged action %d changed state during apply", id)
 		}
 		if syncUpdateFn != nil {
-			if err := syncUpdateFn(ctx, tx); err != nil {
-				return err
+			if updateErr := syncUpdateFn(ctx, tx); updateErr != nil {
+				log.Printf("apply staged action %d: update synced_media failed: %v", id, updateErr)
 			}
 		}
 		return nil

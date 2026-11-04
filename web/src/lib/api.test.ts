@@ -329,7 +329,7 @@ describe('API Client', () => {
         ok: true,
         status: 200,
         headers: new Headers({ 'content-type': 'application/json' }),
-        json: async () => ({ status: 'ok', applied: [1, 2] }),
+        json: async () => ({ status: 'ok', applied: [1] }),
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -347,9 +347,19 @@ describe('API Client', () => {
     expect(staged[0].payloadJson).toBe('{"tmdbId":653851}');
 
     const applyRes = await api.applyStaged([1, 2]);
-    expect(applyRes.appliedCount).toBe(2);
+    expect(applyRes.appliedCount).toBe(1);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/staged/apply',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ ids: [1, 2] }) })
+    );
 
     const rejectRes = await api.rejectStaged([3]);
     expect(rejectRes.rejectedCount).toBe(1);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/staged/reject',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ ids: [3] }) })
+    );
   });
 });

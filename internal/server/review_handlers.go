@@ -16,6 +16,11 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 )
 
+var (
+	errTmdbRequiredForMovie  = errors.New("tmdbId is required for MOVIE")
+	errTvdbRequiredForSeries = errors.New("tvdbId is required for SERIES")
+)
+
 // ReviewQueueItem represents an item waiting in review_queue.
 type ReviewQueueItem struct {
 	ID             int        `json:"id"`
@@ -190,6 +195,14 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 		s.writeJSONError(w, http.StatusBadRequest, "mediaType must be MOVIE or SERIES")
 		return
 	}
+	if reqMedia == "MOVIE" && tmdbVal == nil {
+		s.writeJSONError(w, http.StatusBadRequest, "tmdbId is required for MOVIE")
+		return
+	}
+	if reqMedia == "SERIES" && tvdbVal == nil {
+		s.writeJSONError(w, http.StatusBadRequest, "tvdbId is required for SERIES")
+		return
+	}
 
 	seasons := strings.TrimSpace(req.Seasons)
 	if seasons == "" {
@@ -220,6 +233,12 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 		mediaType := reqMedia
 		if mediaType == "" {
 			mediaType = queueMediaType
+		}
+		if mediaType == "MOVIE" && tmdbVal == nil {
+			return errTmdbRequiredForMovie
+		}
+		if mediaType == "SERIES" && tvdbVal == nil {
+			return errTvdbRequiredForSeries
 		}
 
 		parts := strings.FieldsFunc(seasons, func(c rune) bool {
@@ -290,6 +309,10 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			s.writeJSONError(w, http.StatusNotFound, fmt.Sprintf("review queue item %d not found or already resolved", id))
+			return
+		}
+		if errors.Is(err, errTmdbRequiredForMovie) || errors.Is(err, errTvdbRequiredForSeries) {
+			s.writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		log.Printf("resolve review item %d failed: %v", id, err)

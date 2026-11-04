@@ -46,7 +46,8 @@ func TestReviewQueueEndpoints(t *testing.T) {
 
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO synced_media (anilist_id, media_type, format, title_romaji, anilist_status, target_service, monitored_status)
-			VALUES (101, 'SERIES', 'TV', 'Frieren: Beyond Journeys End', 'CURRENT', 'NONE', 'PENDING_REVIEW');
+			VALUES (101, 'SERIES', 'TV', 'Frieren: Beyond Journeys End', 'CURRENT', 'NONE', 'PENDING_REVIEW'),
+			       (102, 'MOVIE', 'MOVIE', 'Spirited Away', 'PLANNING', 'NONE', 'PENDING_REVIEW');
 		`)
 		return err
 	})
@@ -71,6 +72,40 @@ func TestReviewQueueEndpoints(t *testing.T) {
 		}
 		if len(items) != 2 {
 			t.Fatalf("expected 2 pending review items, got %d", len(items))
+		}
+	}
+
+	// 2a. POST /api/v1/review/{id}/resolve with missing ID returns 400
+	{
+		// SERIES without tvdbId
+		badSeries, _ := json.Marshal(map[string]any{
+			"mediaType": "SERIES",
+			"tvdbId":    0,
+			"seasons":   "1",
+		})
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/review/%d/resolve", item1ID), bytes.NewReader(badSeries))
+		req.RemoteAddr = "127.0.0.1:12345"
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Api-Key", "test-api-key")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for SERIES without tvdbId, got %d", rec.Code)
+		}
+
+		// MOVIE without tmdbId
+		badMovie, _ := json.Marshal(map[string]any{
+			"mediaType": "MOVIE",
+			"tmdbId":    0,
+		})
+		req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/review/%d/resolve", item2ID), bytes.NewReader(badMovie))
+		req.RemoteAddr = "127.0.0.1:12345"
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Api-Key", "test-api-key")
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for MOVIE without tmdbId, got %d", rec.Code)
 		}
 	}
 
@@ -196,6 +231,22 @@ func TestReviewQueueEndpoints(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatalf("failed to query review_queue: %v", err)
+		}
+
+		// Verify synced_media row for 102 moved to IGNORED
+		err = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+			var monStatus string
+			err := q.QueryRowContext(ctx, "SELECT monitored_status FROM synced_media WHERE anilist_id = 102;").Scan(&monStatus)
+			if err != nil {
+				return err
+			}
+			if monStatus != "IGNORED" {
+				t.Errorf("expected synced_media monitored_status IGNORED, got %s", monStatus)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("failed to query synced_media: %v", err)
 		}
 	}
 
