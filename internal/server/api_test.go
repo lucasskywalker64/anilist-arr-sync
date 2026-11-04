@@ -209,11 +209,21 @@ func TestConfigEndpoints(t *testing.T) {
 	if returnedCfg["apiKey"] != "secret-key-to-mask" {
 		t.Errorf("expected apiKey to be returned for viewing and copying, got %v", returnedCfg["apiKey"])
 	}
+	for _, field := range []string{"unmonitorCompleted", "deleteDropped", "deleteCompleted", "unmonitorWatched", "deleteWatched"} {
+		if _, ok := returnedCfg[field]; !ok {
+			t.Errorf("expected GET /api/v1/config to include field %s", field)
+		}
+	}
 
 	// 2. PUT /api/v1/config updates settings (non-network fields do not require restart)
 	updatePayload, _ := json.Marshal(map[string]any{
-		"instanceName":      "My Anime Sync",
-		"syncIntervalHours": 6,
+		"instanceName":       "My Anime Sync",
+		"syncIntervalHours":  6,
+		"unmonitorCompleted": true,
+		"deleteDropped":      true,
+		"deleteCompleted":    true,
+		"unmonitorWatched":   true,
+		"deleteWatched":      true,
 	})
 	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(updatePayload))
 	putReq.RemoteAddr = "127.0.0.1:1234"
@@ -235,6 +245,9 @@ func TestConfigEndpoints(t *testing.T) {
 	}
 	if srv.cfg.SyncIntervalHours != 6 {
 		t.Errorf("expected syncIntervalHours to be 6, got %d", srv.cfg.SyncIntervalHours)
+	}
+	if !srv.cfg.UnmonitorCompleted || !srv.cfg.DeleteDropped || !srv.cfg.DeleteCompleted || !srv.cfg.UnmonitorWatched || !srv.cfg.DeleteWatched {
+		t.Errorf("expected cleanup and pruning settings to be true, got %+v", srv.cfg)
 	}
 
 	// 3. PUT /api/v1/config with Port change requires restart

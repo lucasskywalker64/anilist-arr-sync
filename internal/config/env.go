@@ -231,6 +231,36 @@ func (c *Config) applyField(origKey, subKey, val string) error {
 			return err
 		}
 		c.UnmonitorDropped = v
+	case "SYNC__UNMONITORCOMPLETED":
+		v, err := parseBool()
+		if err != nil {
+			return err
+		}
+		c.UnmonitorCompleted = v
+	case "SYNC__DELETEDROPPED":
+		v, err := parseBool()
+		if err != nil {
+			return err
+		}
+		c.DeleteDropped = v
+	case "SYNC__DELETECOMPLETED":
+		v, err := parseBool()
+		if err != nil {
+			return err
+		}
+		c.DeleteCompleted = v
+	case "SYNC__UNMONITORWATCHED":
+		v, err := parseBool()
+		if err != nil {
+			return err
+		}
+		c.UnmonitorWatched = v
+	case "SYNC__DELETEWATCHED":
+		v, err := parseBool()
+		if err != nil {
+			return err
+		}
+		c.DeleteWatched = v
 	case "SYNC__FIRSTRUNDRYRUN":
 		v, err := parseBool()
 		if err != nil {

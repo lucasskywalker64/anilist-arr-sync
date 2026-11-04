@@ -27,6 +27,8 @@ type Movie struct {
 	TitleSlug           string           `json:"titleSlug,omitempty"`
 	Year                int              `json:"year,omitempty"`
 	Tags                []int            `json:"tags,omitempty"`
+	HasFile             bool             `json:"hasFile"`
+	MovieFileID         int              `json:"movieFileId"`
 	AddOptions          *AddMovieOptions `json:"addOptions,omitempty"`
 }
 
@@ -177,4 +179,24 @@ func (c *RadarrClient) UpdateMovie(ctx context.Context, movie *Movie) (*Movie, e
 	}
 
 	return &updated, nil
+}
+
+// DeleteMovieFile deletes a movie file from Radarr.
+// HTTP 404 responses are treated as idempotent successes.
+func (c *RadarrClient) DeleteMovieFile(ctx context.Context, movieFileID int) error {
+	endpoint := fmt.Sprintf("/api/v3/moviefile/%d", movieFileID)
+	req, err := c.newRequest(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.do(req, nil)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("delete movie file %d: %w", movieFileID, err)
+	}
+
+	return nil
 }

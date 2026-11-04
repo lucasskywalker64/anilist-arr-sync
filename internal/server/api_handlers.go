@@ -268,6 +268,11 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"dateToleranceDays":         sanitized.DateToleranceDays,
 		"confidenceThreshold":       sanitized.ConfidenceThreshold,
 		"unmonitorDropped":          sanitized.UnmonitorDropped,
+		"unmonitorCompleted":        sanitized.UnmonitorCompleted,
+		"deleteDropped":             sanitized.DeleteDropped,
+		"deleteCompleted":           sanitized.DeleteCompleted,
+		"unmonitorWatched":          sanitized.UnmonitorWatched,
+		"deleteWatched":             sanitized.DeleteWatched,
 		"firstRunDryRun":            sanitized.FirstRunDryRun,
 	}
 
@@ -433,6 +438,26 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		case "unmonitordropped":
 			if b, ok := v.(bool); ok {
 				next.UnmonitorDropped = b
+			}
+		case "unmonitorcompleted":
+			if b, ok := v.(bool); ok {
+				next.UnmonitorCompleted = b
+			}
+		case "deletedropped":
+			if b, ok := v.(bool); ok {
+				next.DeleteDropped = b
+			}
+		case "deletecompleted":
+			if b, ok := v.(bool); ok {
+				next.DeleteCompleted = b
+			}
+		case "unmonitorwatched":
+			if b, ok := v.(bool); ok {
+				next.UnmonitorWatched = b
+			}
+		case "deletewatched":
+			if b, ok := v.(bool); ok {
+				next.DeleteWatched = b
 			}
 		case "firstrundryrun":
 			if b, ok := v.(bool); ok {

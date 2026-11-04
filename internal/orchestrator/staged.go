@@ -29,6 +29,12 @@ const (
 	ActionUnmonitorSeason StagedActionType = "UNMONITOR_SEASON"
 	// ActionUnmonitorMovie represents a planned unmonitoring toggle for a Radarr movie.
 	ActionUnmonitorMovie StagedActionType = "UNMONITOR_MOVIE"
+	// ActionDeleteFile represents a planned deletion of a movie file in Radarr or episode file(s) in Sonarr.
+	ActionDeleteFile StagedActionType = "DELETE_FILE"
+	// ActionUnmonitorEpisode represents a planned unmonitoring toggle for specific episodes in Sonarr.
+	ActionUnmonitorEpisode StagedActionType = "UNMONITOR_EPISODE"
+	// ActionDeleteEpisodeFile represents a planned deletion of episode file(s) for watched episodes in Sonarr.
+	ActionDeleteEpisodeFile StagedActionType = "DELETE_EPISODE_FILE"
 )
 
 // StagedActionStatus represents the execution lifecycle of a staged action.
@@ -72,6 +78,29 @@ type UnmonitorMoviePayload struct {
 	MovieID int    `json:"movieId"`
 	TMDBID  int    `json:"tmdbId"`
 	Title   string `json:"title"`
+}
+
+// DeleteFilePayload stores parameters for deleting files in Sonarr or Radarr.
+type DeleteFilePayload struct {
+	MovieID        int    `json:"movieId,omitempty"`
+	MovieFileID    int    `json:"movieFileId,omitempty"`
+	SeriesID       int    `json:"seriesId,omitempty"`
+	EpisodeFileIDs []int  `json:"episodeFileIds,omitempty"`
+	Title          string `json:"title,omitempty"`
+}
+
+// UnmonitorEpisodePayload stores parameters for unmonitoring episodes in Sonarr.
+type UnmonitorEpisodePayload struct {
+	SeriesID   int    `json:"seriesId"`
+	EpisodeIDs []int  `json:"episodeIds"`
+	Title      string `json:"title,omitempty"`
+}
+
+// DeleteEpisodeFilePayload stores parameters for deleting episode files in Sonarr.
+type DeleteEpisodeFilePayload struct {
+	SeriesID       int    `json:"seriesId"`
+	EpisodeFileIDs []int  `json:"episodeFileIds"`
+	Title          string `json:"title,omitempty"`
 }
 
 // stageAction persists a planned Servarr action into staged_sync_actions.
@@ -385,6 +414,60 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 				WHERE tmdb_id = ? AND monitored_status != 'IGNORED';
 			`, payload.TMDBID)
 			return err
+		}
+
+	case ActionDeleteFile:
+		var payload DeleteFilePayload
+		if unmarshalErr := json.Unmarshal([]byte(action.PayloadJSON), &payload); unmarshalErr != nil {
+			return fmt.Errorf("unmarshal delete file payload: %w", unmarshalErr)
+		}
+		switch action.TargetService {
+		case "RADARR":
+			if o.radarr == nil {
+				return errors.New("radarr client is nil")
+			}
+			if payload.MovieFileID > 0 {
+				if err := o.radarr.DeleteMovieFile(ctx, payload.MovieFileID); err != nil && !errors.Is(err, servarr.ErrNotFound) {
+					return fmt.Errorf("execute delete movie file: %w", err)
+				}
+			}
+		case "SONARR":
+			if o.sonarr == nil {
+				return errors.New("sonarr client is nil")
+			}
+			for _, fileID := range payload.EpisodeFileIDs {
+				if err := o.sonarr.DeleteEpisodeFile(ctx, fileID); err != nil && !errors.Is(err, servarr.ErrNotFound) {
+					return fmt.Errorf("execute delete episode file %d: %w", fileID, err)
+				}
+			}
+		}
+
+	case ActionUnmonitorEpisode:
+		var payload UnmonitorEpisodePayload
+		if unmarshalErr := json.Unmarshal([]byte(action.PayloadJSON), &payload); unmarshalErr != nil {
+			return fmt.Errorf("unmarshal unmonitor episode payload: %w", unmarshalErr)
+		}
+		if o.sonarr == nil {
+			return errors.New("sonarr client is nil")
+		}
+		if len(payload.EpisodeIDs) > 0 {
+			if monErr := o.sonarr.MonitorEpisodes(ctx, payload.EpisodeIDs, false); monErr != nil {
+				return fmt.Errorf("execute unmonitor episodes: %w", monErr)
+			}
+		}
+
+	case ActionDeleteEpisodeFile:
+		var payload DeleteEpisodeFilePayload
+		if unmarshalErr := json.Unmarshal([]byte(action.PayloadJSON), &payload); unmarshalErr != nil {
+			return fmt.Errorf("unmarshal delete episode file payload: %w", unmarshalErr)
+		}
+		if o.sonarr == nil {
+			return errors.New("sonarr client is nil")
+		}
+		for _, fid := range payload.EpisodeFileIDs {
+			if delErr := o.sonarr.DeleteEpisodeFile(ctx, fid); delErr != nil && !errors.Is(delErr, servarr.ErrNotFound) {
+				return fmt.Errorf("execute delete episode file %d: %w", fid, delErr)
+			}
 		}
 
 	default:

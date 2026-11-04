@@ -937,3 +937,168 @@ func TestFetchWatchlist_QueriesCoverImageAndMapsCoverImagePayloads(t *testing.T)
 		t.Errorf("expected e3 CoverImageURL default fallback %q, got %q", "https://dummyimage.com/400x600/2b2d42/2b2d42.png", gotURL)
 	}
 }
+
+func TestFetchWatchlist_PopulatesProgress(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := map[string]any{
+			"data": map[string]any{
+				"MediaListCollection": map[string]any{
+					"hasNextChunk": false,
+					"lists": []map[string]any{
+						{
+							"name":   "Watching",
+							"status": "CURRENT",
+							"entries": []map[string]any{
+								{
+									"id":       101,
+									"status":   "CURRENT",
+									"progress": 5,
+									"media": map[string]any{
+										"id":     5001,
+										"format": "TV",
+										"status": "RELEASING",
+										"title": map[string]any{
+											"romaji": "Test Anime",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := anilist.NewClient(server.URL, anilist.WithRateLimit(60000))
+	entries, err := client.FetchWatchlist(context.Background(), anilist.WatchlistFilter{
+		Username: "testuser",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].Progress != 5 {
+		t.Errorf("expected Progress 5, got %d", entries[0].Progress)
+	}
+}
+
+func TestFetchUserMediaListOverview_PaginatedMinimalFields(t *testing.T) {
+	var mu sync.Mutex
+	var capturedQueries []string
+	chunksRequested := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		chunksRequested++
+		currentChunk := chunksRequested
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if q, ok := body["query"].(string); ok {
+			capturedQueries = append(capturedQueries, q)
+		}
+		mu.Unlock()
+
+		var resp map[string]any
+		if currentChunk == 1 {
+			resp = map[string]any{
+				"data": map[string]any{
+					"MediaListCollection": map[string]any{
+						"hasNextChunk": true,
+						"lists": []map[string]any{
+							{
+								"name":   "Watching",
+								"status": "CURRENT",
+								"entries": []map[string]any{
+									{
+										"id":       101,
+										"mediaId":  5001,
+										"status":   "CURRENT",
+										"progress": 7,
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+		} else {
+			resp = map[string]any{
+				"data": map[string]any{
+					"MediaListCollection": map[string]any{
+						"hasNextChunk": false,
+						"lists": []map[string]any{
+							{
+								"name":   "Completed",
+								"status": "COMPLETED",
+								"entries": []map[string]any{
+									{
+										"id":       102,
+										"mediaId":  5002,
+										"status":   "COMPLETED",
+										"progress": 24,
+									},
+								},
+							},
+							{
+								"name":   "Dropped",
+								"status": "DROPPED",
+								"entries": []map[string]any{
+									{
+										"id":       103,
+										"mediaId":  5003,
+										"status":   "DROPPED",
+										"progress": 2,
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := anilist.NewClient(server.URL, anilist.WithRateLimit(60000))
+	overview, err := client.FetchUserMediaListOverview(context.Background(), "testuser")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(overview) != 3 {
+		t.Fatalf("expected 3 overview items across 2 chunks, got %d", len(overview))
+	}
+
+	mu.Lock()
+	queries := capturedQueries
+	mu.Unlock()
+
+	if len(queries) != 2 {
+		t.Fatalf("expected 2 queries, got %d", len(queries))
+	}
+
+	// Verify minimal query requested mediaId, status, progress without heavy media fields
+	q := queries[0]
+	if !strings.Contains(q, "mediaId") || !strings.Contains(q, "status") || !strings.Contains(q, "progress") {
+		t.Errorf("expected minimal overview query to contain mediaId, status, progress; got %s", q)
+	}
+
+	if overview[0].MediaID != 5001 || overview[0].Status != anilist.StatusCurrent || overview[0].Progress != 7 {
+		t.Errorf("unexpected overview[0]: %+v", overview[0])
+	}
+	if overview[1].MediaID != 5002 || overview[1].Status != anilist.StatusCompleted || overview[1].Progress != 24 {
+		t.Errorf("unexpected overview[1]: %+v", overview[1])
+	}
+	if overview[2].MediaID != 5003 || overview[2].Status != anilist.StatusDropped || overview[2].Progress != 2 {
+		t.Errorf("unexpected overview[2]: %+v", overview[2])
+	}
+}

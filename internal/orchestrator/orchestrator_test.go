@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1946,4 +1947,882 @@ func TestSync_SyncedMedia_SonarrUnmonitoredParentSeriesAndIgnoredPreservesMappin
 		t.Fatalf("expected ignored sync to preserve mapping columns, got status=%s service=%s tvdb=%v arrTitle=%v seasons=%v",
 			status1007, targetSvc1007, tvdb1007, arrTitle1007, seasons1007)
 	}
+}
+
+func TestSync_WatchlistStatusReconciliation(t *testing.T) {
+	db := setupTestDB(t)
+
+	// Seed 4 titles in synced_media all with CURRENT
+	pastTime := time.Now().Add(-2 * time.Hour).UTC().Format("2006-01-02 15:04:05")
+	_ = db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		// Custom override for 101
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO mapping_overrides (anilist_id, media_type, tvdb_id, seasons, updated_at)
+			VALUES (101, 'SERIES', 9001, '1', CURRENT_TIMESTAMP);
+		`)
+		if err != nil {
+			return err
+		}
+
+		for _, id := range []int{101, 102, 103, 104} {
+			_, err = tx.ExecContext(ctx, `
+				INSERT INTO synced_media (
+					anilist_id, media_type, format, title_romaji, anilist_status,
+					monitored_status, last_synced_at, updated_at
+				) VALUES (?, 'SERIES', 'TV', 'Anime', 'CURRENT', 'MONITORED', ?, ?);
+			`, id, pastTime, pastTime)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	// Setup mock AniList
+	alSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		q, _ := body["query"].(string)
+
+		w.Header().Set("Content-Type", "application/json")
+
+		// Overview query returns:
+		// 101 -> COMPLETED
+		// 102 -> DROPPED
+		// 103 -> PAUSED
+		// 104 -> missing entirely
+		if strings.Contains(q, "mediaId") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"MediaListCollection": map[string]any{
+						"hasNextChunk": false,
+						"lists": []map[string]any{
+							{
+								"name":   "Completed",
+								"status": "COMPLETED",
+								"entries": []map[string]any{
+									{"id": 1, "mediaId": 101, "status": "COMPLETED", "progress": 12},
+								},
+							},
+							{
+								"name":   "Dropped",
+								"status": "DROPPED",
+								"entries": []map[string]any{
+									{"id": 2, "mediaId": 102, "status": "DROPPED", "progress": 3},
+								},
+							},
+							{
+								"name":   "Paused",
+								"status": "PAUSED",
+								"entries": []map[string]any{
+									{"id": 3, "mediaId": 103, "status": "PAUSED", "progress": 5},
+								},
+							},
+						},
+					},
+				},
+			})
+			return
+		}
+
+		// Watchlist query for CURRENT returns empty
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"MediaListCollection": map[string]any{
+					"hasNextChunk": false,
+					"lists":        []map[string]any{},
+				},
+			},
+		})
+	}))
+	defer alSrv.Close()
+
+	cfg := config.NewDefault()
+	cfg.AniListUsername = "reconcileuser"
+	cfg.FirstRunDryRun = false
+
+	alClient := anilist.NewClient(alSrv.URL)
+	orc := orchestrator.New(db, cfg, alClient, nil, nil)
+
+	report, err := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+	if err != nil {
+		t.Fatalf("Sync failed: %v", err)
+	}
+	if report.Status == orchestrator.SyncStatusFailed {
+		t.Fatalf("Sync reported failed status: %v", report.Errors)
+	}
+
+	// Verify statuses in synced_media
+	statusMap := make(map[int]string)
+	updatedMap := make(map[int]string)
+	var totalRows int
+	if err := db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		rows, err := q.QueryContext(ctx, "SELECT anilist_id, anilist_status, updated_at FROM synced_media")
+		if err != nil {
+			return err
+		}
+		defer func() {
+			_ = rows.Close()
+		}()
+		for rows.Next() {
+			var id int
+			var st, upd string
+			if err := rows.Scan(&id, &st, &upd); err != nil {
+				return err
+			}
+			statusMap[id] = st
+			updatedMap[id] = upd
+			totalRows++
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("query synced_media: %v", err)
+	}
+
+	if totalRows != 4 {
+		t.Fatalf("expected 4 total rows preserved, got %d", totalRows)
+	}
+
+	if statusMap[101] != "COMPLETED" {
+		t.Errorf("expected id 101 status COMPLETED, got %s", statusMap[101])
+	}
+	if statusMap[102] != "DROPPED" {
+		t.Errorf("expected id 102 status DROPPED, got %s", statusMap[102])
+	}
+	if statusMap[103] != "PAUSED" {
+		t.Errorf("expected id 103 status PAUSED, got %s", statusMap[103])
+	}
+	if statusMap[104] != "REMOVED" {
+		t.Errorf("expected id 104 status REMOVED, got %s", statusMap[104])
+	}
+
+	for _, id := range []int{101, 102, 103, 104} {
+		if updatedMap[id] == pastTime {
+			t.Errorf("expected updated_at for id %d to be refreshed, but remained %s", id, pastTime)
+		}
+	}
+
+	// Verify custom override for 101 was not deleted
+	var overrideCount int
+	if err := db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM mapping_overrides WHERE anilist_id = 101").Scan(&overrideCount)
+	}); err != nil {
+		t.Fatalf("query mapping_overrides: %v", err)
+	}
+	if overrideCount != 1 {
+		t.Errorf("expected custom mapping override for 101 to be preserved, got count %d", overrideCount)
+	}
+
+	// Verify watching count is 0
+	var watchingCount int
+	if err := db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM synced_media WHERE anilist_status = 'CURRENT'").Scan(&watchingCount)
+	}); err != nil {
+		t.Fatalf("query watching count: %v", err)
+	}
+	if watchingCount != 0 {
+		t.Errorf("expected WatchingCount 0, got %d", watchingCount)
+	}
+}
+
+func TestSync_DroppedAndCompleted_Cleanup_SonarrAndRadarr(t *testing.T) {
+	t.Run("Sonarr split cour completed unmonitor and file deletion in order", func(t *testing.T) {
+		db := setupTestDB(t)
+
+		// Seed fribb entry for anime ID 500
+		_ = db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `
+				INSERT INTO fribb_entries (anilist_id, tvdb_id, updated_at)
+				VALUES (500, 70001, CURRENT_TIMESTAMP);
+			`)
+			return err
+		})
+
+		var callLog []string
+		var deletedFiles []int
+		var unmonitoredEpisodes []int
+
+		alSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"MediaListCollection": map[string]any{
+						"hasNextChunk": false,
+						"lists": []map[string]any{
+							{
+								"name":   "Completed",
+								"status": "COMPLETED",
+								"entries": []map[string]any{
+									{
+										"id":       1,
+										"mediaId":  500,
+										"status":   "COMPLETED",
+										"progress": 12,
+										"media": map[string]any{
+											"id":     500,
+											"format": "TV",
+											"status": "FINISHED",
+											"title": map[string]any{
+												"romaji": "Attack on Titan Season 3 Part 2",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+		}))
+		defer alSrv.Close()
+
+		sonarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
+				_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 10, Label: "anilist-sync"}})
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/series/lookup":
+				_ = json.NewEncoder(w).Encode([]servarr.Series{
+					{
+						ID:        1,
+						TVDBID:    70001,
+						Title:     "Attack on Titan",
+						Monitored: true,
+						Tags:      []int{10}, // Managed tag
+						Seasons: []servarr.Season{
+							{SeasonNumber: 3, Monitored: true},
+						},
+					},
+				})
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
+				// Season 3 episodes: Part 1 = ep 1..12, Part 2 = ep 13..22
+				eps := make([]servarr.Episode, 22)
+				for i := 1; i <= 22; i++ {
+					isPart2 := i > 12
+					fileID := 0
+					if isPart2 {
+						fileID = 2000 + i
+					} else {
+						fileID = 1000 + i
+					}
+					finale := ""
+					if i == 12 {
+						finale = "midseason"
+					}
+					eps[i-1] = servarr.Episode{
+						ID:            i,
+						SeriesID:      1,
+						SeasonNumber:  3,
+						EpisodeNumber: i,
+						Monitored:     true,
+						HasFile:       true,
+						EpisodeFileID: fileID,
+						FinaleType:    finale,
+					}
+				}
+				_ = json.NewEncoder(w).Encode(eps)
+			case r.Method == http.MethodPut && r.URL.Path == "/api/v3/episode/monitor":
+				var body map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				callLog = append(callLog, "unmonitor")
+				if epIDs, ok := body["episodeIds"].([]any); ok {
+					for _, id := range epIDs {
+						unmonitoredEpisodes = append(unmonitoredEpisodes, int(id.(float64)))
+					}
+				}
+				_ = json.NewEncoder(w).Encode([]any{})
+			case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v3/episodefile/"):
+				callLog = append(callLog, "delete_file")
+				idStr := strings.TrimPrefix(r.URL.Path, "/api/v3/episodefile/")
+				var id int
+				for _, c := range idStr {
+					id = id*10 + int(c-'0')
+				}
+				deletedFiles = append(deletedFiles, id)
+				w.WriteHeader(http.StatusOK)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer sonarrSrv.Close()
+
+		cfg := config.NewDefault()
+		cfg.AniListUsername = "cleanupuser"
+		cfg.TagName = "anilist-sync"
+		cfg.UnmonitorCompleted = true
+		cfg.DeleteCompleted = true
+		cfg.FirstRunDryRun = false
+
+		alClient := anilist.NewClient(alSrv.URL)
+		sonarrClient, _ := servarr.NewSonarrClient(sonarrSrv.URL, "key")
+		orc := orchestrator.New(db, cfg, alClient, sonarrClient, nil)
+
+		report, err := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+		if err != nil {
+			t.Fatalf("Sync failed: %v", err)
+		}
+		if report.Status == orchestrator.SyncStatusFailed {
+			t.Fatalf("Sync reported failed: %v", report.Errors)
+		}
+
+		// Verify unmonitoring ran BEFORE file deletion
+		if len(callLog) < 2 {
+			t.Fatalf("expected at least 2 calls in callLog, got %v", callLog)
+		}
+		if callLog[0] != "unmonitor" {
+			t.Fatalf("expected unmonitor to be called first, got %s", callLog[0])
+		}
+
+		// Verify only Part 2 (episodes 13-22) were unmonitored and deleted
+		if len(unmonitoredEpisodes) != 10 {
+			t.Fatalf("expected 10 episodes in Part 2 unmonitored, got %d (%v)", len(unmonitoredEpisodes), unmonitoredEpisodes)
+		}
+		for _, epID := range unmonitoredEpisodes {
+			if epID < 13 || epID > 22 {
+				t.Errorf("expected only part 2 episodes (13-22) unmonitored, got episode %d", epID)
+			}
+		}
+
+		if len(deletedFiles) != 10 {
+			t.Fatalf("expected 10 files in Part 2 deleted, got %d (%v)", len(deletedFiles), deletedFiles)
+		}
+		for _, fileID := range deletedFiles {
+			if fileID < 2013 || fileID > 2022 {
+				t.Errorf("expected only part 2 files (2013-2022) deleted, got file %d", fileID)
+			}
+		}
+	})
+
+	t.Run("Radarr dropped unmonitor and file deletion with managed tag", func(t *testing.T) {
+		db := setupTestDB(t)
+
+		_ = db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `
+				INSERT INTO fribb_entries (anilist_id, tmdb_id, updated_at)
+				VALUES (600, 80001, CURRENT_TIMESTAMP);
+			`)
+			return err
+		})
+
+		var callLog []string
+		deletedFileID := 0
+
+		alSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"MediaListCollection": map[string]any{
+						"hasNextChunk": false,
+						"lists": []map[string]any{
+							{
+								"name":   "Dropped",
+								"status": "DROPPED",
+								"entries": []map[string]any{
+									{
+										"id":       1,
+										"mediaId":  600,
+										"status":   "DROPPED",
+										"progress": 0,
+										"media": map[string]any{
+											"id":     600,
+											"format": "MOVIE",
+											"status": "FINISHED",
+											"title": map[string]any{
+												"romaji": "Dropped Movie",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+		}))
+		defer alSrv.Close()
+
+		radarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
+				_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 5, Label: "anilist-sync"}})
+			case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v3/movie/lookup"):
+				_ = json.NewEncoder(w).Encode(servarr.Movie{
+					ID:          1,
+					TMDBID:      80001,
+					Title:       "Dropped Movie",
+					Monitored:   true,
+					Tags:        []int{5}, // Managed tag
+					HasFile:     true,
+					MovieFileID: 9999,
+				})
+			case r.Method == http.MethodPut && r.URL.Path == "/api/v3/movie":
+				callLog = append(callLog, "unmonitor_movie")
+				_ = json.NewEncoder(w).Encode(servarr.Movie{ID: 1, Monitored: false})
+			case r.Method == http.MethodDelete && r.URL.Path == "/api/v3/moviefile/9999":
+				callLog = append(callLog, "delete_movie_file")
+				deletedFileID = 9999
+				w.WriteHeader(http.StatusOK)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer radarrSrv.Close()
+
+		cfg := config.NewDefault()
+		cfg.AniListUsername = "cleanupuser"
+		cfg.TagName = "anilist-sync"
+		cfg.UnmonitorDropped = true
+		cfg.DeleteDropped = true
+		cfg.FirstRunDryRun = false
+
+		alClient := anilist.NewClient(alSrv.URL)
+		radarrClient, _ := servarr.NewRadarrClient(radarrSrv.URL, "key")
+		orc := orchestrator.New(db, cfg, alClient, nil, radarrClient)
+
+		report, err := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+		if err != nil {
+			t.Fatalf("Sync failed: %v", err)
+		}
+		if report.Status == orchestrator.SyncStatusFailed {
+			t.Fatalf("Sync reported failed: %v", report.Errors)
+		}
+
+		if len(callLog) != 2 || callLog[0] != "unmonitor_movie" || callLog[1] != "delete_movie_file" {
+			t.Fatalf("expected [unmonitor_movie, delete_movie_file], got %v", callLog)
+		}
+		if deletedFileID != 9999 {
+			t.Fatalf("expected deletedFileID 9999, got %d", deletedFileID)
+		}
+	})
+
+	t.Run("Dry run stages ActionDeleteFile without modifying services", func(t *testing.T) {
+		db := setupTestDB(t)
+
+		_ = db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `
+				INSERT INTO fribb_entries (anilist_id, tmdb_id, updated_at)
+				VALUES (700, 90001, CURRENT_TIMESTAMP);
+			`)
+			return err
+		})
+
+		var callsMade []string
+
+		alSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"MediaListCollection": map[string]any{
+						"hasNextChunk": false,
+						"lists": []map[string]any{
+							{
+								"name":   "Completed",
+								"status": "COMPLETED",
+								"entries": []map[string]any{
+									{
+										"id":      1,
+										"mediaId": 700,
+										"status":  "COMPLETED",
+										"media": map[string]any{
+											"id":     700,
+											"format": "MOVIE",
+											"status": "FINISHED",
+											"title": map[string]any{
+												"romaji": "Dry Run Movie",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+		}))
+		defer alSrv.Close()
+
+		radarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
+				_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 5, Label: "anilist-sync"}})
+			case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v3/movie/lookup"):
+				_ = json.NewEncoder(w).Encode(servarr.Movie{
+					ID:          10,
+					TMDBID:      90001,
+					Title:       "Dry Run Movie",
+					Monitored:   true,
+					Tags:        []int{5},
+					HasFile:     true,
+					MovieFileID: 5555,
+				})
+			default:
+				callsMade = append(callsMade, r.Method+" "+r.URL.Path)
+				http.NotFound(w, r)
+			}
+		}))
+		defer radarrSrv.Close()
+
+		cfg := config.NewDefault()
+		cfg.AniListUsername = "dryrunuser"
+		cfg.TagName = "anilist-sync"
+		cfg.UnmonitorCompleted = true
+		cfg.DeleteCompleted = true
+		cfg.FirstRunDryRun = true // Dry run active!
+
+		alClient := anilist.NewClient(alSrv.URL)
+		radarrClient, _ := servarr.NewRadarrClient(radarrSrv.URL, "key")
+		orc := orchestrator.New(db, cfg, alClient, nil, radarrClient)
+
+		report, err := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+		if err != nil {
+			t.Fatalf("Sync failed: %v", err)
+		}
+		if report.Status == orchestrator.SyncStatusFailed {
+			t.Fatalf("Sync reported failed: %v", report.Errors)
+		}
+
+		if len(callsMade) > 0 {
+			t.Fatalf("expected zero mutating calls in dry run, got %v", callsMade)
+		}
+
+		// Verify staged actions: UNMONITOR_MOVIE and DELETE_FILE
+		staged, err := orc.GetStagedActions(context.Background(), orchestrator.StagedStatusPending)
+		if err != nil {
+			t.Fatalf("GetStagedActions failed: %v", err)
+		}
+		actionTypes := make(map[orchestrator.StagedActionType]bool)
+		for _, a := range staged {
+			actionTypes[a.ActionType] = true
+		}
+		if !actionTypes[orchestrator.ActionUnmonitorMovie] {
+			t.Errorf("expected ActionUnmonitorMovie in staged actions, got %v", staged)
+		}
+		if !actionTypes[orchestrator.ActionDeleteFile] {
+			t.Errorf("expected ActionDeleteFile in staged actions, got %v", staged)
+		}
+	})
+}
+
+func TestSync_WatchedEpisodeUnmonitoringAndPruning(t *testing.T) {
+	t.Run("Split cour maps progress 5 in cour 2 to episodes 13-17 and deletes files in order", func(t *testing.T) {
+		db := setupTestDB(t)
+
+		_ = db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `
+				INSERT INTO fribb_entries (anilist_id, tvdb_id, updated_at)
+				VALUES (800, 60001, CURRENT_TIMESTAMP);
+			`)
+			return err
+		})
+
+		var callLog []string
+		var unmonitoredEpIDs []int
+		var deletedFileIDs []int
+
+		alSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"MediaListCollection": map[string]any{
+						"hasNextChunk": false,
+						"lists": []map[string]any{
+							{
+								"name":   "Watching",
+								"status": "CURRENT",
+								"entries": []map[string]any{
+									{
+										"id":       1,
+										"mediaId":  800,
+										"status":   "CURRENT",
+										"progress": 5, // Watched 5 episodes of cour 2
+										"media": map[string]any{
+											"id":     800,
+											"format": "TV",
+											"status": "RELEASING",
+											"title": map[string]any{
+												"romaji": "Re:Zero Season 2 Part 2",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+		}))
+		defer alSrv.Close()
+
+		sonarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
+				_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 15, Label: "anilist-sync"}})
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/series/lookup":
+				_ = json.NewEncoder(w).Encode([]servarr.Series{
+					{
+						ID:        1,
+						TVDBID:    60001,
+						Title:     "Re:Zero",
+						Monitored: true,
+						Tags:      []int{15}, // Managed tag
+						Seasons: []servarr.Season{
+							{SeasonNumber: 2, Monitored: true},
+						},
+					},
+				})
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
+				// Season 2: cour 1 = ep 1..12, cour 2 = ep 13..25
+				eps := make([]servarr.Episode, 25)
+				for i := 1; i <= 25; i++ {
+					finale := ""
+					if i == 12 {
+						finale = "midseason"
+					}
+					eps[i-1] = servarr.Episode{
+						ID:            i,
+						SeriesID:      1,
+						SeasonNumber:  2,
+						EpisodeNumber: i,
+						Monitored:     true,
+						HasFile:       true,
+						EpisodeFileID: 3000 + i,
+						FinaleType:    finale,
+					}
+				}
+				_ = json.NewEncoder(w).Encode(eps)
+			case r.Method == http.MethodPut && r.URL.Path == "/api/v3/episode/monitor":
+				var body map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				callLog = append(callLog, "unmonitor")
+				if epIDs, ok := body["episodeIds"].([]any); ok {
+					for _, id := range epIDs {
+						unmonitoredEpIDs = append(unmonitoredEpIDs, int(id.(float64)))
+					}
+				}
+				_ = json.NewEncoder(w).Encode([]any{})
+			case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v3/episodefile/"):
+				callLog = append(callLog, "delete_file")
+				idStr := strings.TrimPrefix(r.URL.Path, "/api/v3/episodefile/")
+				var id int
+				for _, c := range idStr {
+					id = id*10 + int(c-'0')
+				}
+				deletedFileIDs = append(deletedFileIDs, id)
+				w.WriteHeader(http.StatusOK)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer sonarrSrv.Close()
+
+		cfg := config.NewDefault()
+		cfg.AniListUsername = "pruneuser"
+		cfg.TagName = "anilist-sync"
+		cfg.UnmonitorWatched = true
+		cfg.DeleteWatched = true
+		cfg.FirstRunDryRun = false
+
+		alClient := anilist.NewClient(alSrv.URL)
+		sonarrClient, _ := servarr.NewSonarrClient(sonarrSrv.URL, "key")
+		orc := orchestrator.New(db, cfg, alClient, sonarrClient, nil)
+
+		report, err := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+		if err != nil {
+			t.Fatalf("Sync failed: %v", err)
+		}
+		if report.Status == orchestrator.SyncStatusFailed {
+			t.Fatalf("Sync reported failed: %v", report.Errors)
+		}
+
+		if len(callLog) < 2 || callLog[0] != "unmonitor" {
+			t.Fatalf("expected unmonitor to be called before delete in callLog, got %v", callLog)
+		}
+
+		// Progress 5 in cour 2 (eps 13..25) must resolve strictly to episodes 13 through 17
+		expectedEps := []int{13, 14, 15, 16, 17}
+		if len(unmonitoredEpIDs) != 5 {
+			t.Fatalf("expected 5 unmonitored episodes, got %d (%v)", len(unmonitoredEpIDs), unmonitoredEpIDs)
+		}
+		for i, id := range unmonitoredEpIDs {
+			if id != expectedEps[i] {
+				t.Errorf("expected ep %d at index %d, got %d", expectedEps[i], i, id)
+			}
+		}
+
+		expectedFiles := []int{3013, 3014, 3015, 3016, 3017}
+		if len(deletedFileIDs) != 5 {
+			t.Fatalf("expected 5 deleted files, got %d (%v)", len(deletedFileIDs), deletedFileIDs)
+		}
+		for i, id := range deletedFileIDs {
+			if id != expectedFiles[i] {
+				t.Errorf("expected file %d at index %d, got %d", expectedFiles[i], i, id)
+			}
+		}
+	})
+
+	t.Run("Dry run stages ActionUnmonitorEpisode and ActionDeleteEpisodeFile", func(t *testing.T) {
+		db := setupTestDB(t)
+
+		_ = db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `
+				INSERT INTO fribb_entries (anilist_id, tvdb_id, updated_at)
+				VALUES (801, 60002, CURRENT_TIMESTAMP);
+			`)
+			return err
+		})
+
+		var mutatingCalls []string
+
+		alSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"MediaListCollection": map[string]any{
+						"hasNextChunk": false,
+						"lists": []map[string]any{
+							{
+								"name":   "Watching",
+								"status": "CURRENT",
+								"entries": []map[string]any{
+									{
+										"id":       1,
+										"mediaId":  801,
+										"status":   "CURRENT",
+										"progress": 3,
+										"media": map[string]any{
+											"id":     801,
+											"format": "TV",
+											"status": "RELEASING",
+											"title": map[string]any{
+												"romaji": "Single Season Anime",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+		}))
+		defer alSrv.Close()
+
+		sonarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
+				_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 15, Label: "anilist-sync"}})
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/series/lookup":
+				_ = json.NewEncoder(w).Encode([]servarr.Series{
+					{
+						ID:        2,
+						TVDBID:    60002,
+						Title:     "Single Season Anime",
+						Monitored: true,
+						Tags:      []int{15},
+						Seasons: []servarr.Season{
+							{SeasonNumber: 1, Monitored: true},
+						},
+					},
+				})
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
+				eps := []servarr.Episode{
+					{ID: 1, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 1, Monitored: true, HasFile: true, EpisodeFileID: 501},
+					{ID: 2, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 2, Monitored: true, HasFile: true, EpisodeFileID: 502},
+					{ID: 3, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 3, Monitored: true, HasFile: true, EpisodeFileID: 503},
+					{ID: 4, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 4, Monitored: true, HasFile: false, EpisodeFileID: 0},
+				}
+				_ = json.NewEncoder(w).Encode(eps)
+			default:
+				mutatingCalls = append(mutatingCalls, r.Method+" "+r.URL.Path)
+				http.NotFound(w, r)
+			}
+		}))
+		defer sonarrSrv.Close()
+
+		cfg := config.NewDefault()
+		cfg.AniListUsername = "pruneuser"
+		cfg.TagName = "anilist-sync"
+		cfg.UnmonitorWatched = true
+		cfg.DeleteWatched = true
+		cfg.FirstRunDryRun = true // Dry run active!
+
+		alClient := anilist.NewClient(alSrv.URL)
+		sonarrClient, _ := servarr.NewSonarrClient(sonarrSrv.URL, "key")
+		orc := orchestrator.New(db, cfg, alClient, sonarrClient, nil)
+
+		report, err := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+		if err != nil {
+			t.Fatalf("Sync failed: %v", err)
+		}
+		if report.Status == orchestrator.SyncStatusFailed {
+			t.Fatalf("Sync reported failed: %v", report.Errors)
+		}
+
+		if len(mutatingCalls) > 0 {
+			t.Fatalf("expected 0 mutating calls during dry run, got %v", mutatingCalls)
+		}
+
+		staged, err := orc.GetStagedActions(context.Background(), orchestrator.StagedStatusPending)
+		if err != nil {
+			t.Fatalf("GetStagedActions failed: %v", err)
+		}
+
+		actionMap := make(map[orchestrator.StagedActionType]orchestrator.StagedAction)
+		for _, a := range staged {
+			actionMap[a.ActionType] = a
+		}
+
+		if _, ok := actionMap[orchestrator.ActionUnmonitorEpisode]; !ok {
+			t.Errorf("expected ActionUnmonitorEpisode staged, got actions %v", staged)
+		}
+		if _, ok := actionMap[orchestrator.ActionDeleteEpisodeFile]; !ok {
+			t.Errorf("expected ActionDeleteEpisodeFile staged, got actions %v", staged)
+		}
+
+		// Now test ApplyStagedAction executes them cleanly against Sonarr
+		var appliedUnmonitor bool
+		var appliedDeleteFiles []int
+		applySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case r.Method == http.MethodPut && r.URL.Path == "/api/v3/episode/monitor":
+				appliedUnmonitor = true
+				_ = json.NewEncoder(w).Encode([]any{})
+			case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v3/episodefile/"):
+				idStr := strings.TrimPrefix(r.URL.Path, "/api/v3/episodefile/")
+				var id int
+				for _, c := range idStr {
+					id = id*10 + int(c-'0')
+				}
+				appliedDeleteFiles = append(appliedDeleteFiles, id)
+				w.WriteHeader(http.StatusOK)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer applySrv.Close()
+
+		applySonarr, _ := servarr.NewSonarrClient(applySrv.URL, "key")
+		applyOrc := orchestrator.New(db, cfg, alClient, applySonarr, nil)
+
+		unmonAction := actionMap[orchestrator.ActionUnmonitorEpisode]
+		if err := applyOrc.ApplyStagedAction(context.Background(), unmonAction.ID); err != nil {
+			t.Fatalf("ApplyStagedAction for unmonitor failed: %v", err)
+		}
+		if !appliedUnmonitor {
+			t.Errorf("expected appliedUnmonitor to be true")
+		}
+
+		delAction := actionMap[orchestrator.ActionDeleteEpisodeFile]
+		if err := applyOrc.ApplyStagedAction(context.Background(), delAction.ID); err != nil {
+			t.Fatalf("ApplyStagedAction for delete file failed: %v", err)
+		}
+		if len(appliedDeleteFiles) != 3 {
+			t.Errorf("expected 3 files deleted on apply, got %d (%v)", len(appliedDeleteFiles), appliedDeleteFiles)
+		}
+	})
 }

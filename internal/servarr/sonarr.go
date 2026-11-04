@@ -123,6 +123,8 @@ type Episode struct {
 	AirDateUtc    time.Time `json:"airDateUtc"`
 	Monitored     bool      `json:"monitored"`
 	FinaleType    string    `json:"finaleType"`
+	HasFile       bool      `json:"hasFile"`
+	EpisodeFileID int       `json:"episodeFileId"`
 }
 
 // PremiereDate returns the parsed air date of the episode.
@@ -273,6 +275,26 @@ func (c *SonarrClient) MonitorEpisodes(ctx context.Context, episodeIDs []int, mo
 	_, err = c.do(req, nil)
 	if err != nil {
 		return fmt.Errorf("monitor episodes: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteEpisodeFile deletes an episode file from Sonarr.
+// HTTP 404 responses are treated as idempotent successes.
+func (c *SonarrClient) DeleteEpisodeFile(ctx context.Context, episodeFileID int) error {
+	endpoint := fmt.Sprintf("/api/v3/episodefile/%d", episodeFileID)
+	req, err := c.newRequest(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.do(req, nil)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("delete episode file %d: %w", episodeFileID, err)
 	}
 
 	return nil

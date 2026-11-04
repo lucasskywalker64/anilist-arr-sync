@@ -30,6 +30,11 @@ func TestApplyEnv_Overrides(t *testing.T) {
 		"ANILIST_SYNC__SONARR__SERIESTYPE=standard",
 		"ANILIST_SYNC__SYNC__INTERVALHOURS=8",
 		"ANILIST_SYNC__SYNC__CONFIDENCETHRESHOLD=0.75",
+		"ANILIST_SYNC__SYNC__UNMONITORCOMPLETED=true",
+		"ANILIST_SYNC__SYNC__DELETEDROPPED=true",
+		"ANILIST_SYNC__SYNC__DELETECOMPLETED=true",
+		"ANILIST_SYNC__SYNC__UNMONITORWATCHED=true",
+		"ANILIST_SYNC__SYNC__DELETEWATCHED=true",
 		"ANILIST_SYNC__SYNC__FIRSTRUNDRYRUN=false",
 	}
 
@@ -58,6 +63,11 @@ func TestApplyEnv_Overrides(t *testing.T) {
 	check("SonarrSeriesType", cfg.SonarrSeriesType, "standard")
 	check("SyncIntervalHours", cfg.SyncIntervalHours, 8)
 	check("ConfidenceThreshold", cfg.ConfidenceThreshold, 0.75)
+	check("UnmonitorCompleted", cfg.UnmonitorCompleted, true)
+	check("DeleteDropped", cfg.DeleteDropped, true)
+	check("DeleteCompleted", cfg.DeleteCompleted, true)
+	check("UnmonitorWatched", cfg.UnmonitorWatched, true)
+	check("DeleteWatched", cfg.DeleteWatched, true)
 	check("FirstRunDryRun", cfg.FirstRunDryRun, false)
 
 	if err := cfg.Validate(); err != nil {

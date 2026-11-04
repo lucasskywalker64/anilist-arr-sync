@@ -75,6 +75,11 @@ type xmlConfig struct {
 	DateToleranceDays   int     `xml:"DateToleranceDays"`
 	ConfidenceThreshold float64 `xml:"ConfidenceThreshold"`
 	UnmonitorDropped    string  `xml:"UnmonitorDropped"`
+	UnmonitorCompleted  string  `xml:"UnmonitorCompleted"`
+	DeleteDropped       string  `xml:"DeleteDropped"`
+	DeleteCompleted     string  `xml:"DeleteCompleted"`
+	UnmonitorWatched    string  `xml:"UnmonitorWatched"`
+	DeleteWatched       string  `xml:"DeleteWatched"`
 	FirstRunDryRun      string  `xml:"FirstRunDryRun"`
 }
 
@@ -158,6 +163,11 @@ func (c *Config) ToXML() ([]byte, error) {
 		DateToleranceDays:          c.DateToleranceDays,
 		ConfidenceThreshold:        c.ConfidenceThreshold,
 		UnmonitorDropped:           formatBool(c.UnmonitorDropped),
+		UnmonitorCompleted:         formatBool(c.UnmonitorCompleted),
+		DeleteDropped:              formatBool(c.DeleteDropped),
+		DeleteCompleted:            formatBool(c.DeleteCompleted),
+		UnmonitorWatched:           formatBool(c.UnmonitorWatched),
+		DeleteWatched:              formatBool(c.DeleteWatched),
 		FirstRunDryRun:             formatBool(c.FirstRunDryRun),
 	}
 

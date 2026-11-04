@@ -69,6 +69,11 @@ func TestParseXML_ServarrSample(t *testing.T) {
   <DateToleranceDays>7</DateToleranceDays>
   <ConfidenceThreshold>0.85</ConfidenceThreshold>
   <UnmonitorDropped>True</UnmonitorDropped>
+  <UnmonitorCompleted>True</UnmonitorCompleted>
+  <DeleteDropped>True</DeleteDropped>
+  <DeleteCompleted>True</DeleteCompleted>
+  <UnmonitorWatched>True</UnmonitorWatched>
+  <DeleteWatched>True</DeleteWatched>
   <FirstRunDryRun>False</FirstRunDryRun>
 </Config>`)
 
@@ -86,6 +91,11 @@ func TestParseXML_ServarrSample(t *testing.T) {
 	check("SonarrSeriesType", cfg.SonarrSeriesType, "standard")
 	check("ConfidenceThreshold", cfg.ConfidenceThreshold, 0.85)
 	check("UnmonitorDropped", cfg.UnmonitorDropped, true)
+	check("UnmonitorCompleted", cfg.UnmonitorCompleted, true)
+	check("DeleteDropped", cfg.DeleteDropped, true)
+	check("DeleteCompleted", cfg.DeleteCompleted, true)
+	check("UnmonitorWatched", cfg.UnmonitorWatched, true)
+	check("DeleteWatched", cfg.DeleteWatched, true)
 	check("FirstRunDryRun", cfg.FirstRunDryRun, false)
 
 	if err := cfg.Validate(); err != nil {
@@ -182,6 +192,11 @@ func TestToXML_FullRoundTrip_AllFields(t *testing.T) {
 		DateToleranceDays:          14,
 		ConfidenceThreshold:        0.95,
 		UnmonitorDropped:           true,
+		UnmonitorCompleted:         true,
+		DeleteDropped:              true,
+		DeleteCompleted:            true,
+		UnmonitorWatched:           true,
+		DeleteWatched:              true,
 		FirstRunDryRun:             true,
 	}
 
