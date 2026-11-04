@@ -23,6 +23,7 @@ import { writable } from 'svelte/store';
 
 let cachedCsrfToken = '';
 let cachedApiKey = '';
+let apiKeyCleared = false;
 if (typeof localStorage !== 'undefined') {
   cachedApiKey = localStorage.getItem('anilist_arr_sync_apikey') || '';
 }
@@ -47,6 +48,7 @@ export function setCsrfToken(token: string) {
 
 export function getApiKey(): string {
   if (cachedApiKey) return cachedApiKey;
+  if (apiKeyCleared) return '';
   if (typeof window !== 'undefined' && window.AniListArrSync?.apiKey) {
     return window.AniListArrSync.apiKey;
   }
@@ -55,7 +57,11 @@ export function getApiKey(): string {
 
 export function setApiKey(key: string) {
   cachedApiKey = key;
+  apiKeyCleared = key === '';
   apiKeyStore.set(key);
+  if (typeof window !== 'undefined' && window.AniListArrSync && key === '') {
+    window.AniListArrSync.apiKey = '';
+  }
   if (typeof localStorage !== 'undefined') {
     if (key) {
       localStorage.setItem('anilist_arr_sync_apikey', key);

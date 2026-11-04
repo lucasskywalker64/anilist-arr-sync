@@ -64,6 +64,7 @@ type MonitorSeasonPayload struct {
 	TVDBID       int   `json:"tvdbId"`
 	SeasonNumber int   `json:"seasonNumber"`
 	EpisodeIDs   []int `json:"episodeIds,omitempty"`
+	AnilistID    int   `json:"anilistId,omitempty"`
 }
 
 // UnmonitorMoviePayload stores parameters for unmonitoring a movie in Radarr.
@@ -253,9 +254,15 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		}
 		if len(payload.EpisodeIDs) > 0 {
 			if payload.SeriesID > 0 {
-				if series, getErr := o.sonarr.GetSeriesByID(ctx, payload.SeriesID); getErr == nil && !series.Monitored {
+				series, getErr := o.sonarr.GetSeriesByID(ctx, payload.SeriesID)
+				if getErr != nil {
+					return fmt.Errorf("get series %d: %w", payload.SeriesID, getErr)
+				}
+				if !series.Monitored {
 					series.Monitored = true
-					_, _ = o.sonarr.UpdateSeries(ctx, series)
+					if _, updateErr := o.sonarr.UpdateSeries(ctx, series); updateErr != nil {
+						return fmt.Errorf("update series %d monitored: %w", payload.SeriesID, updateErr)
+					}
 				}
 			}
 			if monErr := o.sonarr.MonitorEpisodes(ctx, payload.EpisodeIDs, true); monErr != nil {
@@ -290,6 +297,14 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		}
 		seasonStr := strconv.Itoa(payload.SeasonNumber)
 		syncUpdateFn = func(ctx context.Context, tx *sql.Tx) error {
+			if payload.AnilistID > 0 {
+				_, err := tx.ExecContext(ctx, `
+					UPDATE synced_media
+					SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
+					WHERE anilist_id = ? AND monitored_status != 'IGNORED';
+				`, payload.AnilistID)
+				return err
+			}
 			_, err := tx.ExecContext(ctx, `
 				UPDATE synced_media
 				SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
@@ -329,6 +344,14 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		}
 		seasonStr := strconv.Itoa(payload.SeasonNumber)
 		syncUpdateFn = func(ctx context.Context, tx *sql.Tx) error {
+			if payload.AnilistID > 0 {
+				_, err := tx.ExecContext(ctx, `
+					UPDATE synced_media
+					SET monitored_status = 'UNMONITORED', updated_at = CURRENT_TIMESTAMP
+					WHERE anilist_id = ? AND monitored_status != 'IGNORED';
+				`, payload.AnilistID)
+				return err
+			}
 			_, err := tx.ExecContext(ctx, `
 				UPDATE synced_media
 				SET monitored_status = 'UNMONITORED', updated_at = CURRENT_TIMESTAMP

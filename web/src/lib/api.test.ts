@@ -88,6 +88,20 @@ describe('API Client', () => {
     expect(options.method).toBe('GET');
   });
 
+  it('prevents fallback to bootstrap API key after setApiKey("") is called', () => {
+    setApiKey('active-key');
+    expect(getApiKey()).toBe('active-key');
+
+    (window as any).AniListArrSync = { apiKey: 'bootstrap-token' };
+
+    setApiKey('');
+    expect(getApiKey()).toBe('');
+    expect((window as any).AniListArrSync.apiKey).toBe('');
+
+    setApiKey('restored-key');
+    expect(getApiKey()).toBe('restored-key');
+  });
+
   it('parses candidates JSON if stringified', async () => {
     const candidates = [
       { tvdbId: 101, tmdbId: 202, title: 'Test Anime', year: 2024, similarity: 0.95 },

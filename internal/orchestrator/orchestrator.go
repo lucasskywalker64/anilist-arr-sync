@@ -595,6 +595,7 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 							TVDBID:       series.TVDBID,
 							SeasonNumber: targetSeason,
 							EpisodeIDs:   sliceEpisodeIDs,
+							AnilistID:    entry.Media.ID,
 						}); err != nil {
 							report.Errors = append(report.Errors, fmt.Sprintf("stage unmonitor episodes series %d: %v", series.ID, err))
 							return dispatchOutcome{shouldUpsert: false}
@@ -629,6 +630,7 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 						SeriesID:     series.ID,
 						TVDBID:       series.TVDBID,
 						SeasonNumber: targetSeason,
+						AnilistID:    entry.Media.ID,
 					}); err != nil {
 						report.Errors = append(report.Errors, fmt.Sprintf("stage unmonitor series %d season %d: %v", series.ID, targetSeason, err))
 						return dispatchOutcome{shouldUpsert: false}
@@ -688,6 +690,7 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 					TVDBID:       series.TVDBID,
 					SeasonNumber: targetSeason,
 					EpisodeIDs:   sliceEpisodeIDs,
+					AnilistID:    entry.Media.ID,
 				}); err != nil {
 					report.Errors = append(report.Errors, fmt.Sprintf("stage monitor episodes series %d: %v", series.ID, err))
 					return dispatchOutcome{shouldUpsert: false}
@@ -750,6 +753,7 @@ func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaLi
 				SeriesID:     series.ID,
 				TVDBID:       series.TVDBID,
 				SeasonNumber: targetSeason,
+				AnilistID:    entry.Media.ID,
 			}); err != nil {
 				report.Errors = append(report.Errors, fmt.Sprintf("stage monitor series %d season %d: %v", series.ID, targetSeason, err))
 				return dispatchOutcome{shouldUpsert: false}
