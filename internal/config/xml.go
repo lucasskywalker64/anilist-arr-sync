@@ -9,17 +9,29 @@ import (
 type xmlConfig struct {
 	XMLName xml.Name `xml:"Config"`
 
-	BindAddress string `xml:"BindAddress"`
-	Port        int    `xml:"Port"`
-	URLBase     string `xml:"UrlBase"`
-	EnableSsl   string `xml:"EnableSsl"`
-	SslPort     int    `xml:"SslPort"`
-	SslCertPath string `xml:"SslCertPath"`
-	SslKeyPath  string `xml:"SslKeyPath"`
+	BindAddress    string `xml:"BindAddress"`
+	Port           int    `xml:"Port"`
+	URLBase        string `xml:"UrlBase"`
+	AllowedHosts   string `xml:"AllowedHosts"`
+	ApplicationURL string `xml:"ApplicationUrl"`
+	EnableSsl      string `xml:"EnableSsl"`
+	SslPort        int    `xml:"SslPort"`
+	SslCertPath    string `xml:"SslCertPath"`
+	SslKeyPath     string `xml:"SslKeyPath"`
 
 	AuthenticationMethod   string `xml:"AuthenticationMethod"`
 	AuthenticationRequired string `xml:"AuthenticationRequired"`
 	APIKey                 string `xml:"ApiKey"`
+	TrustedNetworks        string `xml:"TrustedNetworks"`
+
+	UseProxy                  string `xml:"UseProxy"`
+	ProxyType                 string `xml:"ProxyType"`
+	ProxyHostname             string `xml:"ProxyHostname"`
+	ProxyPort                 int    `xml:"ProxyPort"`
+	ProxyUsername             string `xml:"ProxyUsername"`
+	ProxyPassword             string `xml:"ProxyPassword"`
+	ProxyIgnoredAddresses     string `xml:"ProxyIgnoredAddresses"`
+	ProxyBypassLocalAddresses string `xml:"ProxyBypassLocalAddresses"`
 
 	LogLevel        string `xml:"LogLevel"`
 	ConsoleLogLevel string `xml:"ConsoleLogLevel"`
@@ -30,8 +42,13 @@ type xmlConfig struct {
 	LaunchBrowser              string `xml:"LaunchBrowser"`
 	EnableDesktopNotifications string `xml:"EnableDesktopNotifications"`
 
+	UpdateBranch        string `xml:"UpdateBranch"`
 	UpdateAutomatically string `xml:"UpdateAutomatically"`
 	UpdateMechanism     string `xml:"UpdateMechanism"`
+
+	BackupFolder    string `xml:"BackupFolder"`
+	BackupInterval  int    `xml:"BackupInterval"`
+	BackupRetention int    `xml:"BackupRetention"`
 
 	DatabasePath string `xml:"DatabasePath"`
 
@@ -89,6 +106,8 @@ func (c *Config) ToXML() ([]byte, error) {
 		BindAddress:                c.BindAddress,
 		Port:                       c.Port,
 		URLBase:                    c.URLBase,
+		AllowedHosts:               c.AllowedHosts,
+		ApplicationURL:             c.ApplicationURL,
 		EnableSsl:                  formatBool(c.EnableSsl),
 		SslPort:                    c.SslPort,
 		SslCertPath:                c.SslCertPath,
@@ -96,6 +115,15 @@ func (c *Config) ToXML() ([]byte, error) {
 		AuthenticationMethod:       c.AuthenticationMethod,
 		AuthenticationRequired:     c.AuthenticationRequired,
 		APIKey:                     c.APIKey,
+		TrustedNetworks:            c.TrustedNetworks,
+		UseProxy:                   formatBool(c.UseProxy),
+		ProxyType:                  c.ProxyType,
+		ProxyHostname:              c.ProxyHostname,
+		ProxyPort:                  c.ProxyPort,
+		ProxyUsername:              c.ProxyUsername,
+		ProxyPassword:              c.ProxyPassword,
+		ProxyIgnoredAddresses:      c.ProxyIgnoredAddresses,
+		ProxyBypassLocalAddresses:  formatBool(c.ProxyBypassLocalAddresses),
 		LogLevel:                   c.LogLevel,
 		ConsoleLogLevel:            c.ConsoleLogLevel,
 		LogSizeLimit:               c.LogSizeLimit,
@@ -103,8 +131,12 @@ func (c *Config) ToXML() ([]byte, error) {
 		InstanceName:               c.InstanceName,
 		LaunchBrowser:              formatBool(c.LaunchBrowser),
 		EnableDesktopNotifications: formatBool(c.EnableDesktopNotifications),
+		UpdateBranch:               c.UpdateBranch,
 		UpdateAutomatically:        formatBool(c.UpdateAutomatically),
 		UpdateMechanism:            c.UpdateMechanism,
+		BackupFolder:               c.BackupFolder,
+		BackupInterval:             c.BackupInterval,
+		BackupRetention:            c.BackupRetention,
 		DatabasePath:               c.DatabasePath,
 		AniListUsername:            c.AniListUsername,
 		AniListTvStatus:            c.AniListTvStatus,

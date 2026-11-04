@@ -160,3 +160,92 @@ func TestNotificationEndpoints(t *testing.T) {
 		t.Fatalf("expected 0 connections after deletion, got %d", len(list))
 	}
 }
+
+func TestNotification_FallbackToTopLevelURL(t *testing.T) {
+	db := newTestStorage(t)
+	cfg := config.NewDefault()
+	cfg.AuthenticationRequired = "DisabledForLocalAddresses"
+	cfg.APIKey = "test-key"
+
+	srv := NewServer(cfg, "", db, nil, nil)
+	handler := srv.Handler()
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer mockServer.Close()
+
+	// 1. Create with empty settings map and top-level url
+	createPayload := map[string]any{
+		"name":     "Test",
+		"provider": "DISCORD",
+		"settings": map[string]any{},
+		"url":      mockServer.URL,
+	}
+	body, _ := json.Marshal(createPayload)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/notifications", bytes.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Api-Key", "test-key")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
+		t.Fatalf("expected 200/201 on create notification with fallback url, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var created notification.Connection
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("failed to decode created connection: %v", err)
+	}
+	expectedConfig := fmt.Sprintf(`{"url":%q}`, mockServer.URL)
+	if created.ConfigJSON != expectedConfig {
+		t.Fatalf("expected ConfigJSON %s, got %s", expectedConfig, created.ConfigJSON)
+	}
+
+	// 2. Update with empty settings map and top-level url
+	updatePayload := map[string]any{
+		"name":     "Test Updated",
+		"provider": "DISCORD",
+		"settings": map[string]any{},
+		"url":      mockServer.URL + "/updated",
+	}
+	updBody, _ := json.Marshal(updatePayload)
+	req2 := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/v1/notifications/%d", created.ID), bytes.NewReader(updBody))
+	req2.RemoteAddr = "127.0.0.1:1234"
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-Api-Key", "test-key")
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on update notification with fallback url, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+	var updated notification.Connection
+	if err := json.Unmarshal(rec2.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("failed to decode updated connection: %v", err)
+	}
+	expectedUpdConfig := fmt.Sprintf(`{"url":%q}`, mockServer.URL+"/updated")
+	if updated.ConfigJSON != expectedUpdConfig {
+		t.Fatalf("expected ConfigJSON %s, got %s", expectedUpdConfig, updated.ConfigJSON)
+	}
+
+	// 3. Test endpoint with empty settings map and top-level url
+	testPayload := map[string]any{
+		"name":     "Test",
+		"provider": "DISCORD",
+		"settings": map[string]any{},
+		"url":      mockServer.URL,
+	}
+	testBody, _ := json.Marshal(testPayload)
+	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/notifications/test", bytes.NewReader(testBody))
+	req3.RemoteAddr = "127.0.0.1:1234"
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("X-Api-Key", "test-key")
+	rec3 := httptest.NewRecorder()
+	handler.ServeHTTP(rec3, req3)
+
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on test notification with fallback url, got %d: %s", rec3.Code, rec3.Body.String())
+	}
+}

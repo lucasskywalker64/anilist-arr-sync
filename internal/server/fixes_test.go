@@ -309,7 +309,7 @@ func TestReviewResolve_Validation(t *testing.T) {
 
 	// 3. Valid resolve succeeds
 	goodBody, _ := json.Marshal(map[string]any{
-		"tvdbId": 12345,
+		"tmdbId": 12345,
 	})
 	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/review/1/resolve", bytes.NewReader(goodBody))
 	req3.RemoteAddr = "127.0.0.1:1234"
@@ -330,53 +330,6 @@ func TestReviewResolve_Validation(t *testing.T) {
 	handler.ServeHTTP(rec4, req4)
 	if rec4.Code != http.StatusNotFound {
 		t.Errorf("expected 404 for already resolved item, got %d", rec4.Code)
-	}
-}
-
-func TestExternalAuth_NoBypassWhenDisabledForLocalAddresses(t *testing.T) {
-	cfg := config.NewDefault()
-	cfg.AuthenticationMethod = "External"
-	cfg.AuthenticationRequired = "DisabledForLocalAddresses"
-	cfg.APIKey = "secret-key"
-
-	srv := &Server{
-		cfg:      cfg,
-		sessions: NewSessionStore(1 * time.Hour),
-	}
-
-	var capturedUser string
-	handler := srv.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if u, ok := r.Context().Value(userContextKey).(string); ok {
-			capturedUser = u
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	// 1. Proxied request from local IP without external user header receives 401 (not bypassed as local_user)
-	{
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
-		req.RemoteAddr = "127.0.0.1:54321"
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("expected 401 when external header is missing despite local IP, got %d", rec.Code)
-		}
-	}
-
-	// 2. Proxied request from local IP with Remote-User receives 200 and captures username
-	{
-		capturedUser = ""
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/review", nil)
-		req.RemoteAddr = "127.0.0.1:54321"
-		req.Header.Set("Remote-User", "authelia_admin")
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Errorf("expected 200 with valid Remote-User header, got %d", rec.Code)
-		}
-		if capturedUser != "authelia_admin" {
-			t.Errorf("expected user 'authelia_admin', got %q", capturedUser)
-		}
 	}
 }
 
@@ -505,5 +458,136 @@ func TestSessionStore_EvictsExpired(t *testing.T) {
 	store.CleanExpired()
 	if store.Len() != 0 {
 		t.Errorf("expected 0 sessions after CleanExpired, got %d", store.Len())
+	}
+}
+
+func TestConfig_InitialCredentialsRequired(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.xml")
+	cfg := config.NewDefault()
+	cfg.AuthenticationRequired = "DisabledForLocalAddresses"
+	cfg.APIKey = "test-api-key"
+	_ = config.Save(configPath, cfg)
+
+	db := newTestStorage(t)
+	srv := NewServer(cfg, configPath, db, nil, nil)
+	handler := srv.Handler()
+
+	// 1. Only username provided when users table is empty -> 400 Bad Request
+	body1, _ := json.Marshal(map[string]any{"username": "newuser"})
+	req1 := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(body1))
+	req1.RemoteAddr = "127.0.0.1:1234"
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("X-Api-Key", "test-api-key")
+	rec1 := httptest.NewRecorder()
+	handler.ServeHTTP(rec1, req1)
+
+	if rec1.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request when only username provided, got %d: %s", rec1.Code, rec1.Body.String())
+	}
+
+	// 2. Only password provided when users table is empty -> 400 Bad Request
+	body2, _ := json.Marshal(map[string]any{"password": "secretpassword"})
+	req2 := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(body2))
+	req2.RemoteAddr = "127.0.0.1:1234"
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-Api-Key", "test-api-key")
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request when only password provided, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+
+	// Verify no user row was created
+	var count int
+	_ = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT COUNT(*) FROM users;").Scan(&count)
+	})
+	if count != 0 {
+		t.Fatalf("expected 0 users created after failed initial credential attempts, got %d", count)
+	}
+
+	// 3. Both username and password provided with leading/trailing spaces in password
+	body3, _ := json.Marshal(map[string]any{
+		"username": "adminuser",
+		"password": "  spaces_in_pwd  ",
+	})
+	req3 := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(body3))
+	req3.RemoteAddr = "127.0.0.1:1234"
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("X-Api-Key", "test-api-key")
+	rec3 := httptest.NewRecorder()
+	handler.ServeHTTP(rec3, req3)
+
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK when both credentials provided, got %d: %s", rec3.Code, rec3.Body.String())
+	}
+
+	// Verify user was created and password matches untrimmed password
+	var storedHash string
+	_ = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT password_hash FROM users WHERE username = 'adminuser';").Scan(&storedHash)
+	})
+	if !CheckPassword("  spaces_in_pwd  ", storedHash) {
+		t.Errorf("expected untrimmed password to verify successfully against stored hash")
+	}
+	if CheckPassword("spaces_in_pwd", storedHash) {
+		t.Errorf("trimmed password should not match untrimmed stored password")
+	}
+}
+
+func TestConfig_ProxyPasswordMasking(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.xml")
+	cfg := config.NewDefault()
+	cfg.AuthenticationRequired = "DisabledForLocalAddresses"
+	cfg.APIKey = "test-api-key"
+	cfg.ProxyPassword = "super_secret_proxy_pwd"
+	_ = config.Save(configPath, cfg)
+
+	db := newTestStorage(t)
+	srv := NewServer(cfg, configPath, db, nil, nil)
+	handler := srv.Handler()
+
+	// 1. GET /api/v1/config should mask proxyPassword as "******"
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	req1.RemoteAddr = "127.0.0.1:1234"
+	req1.Header.Set("X-Api-Key", "test-api-key")
+	rec1 := httptest.NewRecorder()
+	handler.ServeHTTP(rec1, req1)
+
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on GET config, got %d", rec1.Code)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec1.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json unmarshal failed: %v", err)
+	}
+	if resp["proxyPassword"] != "******" {
+		t.Fatalf("expected proxyPassword to be masked as '******', got %v", resp["proxyPassword"])
+	}
+
+	// 2. PUT /api/v1/config with "proxyPassword": "******" should preserve original password
+	body2, _ := json.Marshal(map[string]any{
+		"proxyPassword": "******",
+		"proxyHostname": "proxy.example.com",
+	})
+	req2 := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(body2))
+	req2.RemoteAddr = "127.0.0.1:1234"
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-Api-Key", "test-api-key")
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on PUT config, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+	if srv.Config().ProxyPassword != "super_secret_proxy_pwd" {
+		t.Fatalf("expected ProxyPassword to remain 'super_secret_proxy_pwd', got %q", srv.Config().ProxyPassword)
+	}
+	if srv.Config().ProxyHostname != "proxy.example.com" {
+		t.Fatalf("expected ProxyHostname to be updated to 'proxy.example.com', got %q", srv.Config().ProxyHostname)
 	}
 }

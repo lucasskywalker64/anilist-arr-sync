@@ -22,15 +22,20 @@ func TestNewDefault(t *testing.T) {
 	check("SslPort", cfg.SslPort, 7272)
 	check("AuthenticationMethod", cfg.AuthenticationMethod, "Forms")
 	check("AuthenticationRequired", cfg.AuthenticationRequired, "DisabledForLocalAddresses")
+	check("TrustedNetworks", cfg.TrustedNetworks, "127.0.0.1/32,::1/128,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8")
 	check("LogLevel", cfg.LogLevel, "Info")
 	check("ConsoleLogLevel", cfg.ConsoleLogLevel, "Info")
-	check("LogSizeLimit", cfg.LogSizeLimit, 10)
+	check("LogSizeLimit", cfg.LogSizeLimit, 1)
 	check("LogRotate", cfg.LogRotate, 5)
 	check("InstanceName", cfg.InstanceName, "AniList Arr Sync")
 	check("LaunchBrowser", cfg.LaunchBrowser, true)
 	check("EnableDesktopNotifications", cfg.EnableDesktopNotifications, false)
-	check("UpdateAutomatically", cfg.UpdateAutomatically, true)
-	check("UpdateMechanism", cfg.UpdateMechanism, "BuiltIn")
+	check("UpdateBranch", cfg.UpdateBranch, "main")
+	check("UpdateAutomatically", cfg.UpdateAutomatically, false)
+	check("UpdateMechanism", cfg.UpdateMechanism, "Docker")
+	check("BackupFolder", cfg.BackupFolder, "Backups")
+	check("BackupInterval", cfg.BackupInterval, 7)
+	check("BackupRetention", cfg.BackupRetention, 28)
 	check("DatabasePath", cfg.DatabasePath, "sync.db")
 	check("AniListTvStatus", cfg.AniListTvStatus, "CURRENT")
 	check("AniListMovieStatus", cfg.AniListMovieStatus, "CURRENT")
@@ -111,7 +116,14 @@ func TestConfigValidation(t *testing.T) {
 			modify: func(c *config.Config) {
 				c.AuthenticationMethod = "OAuth"
 			},
-			wantError: "AuthenticationMethod must be Forms or External",
+			wantError: "AuthenticationMethod must be Forms or Basic",
+		},
+		{
+			name: "external authentication method rejected",
+			modify: func(c *config.Config) {
+				c.AuthenticationMethod = "External"
+			},
+			wantError: "AuthenticationMethod must be Forms or Basic",
 		},
 		{
 			name: "invalid authentication required mode",
@@ -119,6 +131,13 @@ func TestConfigValidation(t *testing.T) {
 				c.AuthenticationRequired = "Never"
 			},
 			wantError: "AuthenticationRequired must be Enabled or DisabledForLocalAddresses",
+		},
+		{
+			name: "invalid trusted networks",
+			modify: func(c *config.Config) {
+				c.TrustedNetworks = "127.0.0.1/32,not-a-valid-cidr"
+			},
+			wantError: "TrustedNetworks contains invalid",
 		},
 		{
 			name: "invalid log level",

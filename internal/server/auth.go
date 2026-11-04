@@ -75,27 +75,107 @@ func CheckPassword(password, hash string) bool {
 	return false
 }
 
+// ParseCIDRs parses a comma-separated list of IP addresses and CIDR networks.
+// Single IP addresses are automatically expanded to /32 (IPv4) or /128 (IPv6).
+func ParseCIDRs(raw string) ([]*net.IPNet, error) {
+	var nets []*net.IPNet
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if !strings.Contains(part, "/") {
+			ip := net.ParseIP(part)
+			if ip == nil {
+				return nil, fmt.Errorf("invalid IP address %q", part)
+			}
+			if ip.To4() != nil {
+				part += "/32"
+			} else {
+				part += "/128"
+			}
+		}
+		_, ipNet, err := net.ParseCIDR(part)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CIDR %q: %w", part, err)
+		}
+		nets = append(nets, ipNet)
+	}
+	return nets, nil
+}
+
+// IsLocalIP reports whether ip belongs to loopback, private, or link-local ranges.
+func IsLocalIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+}
+
 // IsLocalAddress checks if the given host or host:port string originates from a local or private network.
 func IsLocalAddress(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		host = addr
 	}
-
-	// Clean IPv6 brackets if present
 	host = strings.TrimPrefix(host, "[")
 	host = strings.TrimSuffix(host, "]")
+	return IsLocalIP(net.ParseIP(host))
+}
 
-	ip := net.ParseIP(host)
+func ipInNets(ip net.IP, nets []*net.IPNet) bool {
 	if ip == nil {
 		return false
 	}
+	for _, n := range nets {
+		if n != nil && n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
 
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return true
+// ResolveClientIP resolves the client IP from remoteAddr and X-Forwarded-For headers.
+// X-Forwarded-For is only evaluated when remoteAddr originates from one of the trusted networks.
+func ResolveClientIP(remoteAddr, xForwardedFor string, trustedNets []*net.IPNet) net.IP {
+	remoteHost, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		remoteHost = remoteAddr
+	}
+	remoteHost = strings.TrimPrefix(remoteHost, "[")
+	remoteHost = strings.TrimSuffix(remoteHost, "]")
+
+	remoteIP := net.ParseIP(remoteHost)
+	if remoteIP == nil {
+		return nil
 	}
 
-	return false
+	if ipInNets(remoteIP, trustedNets) && xForwardedFor != "" {
+		parts := strings.Split(xForwardedFor, ",")
+		var candidate net.IP
+		for i := len(parts) - 1; i >= 0; i-- {
+			hop := strings.TrimSpace(parts[i])
+			if h, _, err := net.SplitHostPort(hop); err == nil {
+				hop = h
+			}
+			hop = strings.TrimPrefix(hop, "[")
+			hop = strings.TrimSuffix(hop, "]")
+
+			ip := net.ParseIP(hop)
+			if ip == nil {
+				return nil
+			}
+			candidate = ip
+			if !ipInNets(ip, trustedNets) {
+				return ip
+			}
+		}
+		if candidate != nil {
+			return candidate
+		}
+	}
+
+	return remoteIP
 }
 
 // IsLoopbackAddress checks if the given host or host:port string is a loopback address.
@@ -260,6 +340,13 @@ func (s *SessionStore) Delete(token string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sessions, token)
+}
+
+// RevokeAll purges all active user sessions from memory.
+func (s *SessionStore) RevokeAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions = make(map[string]session)
 }
 
 // Authenticator provides user authentication operations against the database.

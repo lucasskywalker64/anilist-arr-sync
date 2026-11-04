@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"strconv"
 	"time"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
@@ -62,6 +64,7 @@ type MonitorSeasonPayload struct {
 	TVDBID       int   `json:"tvdbId"`
 	SeasonNumber int   `json:"seasonNumber"`
 	EpisodeIDs   []int `json:"episodeIds,omitempty"`
+	AnilistID    int   `json:"anilistId,omitempty"`
 }
 
 // UnmonitorMoviePayload stores parameters for unmonitoring a movie in Radarr.
@@ -169,6 +172,8 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		return fmt.Errorf("query staged action %d: %w", id, err)
 	}
 
+	var syncUpdateFn func(ctx context.Context, tx *sql.Tx) error
+
 	switch action.ActionType {
 	case ActionAddMovie:
 		var req servarr.AddMovieRequest
@@ -186,6 +191,14 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		_, addErr := o.radarr.AddMovie(ctx, req)
 		if addErr != nil {
 			return fmt.Errorf("execute add movie: %w", addErr)
+		}
+		syncUpdateFn = func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `
+				UPDATE synced_media
+				SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
+				WHERE tmdb_id = ? AND monitored_status != 'IGNORED';
+			`, req.TMDBID)
+			return err
 		}
 
 	case ActionAddSeries:
@@ -205,6 +218,31 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		if addErr != nil {
 			return fmt.Errorf("execute add series: %w", addErr)
 		}
+		var targetSeasonStr string
+		for _, s := range req.Seasons {
+			if s.Monitored {
+				targetSeasonStr = strconv.Itoa(s.SeasonNumber)
+				break
+			}
+		}
+		syncUpdateFn = func(ctx context.Context, tx *sql.Tx) error {
+			if targetSeasonStr != "" {
+				_, err := tx.ExecContext(ctx, `
+					UPDATE synced_media
+					SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
+					WHERE tvdb_id = ?
+					  AND monitored_status != 'IGNORED'
+					  AND (seasons IS NULL OR seasons = '' OR seasons = ? OR (',' || REPLACE(seasons, ' ', '') || ',') LIKE ('%,' || ? || ',%'));
+				`, req.TVDBID, targetSeasonStr, targetSeasonStr)
+				return err
+			}
+			_, err := tx.ExecContext(ctx, `
+				UPDATE synced_media
+				SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
+				WHERE tvdb_id = ? AND monitored_status != 'IGNORED';
+			`, req.TVDBID)
+			return err
+		}
 
 	case ActionMonitorSeason:
 		var payload MonitorSeasonPayload
@@ -215,6 +253,18 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 			return errors.New("sonarr client is nil")
 		}
 		if len(payload.EpisodeIDs) > 0 {
+			if payload.SeriesID > 0 {
+				series, getErr := o.sonarr.GetSeriesByID(ctx, payload.SeriesID)
+				if getErr != nil {
+					return fmt.Errorf("get series %d: %w", payload.SeriesID, getErr)
+				}
+				if !series.Monitored {
+					series.Monitored = true
+					if _, updateErr := o.sonarr.UpdateSeries(ctx, series); updateErr != nil {
+						return fmt.Errorf("update series %d monitored: %w", payload.SeriesID, updateErr)
+					}
+				}
+			}
 			if monErr := o.sonarr.MonitorEpisodes(ctx, payload.EpisodeIDs, true); monErr != nil {
 				return fmt.Errorf("execute monitor episodes: %w", monErr)
 			}
@@ -223,6 +273,7 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 			if getErr != nil {
 				return fmt.Errorf("get series %d: %w", payload.SeriesID, getErr)
 			}
+			series.Monitored = true
 			found := false
 			for i := range series.Seasons {
 				if series.Seasons[i].SeasonNumber == payload.SeasonNumber {
@@ -243,6 +294,25 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		}
 		if o.cfg.SonarrSearchOnAdd && payload.SeriesID > 0 && payload.SeasonNumber > 0 {
 			_, _ = o.sonarr.SearchSeason(ctx, payload.SeriesID, payload.SeasonNumber)
+		}
+		seasonStr := strconv.Itoa(payload.SeasonNumber)
+		syncUpdateFn = func(ctx context.Context, tx *sql.Tx) error {
+			if payload.AnilistID > 0 {
+				_, err := tx.ExecContext(ctx, `
+					UPDATE synced_media
+					SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
+					WHERE anilist_id = ? AND monitored_status != 'IGNORED';
+				`, payload.AnilistID)
+				return err
+			}
+			_, err := tx.ExecContext(ctx, `
+				UPDATE synced_media
+				SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
+				WHERE tvdb_id = ?
+				  AND monitored_status != 'IGNORED'
+				  AND (seasons IS NULL OR seasons = '' OR seasons = ? OR (',' || REPLACE(seasons, ' ', '') || ',') LIKE ('%,' || ? || ',%'));
+			`, payload.TVDBID, seasonStr, seasonStr)
+			return err
 		}
 
 	case ActionUnmonitorSeason:
@@ -272,6 +342,25 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 				return fmt.Errorf("update series season monitoring: %w", updateErr)
 			}
 		}
+		seasonStr := strconv.Itoa(payload.SeasonNumber)
+		syncUpdateFn = func(ctx context.Context, tx *sql.Tx) error {
+			if payload.AnilistID > 0 {
+				_, err := tx.ExecContext(ctx, `
+					UPDATE synced_media
+					SET monitored_status = 'UNMONITORED', updated_at = CURRENT_TIMESTAMP
+					WHERE anilist_id = ? AND monitored_status != 'IGNORED';
+				`, payload.AnilistID)
+				return err
+			}
+			_, err := tx.ExecContext(ctx, `
+				UPDATE synced_media
+				SET monitored_status = 'UNMONITORED', updated_at = CURRENT_TIMESTAMP
+				WHERE tvdb_id = ?
+				  AND monitored_status != 'IGNORED'
+				  AND (seasons IS NULL OR seasons = '' OR seasons = ? OR (',' || REPLACE(seasons, ' ', '') || ',') LIKE ('%,' || ? || ',%'));
+			`, payload.TVDBID, seasonStr, seasonStr)
+			return err
+		}
 
 	case ActionUnmonitorMovie:
 		var payload UnmonitorMoviePayload
@@ -288,6 +377,14 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		movie.Monitored = false
 		if _, updateErr := o.radarr.UpdateMovie(ctx, movie); updateErr != nil {
 			return fmt.Errorf("update movie monitoring: %w", updateErr)
+		}
+		syncUpdateFn = func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `
+				UPDATE synced_media
+				SET monitored_status = 'UNMONITORED', updated_at = CURRENT_TIMESTAMP
+				WHERE tmdb_id = ? AND monitored_status != 'IGNORED';
+			`, payload.TMDBID)
+			return err
 		}
 
 	default:
@@ -309,6 +406,11 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		}
 		if n == 0 {
 			return fmt.Errorf("staged action %d changed state during apply", id)
+		}
+		if syncUpdateFn != nil {
+			if updateErr := syncUpdateFn(ctx, tx); updateErr != nil {
+				log.Printf("apply staged action %d: update synced_media failed: %v", id, updateErr)
+			}
 		}
 		return nil
 	})

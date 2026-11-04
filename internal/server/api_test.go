@@ -5,10 +5,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/backup"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
@@ -23,6 +25,22 @@ func TestOverridesEndpoints(t *testing.T) {
 
 	srv := NewServer(cfg, "", db, nil, nil)
 	handler := srv.Handler()
+
+	// Seed synced_media row to verify arr_title synchronization
+	_ = db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO synced_media (
+				anilist_id, media_type, format, title_romaji, title_english,
+				release_year, poster_url, anilist_status, target_service,
+				tvdb_id, tmdb_id, arr_title, monitored_status, seasons
+			) VALUES (
+				500, 'SERIES', 'TV', 'Original Romaji', 'Original English',
+				2020, '', 'CURRENT', 'SONARR',
+				NULL, NULL, NULL, 'MONITORED', '1'
+			);
+		`)
+		return err
+	})
 
 	// 1. Create mapping override via POST /api/v1/overrides
 	createPayload, _ := json.Marshal(map[string]any{
@@ -42,6 +60,66 @@ func TestOverridesEndpoints(t *testing.T) {
 
 	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
 		t.Fatalf("expected create override to succeed, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var seededArrTitle sql.NullString
+	if readErr := db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT arr_title FROM synced_media WHERE anilist_id = 500;").Scan(&seededArrTitle)
+	}); readErr != nil {
+		t.Fatalf("failed to query synced_media: %v", readErr)
+	}
+	if !seededArrTitle.Valid || seededArrTitle.String != "Custom Title" {
+		t.Errorf("expected synced_media arr_title to be updated to 'Custom Title', got %v", seededArrTitle)
+	}
+
+	// 1b. Update mapping override without titleOverride clears arr_title to NULL
+	noTitlePayload, _ := json.Marshal(map[string]any{
+		"anilistId":     500,
+		"mediaType":     "SERIES",
+		"tvdbId":        123456,
+		"tmdbId":        0,
+		"seasons":       "1-2",
+		"titleOverride": "",
+	})
+	noTitleReq := httptest.NewRequest(http.MethodPost, "/api/v1/overrides", bytes.NewReader(noTitlePayload))
+	noTitleReq.RemoteAddr = "127.0.0.1:1234"
+	noTitleReq.Header.Set("Content-Type", "application/json")
+	noTitleReq.Header.Set("X-Api-Key", "test-key")
+	noTitleRec := httptest.NewRecorder()
+	handler.ServeHTTP(noTitleRec, noTitleReq)
+	if noTitleRec.Code != http.StatusCreated && noTitleRec.Code != http.StatusOK {
+		t.Fatalf("expected override update without titleOverride to succeed, got %d: %s", noTitleRec.Code, noTitleRec.Body.String())
+	}
+
+	var blankArrTitle sql.NullString
+	if readErr := db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT arr_title FROM synced_media WHERE anilist_id = 500;").Scan(&blankArrTitle)
+	}); readErr != nil {
+		t.Fatalf("failed to query synced_media after blank titleOverride: %v", readErr)
+	}
+	if blankArrTitle.Valid {
+		t.Errorf("expected synced_media arr_title to be NULL when titleOverride is omitted/empty, got %v", blankArrTitle.String)
+	}
+
+	// Re-apply Custom Title before testing DELETE
+	reqReapply := httptest.NewRequest(http.MethodPost, "/api/v1/overrides", bytes.NewReader(createPayload))
+	reqReapply.RemoteAddr = "127.0.0.1:1234"
+	reqReapply.Header.Set("Content-Type", "application/json")
+	reqReapply.Header.Set("X-Api-Key", "test-key")
+	reapplyRec := httptest.NewRecorder()
+	handler.ServeHTTP(reapplyRec, reqReapply)
+	if reapplyRec.Code != http.StatusCreated && reapplyRec.Code != http.StatusOK {
+		t.Fatalf("expected override reapply to succeed, got %d: %s", reapplyRec.Code, reapplyRec.Body.String())
+	}
+
+	var reappliedArrTitle sql.NullString
+	if readErr := db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT arr_title FROM synced_media WHERE anilist_id = 500;").Scan(&reappliedArrTitle)
+	}); readErr != nil {
+		t.Fatalf("failed to query synced_media after reapply: %v", readErr)
+	}
+	if !reappliedArrTitle.Valid || reappliedArrTitle.String != "Custom Title" {
+		t.Fatalf("expected synced_media arr_title to be 'Custom Title' before delete, got %v", reappliedArrTitle)
 	}
 
 	// 2. GET /api/v1/overrides
@@ -73,6 +151,16 @@ func TestOverridesEndpoints(t *testing.T) {
 
 	if delRec.Code != http.StatusOK {
 		t.Fatalf("expected DELETE /api/v1/overrides/500 to return 200, got %d: %s", delRec.Code, delRec.Body.String())
+	}
+
+	var clearedArrTitle sql.NullString
+	if readErr := db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		return q.QueryRowContext(ctx, "SELECT arr_title FROM synced_media WHERE anilist_id = 500;").Scan(&clearedArrTitle)
+	}); readErr != nil {
+		t.Fatalf("failed to query synced_media after delete: %v", readErr)
+	}
+	if clearedArrTitle.Valid {
+		t.Errorf("expected synced_media arr_title to be cleared (NULL) after delete, got %v", clearedArrTitle.String)
 	}
 
 	// 4. GET /api/v1/overrides is now empty
@@ -118,11 +206,11 @@ func TestConfigEndpoints(t *testing.T) {
 	if err := json.Unmarshal(getRec.Body.Bytes(), &returnedCfg); err != nil {
 		t.Fatalf("failed to parse config JSON: %v", err)
 	}
-	if returnedCfg["apiKey"] == "secret-key-to-mask" {
-		t.Errorf("expected apiKey to be sanitized or masked, got raw key")
+	if returnedCfg["apiKey"] != "secret-key-to-mask" {
+		t.Errorf("expected apiKey to be returned for viewing and copying, got %v", returnedCfg["apiKey"])
 	}
 
-	// 2. PUT /api/v1/config updates settings
+	// 2. PUT /api/v1/config updates settings (non-network fields do not require restart)
 	updatePayload, _ := json.Marshal(map[string]any{
 		"instanceName":      "My Anime Sync",
 		"syncIntervalHours": 6,
@@ -137,11 +225,133 @@ func TestConfigEndpoints(t *testing.T) {
 	if putRec.Code != http.StatusOK {
 		t.Fatalf("expected PUT /api/v1/config to return 200, got %d: %s", putRec.Code, putRec.Body.String())
 	}
+	var putResp map[string]any
+	_ = json.Unmarshal(putRec.Body.Bytes(), &putResp)
+	if restart, ok := putResp["restartRequired"].(bool); !ok || restart {
+		t.Errorf("expected restartRequired to be false when updating non-network fields, got %v", putResp["restartRequired"])
+	}
 	if srv.cfg.InstanceName != "My Anime Sync" {
 		t.Errorf("expected instanceName to be updated to 'My Anime Sync', got %s", srv.cfg.InstanceName)
 	}
 	if srv.cfg.SyncIntervalHours != 6 {
 		t.Errorf("expected syncIntervalHours to be 6, got %d", srv.cfg.SyncIntervalHours)
+	}
+
+	// 3. PUT /api/v1/config with Port change requires restart
+	portPayload, _ := json.Marshal(map[string]any{
+		"port": 7172,
+	})
+	putReq2 := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(portPayload))
+	putReq2.RemoteAddr = "127.0.0.1:1234"
+	putReq2.Header.Set("Content-Type", "application/json")
+	putReq2.Header.Set("X-Api-Key", "secret-key-to-mask")
+	putRec2 := httptest.NewRecorder()
+	handler.ServeHTTP(putRec2, putReq2)
+	if putRec2.Code != http.StatusOK {
+		t.Fatalf("expected PUT /api/v1/config to return 200, got %d: %s", putRec2.Code, putRec2.Body.String())
+	}
+	var putResp2 map[string]any
+	_ = json.Unmarshal(putRec2.Body.Bytes(), &putResp2)
+	if restart, ok := putResp2["restartRequired"].(bool); !ok || !restart {
+		t.Errorf("expected restartRequired to be true when updating port, got %v", putResp2["restartRequired"])
+	}
+
+	// 4. Subsequent PUT /api/v1/config keeping the modified port still reports restartRequired: true
+	putReq3 := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(updatePayload))
+	putReq3.RemoteAddr = "127.0.0.1:1234"
+	putReq3.Header.Set("Content-Type", "application/json")
+	putReq3.Header.Set("X-Api-Key", "secret-key-to-mask")
+	putRec3 := httptest.NewRecorder()
+	handler.ServeHTTP(putRec3, putReq3)
+	if putRec3.Code != http.StatusOK {
+		t.Fatalf("expected PUT /api/v1/config to return 200, got %d: %s", putRec3.Code, putRec3.Body.String())
+	}
+	var putResp3 map[string]any
+	_ = json.Unmarshal(putRec3.Body.Bytes(), &putResp3)
+	if restart, ok := putResp3["restartRequired"].(bool); !ok || !restart {
+		t.Errorf("expected restartRequired to remain true while bound port differs from saved port, got %v", putResp3["restartRequired"])
+	}
+}
+
+func TestConfigEndpoints_RestartBaselineRefreshedOnStart(t *testing.T) {
+	l1, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen on port: %v", err)
+	}
+	port1 := l1.Addr().(*net.TCPAddr).Port
+	_ = l1.Close()
+
+	l2, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen on second port: %v", err)
+	}
+	port2 := l2.Addr().(*net.TCPAddr).Port
+	_ = l2.Close()
+
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.xml")
+
+	cfg := config.NewDefault()
+	cfg.BindAddress = "127.0.0.1"
+	cfg.Port = port1
+	cfg.EnableSsl = false
+	cfg.AuthenticationRequired = "DisabledForLocalAddresses"
+	cfg.APIKey = "secret-key"
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("failed to save config: %v", err)
+	}
+
+	db := newTestStorage(t)
+	srv := NewServer(cfg, configPath, db, nil, nil)
+	handler := srv.Handler()
+
+	// 1. PUT port change to port2 before Start() returns restartRequired: true
+	portPayload, _ := json.Marshal(map[string]any{
+		"port": port2,
+	})
+	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(portPayload))
+	putReq.RemoteAddr = "127.0.0.1:1234"
+	putReq.Header.Set("Content-Type", "application/json")
+	putReq.Header.Set("X-Api-Key", "secret-key")
+	putRec := httptest.NewRecorder()
+	handler.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("expected PUT /api/v1/config to return 200, got %d: %s", putRec.Code, putRec.Body.String())
+	}
+	var putResp map[string]any
+	_ = json.Unmarshal(putRec.Body.Bytes(), &putResp)
+	if restart, ok := putResp["restartRequired"].(bool); !ok || !restart {
+		t.Fatalf("expected restartRequired true before start, got %v", putResp["restartRequired"])
+	}
+
+	// 2. Start() binds port2 and refreshes the baseline
+	if err := srv.Start(); err != nil {
+		t.Fatalf("failed to start server: %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}()
+
+	// 3. Subsequent PUT keeping port2 now returns restartRequired: false
+	updatePayload, _ := json.Marshal(map[string]any{
+		"instanceName": "Updated Name",
+		"port":         port2,
+	})
+	putReq2 := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(updatePayload))
+	putReq2.RemoteAddr = "127.0.0.1:1234"
+	putReq2.Header.Set("Content-Type", "application/json")
+	putReq2.Header.Set("X-Api-Key", "secret-key")
+	putRec2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(putRec2, putReq2)
+	if putRec2.Code != http.StatusOK {
+		t.Fatalf("expected PUT /api/v1/config to return 200, got %d: %s", putRec2.Code, putRec2.Body.String())
+	}
+	var putResp2 map[string]any
+	_ = json.Unmarshal(putRec2.Body.Bytes(), &putResp2)
+	if restart, ok := putResp2["restartRequired"].(bool); !ok || restart {
+		t.Errorf("expected restartRequired false after Start() refreshed baseline, got %v", putResp2["restartRequired"])
 	}
 }
 

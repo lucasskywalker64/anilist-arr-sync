@@ -71,6 +71,8 @@ func (c *Config) applyField(origKey, subKey, val string) error {
 		c.Port = v
 	case "SERVER__URLBASE":
 		c.URLBase = val
+	case "SERVER__ALLOWEDHOSTS":
+		c.AllowedHosts = val
 	case "SERVER__ENABLESSL":
 		v, err := parseBool()
 		if err != nil {
@@ -95,6 +97,8 @@ func (c *Config) applyField(origKey, subKey, val string) error {
 		c.AuthenticationRequired = val
 	case "AUTH__APIKEY":
 		c.APIKey = val
+	case "AUTH__TRUSTEDNETWORKS":
+		c.TrustedNetworks = val
 
 	// Log
 	case "LOG__LEVEL":

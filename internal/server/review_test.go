@@ -43,7 +43,13 @@ func TestReviewQueueEndpoints(t *testing.T) {
 			return err
 		}
 		item2ID, _ = res2.LastInsertId()
-		return nil
+
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO synced_media (anilist_id, media_type, format, title_romaji, anilist_status, target_service, monitored_status)
+			VALUES (101, 'SERIES', 'TV', 'Frieren: Beyond Journeys End', 'CURRENT', 'NONE', 'PENDING_REVIEW'),
+			       (102, 'MOVIE', 'MOVIE', 'Spirited Away', 'PLANNING', 'NONE', 'PENDING_REVIEW');
+		`)
+		return err
 	})
 	if err != nil {
 		t.Fatalf("failed to seed review queue: %v", err)
@@ -66,6 +72,40 @@ func TestReviewQueueEndpoints(t *testing.T) {
 		}
 		if len(items) != 2 {
 			t.Fatalf("expected 2 pending review items, got %d", len(items))
+		}
+	}
+
+	// 2a. POST /api/v1/review/{id}/resolve with missing ID returns 400
+	{
+		// SERIES without tvdbId
+		badSeries, _ := json.Marshal(map[string]any{
+			"mediaType": "SERIES",
+			"tvdbId":    0,
+			"seasons":   "1",
+		})
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/review/%d/resolve", item1ID), bytes.NewReader(badSeries))
+		req.RemoteAddr = "127.0.0.1:12345"
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Api-Key", "test-api-key")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for SERIES without tvdbId, got %d", rec.Code)
+		}
+
+		// MOVIE without tmdbId
+		badMovie, _ := json.Marshal(map[string]any{
+			"mediaType": "MOVIE",
+			"tmdbId":    0,
+		})
+		req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/review/%d/resolve", item2ID), bytes.NewReader(badMovie))
+		req.RemoteAddr = "127.0.0.1:12345"
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Api-Key", "test-api-key")
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for MOVIE without tmdbId, got %d", rec.Code)
 		}
 	}
 
@@ -122,6 +162,26 @@ func TestReviewQueueEndpoints(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to query review_queue: %v", err)
 		}
+
+		// Verify synced_media row for 101 moved from PENDING_REVIEW to UNMONITORED with mapping populated
+		err = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+			var monStatus, targetSvc string
+			var tvdbID int
+			var arrTitle, seasons sql.NullString
+			err := q.QueryRowContext(ctx, "SELECT monitored_status, target_service, tvdb_id, arr_title, seasons FROM synced_media WHERE anilist_id = 101;").
+				Scan(&monStatus, &targetSvc, &tvdbID, &arrTitle, &seasons)
+			if err != nil {
+				return err
+			}
+			if monStatus != "UNMONITORED" || targetSvc != "SONARR" || tvdbID != 414833 || arrTitle.String != "Frieren" || seasons.String != "1" {
+				t.Errorf("unexpected synced_media after resolve: status=%s, service=%s, tvdb=%d, arrTitle=%v, seasons=%v",
+					monStatus, targetSvc, tvdbID, arrTitle, seasons)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("failed to query synced_media after resolve: %v", err)
+		}
 	}
 
 	// 3. POST /api/v1/review/{id}/ignore inserts into ignored_titles and resolves queue item
@@ -172,6 +232,22 @@ func TestReviewQueueEndpoints(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to query review_queue: %v", err)
 		}
+
+		// Verify synced_media row for 102 moved to IGNORED
+		err = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+			var monStatus string
+			err := q.QueryRowContext(ctx, "SELECT monitored_status FROM synced_media WHERE anilist_id = 102;").Scan(&monStatus)
+			if err != nil {
+				return err
+			}
+			if monStatus != "IGNORED" {
+				t.Errorf("expected synced_media monitored_status IGNORED, got %s", monStatus)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("failed to query synced_media: %v", err)
+		}
 	}
 
 	// 4. GET /api/v1/review should now return 0 items
@@ -185,6 +261,148 @@ func TestReviewQueueEndpoints(t *testing.T) {
 		_ = json.Unmarshal(rec.Body.Bytes(), &items)
 		if len(items) != 0 {
 			t.Errorf("expected 0 pending items, got %d", len(items))
+		}
+	}
+}
+
+func TestIgnoredTitlesEndpoints(t *testing.T) {
+	db := newTestStorage(t)
+	cfg := config.NewDefault()
+	cfg.AuthenticationRequired = "DisabledForLocalAddresses"
+	cfg.APIKey = "test-api-key"
+
+	srv := NewServer(cfg, "", db, nil, nil)
+	handler := srv.Handler()
+
+	// 1. GET /api/v1/ignored initially empty
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ignored", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var list []map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+			t.Fatalf("failed to parse JSON: %v", err)
+		}
+		if list == nil {
+			t.Fatalf("expected a JSON array, got null")
+		}
+		if len(list) != 0 {
+			t.Errorf("expected empty list, got %d items", len(list))
+		}
+	}
+
+	// Seed an ignored title and matching synced_media row
+	err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		if _, execErr := tx.ExecContext(ctx, `
+			INSERT INTO ignored_titles (anilist_id, title_romaji, reason)
+			VALUES (12345, 'Steins;Gate', 'Already watched');
+		`); execErr != nil {
+			return execErr
+		}
+		_, execErr := tx.ExecContext(ctx, `
+			INSERT INTO synced_media (anilist_id, media_type, format, title_romaji, anilist_status, target_service, monitored_status)
+			VALUES (12345, 'SERIES', 'TV', 'Steins;Gate', 'CURRENT', 'NONE', 'IGNORED');
+		`)
+		return execErr
+	})
+	if err != nil {
+		t.Fatalf("failed to insert ignored title: %v", err)
+	}
+
+	// 2. GET /api/v1/ignored returns the seeded title
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ignored", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var list []map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+			t.Fatalf("failed to parse JSON: %v", err)
+		}
+		if len(list) != 1 {
+			t.Fatalf("expected 1 item, got %d", len(list))
+		}
+		if int(list[0]["anilistId"].(float64)) != 12345 {
+			t.Errorf("expected anilistId 12345, got %v", list[0]["anilistId"])
+		}
+		if list[0]["titleRomaji"] != "Steins;Gate" {
+			t.Errorf("expected titleRomaji Steins;Gate, got %v", list[0]["titleRomaji"])
+		}
+		if list[0]["reason"] != "Already watched" {
+			t.Errorf("expected reason Already watched, got %v", list[0]["reason"])
+		}
+	}
+
+	// 3. DELETE /api/v1/ignored/12345 removes title
+	{
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ignored/12345", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		req.Header.Set("X-Api-Key", "test-api-key")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to parse JSON: %v", err)
+		}
+		if resp["status"] != "DELETED" {
+			t.Errorf("expected status DELETED, got %v", resp["status"])
+		}
+
+		// Verify table is empty
+		err = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+			var count int
+			qErr := q.QueryRowContext(ctx, "SELECT COUNT(*) FROM ignored_titles WHERE anilist_id = 12345;").Scan(&count)
+			if qErr != nil {
+				return qErr
+			}
+			if count != 0 {
+				t.Errorf("expected 0 rows in ignored_titles, got %d", count)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("failed to query ignored_titles: %v", err)
+		}
+
+		// Verify synced_media row moved from IGNORED to UNMONITORED
+		err = db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+			var monStatus string
+			if qErr := q.QueryRowContext(ctx, "SELECT monitored_status FROM synced_media WHERE anilist_id = 12345;").Scan(&monStatus); qErr != nil {
+				return qErr
+			}
+			if monStatus != "UNMONITORED" {
+				t.Errorf("expected synced_media monitored_status = UNMONITORED after delete ignored, got %s", monStatus)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("failed to query synced_media after delete ignored: %v", err)
+		}
+	}
+
+	// 4. DELETE /api/v1/ignored/12345 again returns 404
+	{
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/ignored/12345", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		req.Header.Set("X-Api-Key", "test-api-key")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("expected 404, got %d: %s", rec.Code, rec.Body.String())
 		}
 	}
 }
