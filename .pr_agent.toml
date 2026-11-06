@@ -1,6 +1,7 @@
 [config]
-ai_timeout = 600
-reasoning_effort = "high"
+model = "vertex_ai/gemini-4-argon"
+ai_timeout = 900
+reasoning_effort = "medium"
 max_model_tokens = 256000
 
 patch_extra_lines_before = 20
