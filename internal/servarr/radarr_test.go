@@ -25,16 +25,19 @@ func TestRadarrClient_LookupMovieByTMDBID(t *testing.T) {
 				return
 			}
 
-			// Radarr v3 lookup by tmdbId
-			if r.URL.Path == "/api/v3/movie/lookup/tmdb" && r.URL.Query().Get("tmdbId") == "508947" {
+			if r.URL.Path == "/api/v3/movie" && r.URL.Query().Get("tmdbId") == "508947" {
 				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(servarr.Movie{
+				_ = json.NewEncoder(w).Encode([]servarr.Movie{{
+					ID:               42,
 					TMDBID:           508947,
 					Title:            "Turning Red",
 					Year:             2022,
 					QualityProfileID: 1,
 					Monitored:        true,
-				})
+					Tags:             []int{7},
+					HasFile:          true,
+					MovieFileID:      99,
+				}})
 				return
 			}
 			http.NotFound(w, r)
@@ -59,11 +62,15 @@ func TestRadarrClient_LookupMovieByTMDBID(t *testing.T) {
 		if movie.Title != "Turning Red" {
 			t.Fatalf("expected title 'Turning Red', got %q", movie.Title)
 		}
+		if movie.ID != 42 || movie.MovieFileID != 99 || !movie.HasFile || len(movie.Tags) != 1 || movie.Tags[0] != 7 {
+			t.Fatalf("library state missing: %+v", movie)
+		}
 	})
 
 	t.Run("returns ErrNotFound when movie not found", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.NotFound(w, r)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]servarr.Movie{})
 		}))
 		defer srv.Close()
 
@@ -81,13 +88,9 @@ func TestRadarrClient_LookupMovieByTMDBID(t *testing.T) {
 		}
 	})
 
-	t.Run("returns ErrNotFound when fallback term search does not match tmdb id", func(t *testing.T) {
+	t.Run("returns ErrNotFound when library response does not match tmdb id", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/api/v3/movie/lookup/tmdb" {
-				http.NotFound(w, r)
-				return
-			}
-			if r.URL.Path == "/api/v3/movie/lookup" {
+			if r.URL.Path == "/api/v3/movie" {
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode([]servarr.Movie{
 					{TMDBID: 11111, Title: "Some Other Movie"},

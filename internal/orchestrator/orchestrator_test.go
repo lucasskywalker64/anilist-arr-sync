@@ -81,9 +81,7 @@ func setupMockRadarr(t *testing.T) *httptest.Server {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
 			_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 1, Label: "anilist-sync"}})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/lookup/tmdb":
-			http.NotFound(w, r)
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/lookup":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
 			_ = json.NewEncoder(w).Encode([]servarr.Movie{})
 		default:
 			http.NotFound(w, r)
@@ -373,9 +371,7 @@ func TestSync_DryRunStagesActionsAndAppliesOnConfirmation(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
 			_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 1, Label: "anilist-sync"}})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/lookup/tmdb":
-			http.NotFound(w, r)
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/lookup":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
 			_ = json.NewEncoder(w).Encode([]servarr.Movie{})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/movie":
 			radarrAddCount++
@@ -1011,25 +1007,25 @@ func TestSync_ActiveMode_UnmonitorDroppedOnlyWhenEnabledAndTagged(t *testing.T) 
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
 			_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 42, Label: "anilist-sync"}})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/lookup/tmdb":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
 			if r.URL.Query().Get("tmdbId") == "20202" {
-				_ = json.NewEncoder(w).Encode(servarr.Movie{
+				_ = json.NewEncoder(w).Encode([]servarr.Movie{{
 					ID:        992,
 					TMDBID:    20202,
 					Title:     "Dropped Movie Managed",
 					Monitored: true,
 					Tags:      []int{42}, // Tagged!
-				})
+				}})
 				return
 			}
 			if r.URL.Query().Get("tmdbId") == "30303" {
-				_ = json.NewEncoder(w).Encode(servarr.Movie{
+				_ = json.NewEncoder(w).Encode([]servarr.Movie{{
 					ID:        993,
 					TMDBID:    30303,
 					Title:     "Dropped Movie Untagged",
 					Monitored: true,
 					Tags:      []int{}, // Untagged!
-				})
+				}})
 				return
 			}
 			http.NotFound(w, r)
@@ -1119,9 +1115,7 @@ func TestSync_ActiveModeRadarr_AdditiveAdditionAndSearchDispatch(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
 			_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 42, Label: "anilist-sync"}})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/lookup/tmdb":
-			http.NotFound(w, r)
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/lookup":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
 			_ = json.NewEncoder(w).Encode([]servarr.Movie{})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/movie":
 			addedMovie = true
@@ -1447,12 +1441,12 @@ func TestSync_UnmonitorZeroTagDoesNotMatchUntagged(t *testing.T) {
 	radarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/lookup/tmdb":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
 			// Movie has tag 0
-			_ = json.NewEncoder(w).Encode(servarr.Movie{
+			_ = json.NewEncoder(w).Encode([]servarr.Movie{{
 				ID: 995, TMDBID: 20203, Title: "Movie Untagged Zero", Monitored: true,
 				Tags: []int{0},
-			})
+			}})
 		case r.Method == http.MethodPut && r.URL.Path == "/api/v3/movie":
 			radarrUpdated = true
 			http.Error(w, "should not be updated", http.StatusBadRequest)
@@ -1635,7 +1629,7 @@ func TestSync_SyncedMedia_ServarrAPIErrorNoUpsert(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
 			_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 1, Label: "anilist-sync"}})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/lookup/tmdb":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 		default:
 			http.NotFound(w, r)
@@ -1703,14 +1697,14 @@ func TestSync_SyncedMedia_StatusDropped_UnmonitorDroppedFalse(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
 			_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 1, Label: "anilist-sync"}})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/lookup/tmdb":
-			_ = json.NewEncoder(w).Encode(servarr.Movie{
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
+			_ = json.NewEncoder(w).Encode([]servarr.Movie{{
 				ID:        777,
 				TMDBID:    55558,
 				Title:     "Dropped Keep Monitored Movie",
 				Monitored: true,
 				Tags:      []int{1},
-			})
+			}})
 		default:
 			http.NotFound(w, r)
 		}
@@ -2346,8 +2340,8 @@ func TestSync_DroppedAndCompleted_Cleanup_SonarrAndRadarr(t *testing.T) {
 			switch {
 			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
 				_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 5, Label: "anilist-sync"}})
-			case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v3/movie/lookup"):
-				_ = json.NewEncoder(w).Encode(servarr.Movie{
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
+				_ = json.NewEncoder(w).Encode([]servarr.Movie{{
 					ID:          1,
 					TMDBID:      80001,
 					Title:       "Dropped Movie",
@@ -2355,7 +2349,7 @@ func TestSync_DroppedAndCompleted_Cleanup_SonarrAndRadarr(t *testing.T) {
 					Tags:        []int{5}, // Managed tag
 					HasFile:     true,
 					MovieFileID: 9999,
-				})
+				}})
 			case r.Method == http.MethodPut && r.URL.Path == "/api/v3/movie":
 				callLog = append(callLog, "unmonitor_movie")
 				_ = json.NewEncoder(w).Encode(servarr.Movie{ID: 1, Monitored: false})
@@ -2447,8 +2441,8 @@ func TestSync_DroppedAndCompleted_Cleanup_SonarrAndRadarr(t *testing.T) {
 			switch {
 			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
 				_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 5, Label: "anilist-sync"}})
-			case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v3/movie/lookup"):
-				_ = json.NewEncoder(w).Encode(servarr.Movie{
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
+				_ = json.NewEncoder(w).Encode([]servarr.Movie{{
 					ID:          10,
 					TMDBID:      90001,
 					Title:       "Dry Run Movie",
@@ -2456,7 +2450,7 @@ func TestSync_DroppedAndCompleted_Cleanup_SonarrAndRadarr(t *testing.T) {
 					Tags:        []int{5},
 					HasFile:     true,
 					MovieFileID: 5555,
-				})
+				}})
 			default:
 				callsMade = append(callsMade, r.Method+" "+r.URL.Path)
 				http.NotFound(w, r)
@@ -2789,6 +2783,16 @@ func TestSync_WatchedEpisodeUnmonitoringAndPruning(t *testing.T) {
 		applySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
+				_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 15, Label: "anilist-sync"}})
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/series/2":
+				_ = json.NewEncoder(w).Encode(servarr.Series{ID: 2, TVDBID: 60002, Tags: []int{15}})
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
+				_ = json.NewEncoder(w).Encode([]servarr.Episode{
+					{ID: 1, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 1, Monitored: !appliedUnmonitor, HasFile: true, EpisodeFileID: 501},
+					{ID: 2, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 2, Monitored: !appliedUnmonitor, HasFile: true, EpisodeFileID: 502},
+					{ID: 3, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 3, Monitored: !appliedUnmonitor, HasFile: true, EpisodeFileID: 503},
+				})
 			case r.Method == http.MethodPut && r.URL.Path == "/api/v3/episode/monitor":
 				appliedUnmonitor = true
 				_ = json.NewEncoder(w).Encode([]any{})
