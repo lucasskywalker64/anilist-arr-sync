@@ -141,10 +141,42 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   return {} as T;
 }
 
+// A healthy response from the previous boot does not mean restart has finished.
+export async function waitForRestart(previousInstance: string, reconnectUrl: string, signal?: AbortSignal): Promise<void> {
+  while (!signal?.aborted) {
+    try {
+      const response = await fetch(`${reconnectUrl}api/v1/health`, {
+        cache: 'no-store', credentials: 'omit',
+        signal: AbortSignal.any([AbortSignal.timeout(3000), ...(signal ? [signal] : [])]),
+      });
+      if (response.ok) {
+        const health = await response.json();
+        if (health.status === 'ok' && health.instanceId && health.instanceId !== previousInstance) return;
+      }
+    } catch {
+      // Listener downtime, proxy errors, and request timeouts are expected here.
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  throw new DOMException('Restart polling cancelled', 'AbortError');
+}
+
 export const api = {
   // System Health & Version
-  async getHealth(): Promise<{ status: string; version: string }> {
+  async getHealth(): Promise<{ status: string; version: string; instanceId: string }> {
     return request('/api/v1/health');
+  },
+
+  async getSystemStatus(): Promise<{ isContainerized: boolean; instanceId: string; version: string; os: string; architecture: string }> {
+    return request('/api/v1/system/status');
+  },
+
+  async restart(): Promise<{ restarting: boolean; instanceId: string; reconnectUrl: string }> {
+    return request('/api/v1/system/restart', { method: 'POST' });
+  },
+
+  async shutdown(): Promise<{ shuttingDown: boolean }> {
+    return request('/api/v1/system/shutdown', { method: 'POST' });
   },
 
   // Auth

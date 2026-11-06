@@ -573,7 +573,18 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		(s.boundBindAddress != next.BindAddress) ||
 		(s.boundURLBase != next.URLBase) ||
 		(s.boundEnableSsl != next.EnableSsl) ||
-		(s.boundSslPort != next.SslPort)
+		(s.boundSslPort != next.SslPort) ||
+		(s.cfg.SslCertPath != next.SslCertPath) || (s.cfg.SslKeyPath != next.SslKeyPath) ||
+		(s.cfg.AniListUsername != next.AniListUsername) ||
+		(s.cfg.SonarrURL != next.SonarrURL) || (s.cfg.SonarrAPIKey != next.SonarrAPIKey) ||
+		(s.cfg.RadarrURL != next.RadarrURL) || (s.cfg.RadarrAPIKey != next.RadarrAPIKey) ||
+		(s.cfg.DatabasePath != next.DatabasePath) ||
+		(s.cfg.BackupFolder != next.BackupFolder) || (s.cfg.BackupRetention != next.BackupRetention) ||
+		(s.cfg.UseProxy != next.UseProxy) || (s.cfg.ProxyType != next.ProxyType) ||
+		(s.cfg.ProxyHostname != next.ProxyHostname) || (s.cfg.ProxyPort != next.ProxyPort) ||
+		(s.cfg.ProxyUsername != next.ProxyUsername) || (s.cfg.ProxyPassword != next.ProxyPassword) ||
+		(s.cfg.ProxyIgnoredAddresses != next.ProxyIgnoredAddresses) ||
+		(s.cfg.ProxyBypassLocalAddresses != next.ProxyBypassLocalAddresses)
 
 	*s.cfg = next
 	s.trustedNets = newTrustedNets
@@ -595,18 +606,26 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 // handleStartSync triggers a manual sync run in the background.
 func (s *Server) handleStartSync(w http.ResponseWriter, _ *http.Request) {
+	s.workMu.Lock()
+	defer s.workMu.Unlock()
+	if s.stopping {
+		s.writeJSONError(w, http.StatusServiceUnavailable, "server is stopping")
+		return
+	}
 	if s.orch == nil {
 		s.writeJSONError(w, http.StatusBadRequest, "orchestrator not configured")
 		return
 	}
 
-	result, err := s.orch.StartSync(context.Background(), orchestrator.TriggerManualWeb)
+	result, err := s.orch.StartSync(s.workCtx, orchestrator.TriggerManualWeb)
 	if err != nil {
 		s.writeJSONError(w, http.StatusConflict, err.Error())
 		return
 	}
 
+	s.work.Add(1)
 	go func() {
+		defer s.work.Done()
 		completed := <-result
 		if completed.Report != nil {
 			s.syncMu.Lock()

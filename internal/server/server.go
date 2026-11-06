@@ -44,6 +44,14 @@ type Server struct {
 	cleanURLBase string
 	webFS        fs.FS
 	errChan      chan error
+	lifecycle    chan LifecycleAction
+	workCtx      context.Context
+	workCancel   context.CancelFunc
+	workMu       sync.Mutex
+	work         sync.WaitGroup
+	stopping     bool
+	instanceID   string
+	version      string
 
 	httpServer  *http.Server
 	httpsServer *http.Server
@@ -78,6 +86,7 @@ func NewServer(
 	backupEngine *backup.Engine,
 ) *Server {
 	cleanBase := normalizeURLBase(cfg.URLBase)
+	workCtx, workCancel := context.WithCancel(context.Background())
 
 	var notifStore *notification.Store
 	var notifDispatcher *notification.Dispatcher
@@ -121,6 +130,11 @@ func NewServer(
 		cleanURLBase:     cleanBase,
 		webFS:            defaultWebFS,
 		errChan:          make(chan error, 2),
+		lifecycle:        make(chan LifecycleAction, 1),
+		workCtx:          workCtx,
+		workCancel:       workCancel,
+		instanceID:       fmt.Sprintf("%d", time.Now().UnixNano()),
+		version:          "1.0.0",
 		boundBindAddress: bindAddr,
 		boundPort:        port,
 		boundURLBase:     urlBase,
@@ -320,6 +334,7 @@ func (s *Server) Start() error {
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
+		BaseContext:       func(net.Listener) context.Context { return s.workCtx },
 	}
 
 	httpListener, err := net.Listen("tcp", httpAddr)
@@ -355,6 +370,7 @@ func (s *Server) Start() error {
 			TLSConfig:         tlsConfig,
 			ReadHeaderTimeout: 10 * time.Second,
 			IdleTimeout:       120 * time.Second,
+			BaseContext:       func(net.Listener) context.Context { return s.workCtx },
 		}
 
 		httpsListener, listenErr := tls.Listen("tcp", httpsAddr, tlsConfig)
@@ -378,22 +394,38 @@ func (s *Server) Start() error {
 
 // Shutdown gracefully terminates HTTP and HTTPS listeners.
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.workMu.Lock()
+	s.stopping = true
+	s.workCancel()
+	s.workMu.Unlock()
 	var errs []error
 	if s.httpServer != nil {
 		if err := s.httpServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			_ = s.httpServer.Close()
 			errs = append(errs, fmt.Errorf("http shutdown: %w", err))
 		}
 	}
 	if s.httpsServer != nil {
 		if err := s.httpsServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			_ = s.httpsServer.Close()
 			errs = append(errs, fmt.Errorf("https shutdown: %w", err))
 		}
+	}
+	done := make(chan struct{})
+	go func() { s.work.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		errs = append(errs, ctx.Err())
 	}
 	return errors.Join(errs...)
 }
 
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
+	mux.HandleFunc("GET /api/v1/system/status", s.handleSystemStatus)
+	mux.HandleFunc("POST /api/v1/system/restart", s.handleRestart)
+	mux.HandleFunc("POST /api/v1/system/shutdown", s.handleShutdown)
 	mux.HandleFunc("POST /api/v1/auth/setup", s.handleSetup)
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
 	mux.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
@@ -549,7 +581,7 @@ func (s *Server) serveIndexHTML(w http.ResponseWriter, r *http.Request) {
 
 	bootstrapData := map[string]any{
 		"urlBase": cleanBase,
-		"version": "1.0.0",
+		"version": s.version,
 		"apiKey":  apiKeyVal,
 	}
 	bootstrapJSON, err := json.Marshal(bootstrapData)
@@ -570,10 +602,14 @@ func (s *Server) serveIndexHTML(w http.ResponseWriter, r *http.Request) {
 
 // handleHealth responds with service health status and version.
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	// Public, credential-free restart probes may target a newly configured port.
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status":  "ok",
-		"version": "1.0.0",
+		"status":     "ok",
+		"version":    s.version,
+		"instanceId": s.instanceID,
 	})
 }

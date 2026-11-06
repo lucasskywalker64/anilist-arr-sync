@@ -42,7 +42,7 @@ func (w contextWriter) Write(p []byte) (int, error) {
 // Option configures optional parameters on Engine.
 type Option func(*Engine)
 
-// WithRetention sets the rolling retention count for backups.
+// WithRetention sets the rolling retention window in days.
 func WithRetention(retention int) Option {
 	return func(e *Engine) {
 		e.retention = retention
@@ -255,7 +255,7 @@ func (e *Engine) Prune(_ context.Context) ([]string, error) {
 		return nil, err
 	}
 
-	toPrune := SelectBackupsToPrune(backups, e.retention)
+	toPrune := SelectBackupsToPrune(backups, e.retention, e.nowFn())
 	var purged []string
 	for _, item := range toPrune {
 		if err := os.Remove(item.Path); err == nil {
