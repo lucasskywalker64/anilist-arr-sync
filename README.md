@@ -23,14 +23,14 @@ The header actions menu provides Restart, Shutdown, and Keyboard Shortcuts.
 Lifecycle POST endpoints accept an API key or a session with CSRF protection,
 using the existing authentication middleware. Shutdown is disabled in containers.
 Restart rebuilds dependencies and reloads configuration in the same process;
-valid browser sessions survive these restarts. A process restart or a change of
-database requires signing in again. SIGINT and SIGTERM request shutdown, with a
-15-second cleanup deadline.
+valid browser sessions survive regular restarts. A process restart, protocol
+change, or change of database requires signing in again. SIGINT and SIGTERM
+request shutdown, with a 15-second cleanup deadline.
 
 When disabling HTTPS, the runtime temporarily serves restart status at the old
 HTTPS address and automatically navigates to HTTP after the new instance is
 healthy. This status-only listener expires within one minute. If it cannot use
 the old port, or reconnection fails or times out, the overlay offers a manual
 reconnect link. Browser HTTPS enforcement and reverse proxy routing may still
-require manual intervention. Secure cookies may require a new login when
-switching to HTTP.
+require manual intervention. Protocol changes revoke old sessions so logging in
+issues cookies appropriate to the new protocol.

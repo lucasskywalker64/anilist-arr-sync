@@ -90,6 +90,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	}
 	sessions := server.NewSessionStore(24 * time.Hour)
 	sessionDatabase := ""
+	sessionSSL := false
 	var handoff *server.RestartHandoff
 	defer func() {
 		if handoff != nil {
@@ -113,10 +114,11 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 			return failRestart(err)
 		}
 		database := dataPath(paths.data, r.cfg.DatabasePath)
-		if sessionDatabase != "" && sessionDatabase != database {
+		if sessionDatabase != "" && (sessionDatabase != database || sessionSSL != r.listenerCfg.EnableSsl) {
 			sessions.RevokeAll()
 		}
 		sessionDatabase = database
+		sessionSSL = r.listenerCfg.EnableSsl
 		r.server.SetSessionStore(sessions)
 		if o.sync {
 			err := r.syncOnce(ctx, out)

@@ -131,6 +131,7 @@ func testRuntimeHTTPSDowngradeHandoff(t *testing.T, failStartup bool) {
 	cfg := config.NewDefault()
 	cfg.BindAddress, cfg.Port, cfg.SslPort = "127.0.0.1", freePort(t), freePort(t)
 	cfg.APIKey, cfg.EnableSsl, cfg.URLBase = "runtime-key", true, "/before"
+	cfg.AuthenticationRequired = "Enabled"
 	cfg.SslCertPath, cfg.SslKeyPath = filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
 	if err := os.WriteFile(cfg.SslCertPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: tlsCert.Certificate[0]}), 0600); err != nil {
 		t.Fatal(err)
@@ -165,6 +166,42 @@ func testRuntimeHTTPSDowngradeHandoff(t *testing.T, failStartup bool) {
 	defer client.CloseIdleConnections()
 	base := fmt.Sprintf("https://127.0.0.1:%d", cfg.SslPort)
 	id := waitBoot(t, client, base+"/before", "")
+	setup, err := client.Post(base+"/before/api/v1/auth/setup", "application/json", strings.NewReader(`{"username":"admin","password":"Handoff-Test-Only-2026"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if setup.StatusCode != 201 {
+		t.Fatalf("setup: %d", setup.StatusCode)
+	}
+	var session *http.Cookie
+	for _, cookie := range setup.Cookies() {
+		if cookie.Name == "anilist_sync_session" {
+			session = cookie
+		}
+	}
+	_ = setup.Body.Close()
+	if session == nil {
+		t.Fatal("missing session cookie")
+	}
+	sessionStatus := func(address string, cookie *http.Cookie) int {
+		t.Helper()
+		req, err := http.NewRequest("GET", address+"/api/v1/auth/user", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.AddCookie(cookie)
+		response, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		return response.StatusCode
+	}
+	apiCall(t, client, "POST", base+"/before/api/v1/system/restart", "")
+	id = waitBoot(t, client, base+"/before", id)
+	if code := sessionStatus(base+"/before", session); code != 200 {
+		t.Fatalf("regular HTTPS restart lost the session: %d", code)
+	}
 	settings := `{"enableSsl":false,"urlBase":"/after"}`
 	if failStartup {
 		blocked, err := net.Listen("tcp", "127.0.0.1:0")
@@ -208,11 +245,38 @@ func testRuntimeHTTPSDowngradeHandoff(t *testing.T, failStartup bool) {
 		return
 	}
 	newBase := fmt.Sprintf("http://127.0.0.1:%d/after", cfg.Port)
-	waitBoot(t, client, newBase, id)
+	id = waitBoot(t, client, newBase, id)
+	if code := sessionStatus(newBase, session); code != 401 {
+		t.Fatal("protocol change retained an old session")
+	}
+	login, err := client.Post(newBase+"/api/v1/auth/login", "application/json", strings.NewReader(`{"username":"admin","password":"Handoff-Test-Only-2026"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if login.StatusCode != 200 {
+		_ = login.Body.Close()
+		t.Fatalf("HTTP login: %d", login.StatusCode)
+	}
+	session = nil
+	for _, cookie := range login.Cookies() {
+		if cookie.Name == "anilist_sync_session" {
+			session = cookie
+		}
+	}
+	_ = login.Body.Close()
+	if session == nil || session.Secure {
+		t.Fatal("HTTP login did not issue a non-Secure session cookie")
+	}
+	if code := sessionStatus(newBase, session); code != 200 {
+		t.Fatalf("new HTTP session was not valid before enabling HTTPS: %d", code)
+	}
 	// Re-enable TLS immediately. The previous handoff must release its port.
 	if code, _ := apiCall(t, client, "PUT", newBase+"/api/v1/config", `{"enableSsl":true}`); code != 200 {
 		t.Fatalf("enable SSL: %d", code)
 	}
 	apiCall(t, client, "POST", newBase+"/api/v1/system/restart", "")
 	waitBoot(t, client, base+"/after", id)
+	if code := sessionStatus(base+"/after", session); code != 401 {
+		t.Fatal("enabling HTTPS retained an insecure HTTP session")
+	}
 }
