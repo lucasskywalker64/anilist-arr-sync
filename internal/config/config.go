@@ -90,6 +90,11 @@ type Config struct {
 	DateToleranceDays   int     `xml:"DateToleranceDays"`
 	ConfidenceThreshold float64 `xml:"ConfidenceThreshold"`
 	UnmonitorDropped    bool    `xml:"UnmonitorDropped"`
+	UnmonitorCompleted  bool    `xml:"UnmonitorCompleted"`
+	DeleteDropped       bool    `xml:"DeleteDropped"`
+	DeleteCompleted     bool    `xml:"DeleteCompleted"`
+	UnmonitorWatched    bool    `xml:"UnmonitorWatched"`
+	DeleteWatched       bool    `xml:"DeleteWatched"`
 	FirstRunDryRun      bool    `xml:"FirstRunDryRun"`
 }
 
@@ -151,6 +156,11 @@ func NewDefault() *Config {
 		DateToleranceDays:          14,
 		ConfidenceThreshold:        0.60,
 		UnmonitorDropped:           false,
+		UnmonitorCompleted:         false,
+		DeleteDropped:              false,
+		DeleteCompleted:            false,
+		UnmonitorWatched:           false,
+		DeleteWatched:              false,
 		FirstRunDryRun:             true,
 	}
 }

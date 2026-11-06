@@ -115,9 +115,17 @@ func (m Media) CoverImageURL() string {
 
 // MediaListEntry represents an individual entry in a user's AniList media collection.
 type MediaListEntry struct {
-	ID     int             `json:"id"`
-	Status MediaListStatus `json:"status"`
-	Media  Media           `json:"media"`
+	ID       int             `json:"id"`
+	Status   MediaListStatus `json:"status"`
+	Progress int             `json:"progress"`
+	Media    Media           `json:"media"`
+}
+
+// MediaListOverviewEntry represents minimal user watchlist status and progress.
+type MediaListOverviewEntry struct {
+	MediaID  int             `json:"mediaId"`
+	Status   MediaListStatus `json:"status"`
+	Progress int             `json:"progress"`
 }
 
 // WatchlistFilter defines the parameters used to filter user watchlist queries.
@@ -318,6 +326,7 @@ query ($userName: String, $type: MediaType, $statusIn: [MediaListStatus], $chunk
       entries {
         id
         status
+        progress
         media {
           id
           idMal
@@ -375,6 +384,187 @@ type graphQLResponse struct {
 	Errors []struct {
 		Message string `json:"message"`
 	} `json:"errors"`
+}
+
+const overviewQuery = `
+query ($userName: String, $type: MediaType, $chunk: Int) {
+  MediaListCollection(userName: $userName, type: $type, chunk: $chunk) {
+    hasNextChunk
+    lists {
+      name
+      status
+      entries {
+        id
+        mediaId
+        status
+        progress
+        media {
+          id
+        }
+      }
+    }
+  }
+}
+`
+
+type overviewVariables struct {
+	UserName string `json:"userName"`
+	Type     string `json:"type"`
+	Chunk    int    `json:"chunk"`
+}
+
+type overviewGraphQLRequest struct {
+	Query     string            `json:"query"`
+	Variables overviewVariables `json:"variables"`
+}
+
+type overviewGraphQLResponse struct {
+	Data struct {
+		MediaListCollection *struct {
+			HasNextChunk bool `json:"hasNextChunk"`
+			Lists        []struct {
+				Name    string          `json:"name"`
+				Status  MediaListStatus `json:"status"`
+				Entries []struct {
+					ID       int             `json:"id"`
+					MediaID  int             `json:"mediaId"`
+					Status   MediaListStatus `json:"status"`
+					Progress int             `json:"progress"`
+					Media    *struct {
+						ID int `json:"id"`
+					} `json:"media"`
+				} `json:"entries"`
+			} `json:"lists"`
+		} `json:"MediaListCollection"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+// FetchUserMediaListOverview queries AniList for the user's entire collection with minimal fields.
+func (c *Client) FetchUserMediaListOverview(ctx context.Context, username string) ([]MediaListOverviewEntry, error) {
+	if strings.TrimSpace(username) == "" {
+		return nil, errors.New("username is required")
+	}
+
+	var allEntries []MediaListOverviewEntry
+	seenMediaIDs := make(map[int]bool)
+	chunk := 1
+
+	for {
+		vars := overviewVariables{
+			UserName: username,
+			Type:     "ANIME",
+			Chunk:    chunk,
+		}
+
+		reqBody := overviewGraphQLRequest{
+			Query:     overviewQuery,
+			Variables: vars,
+		}
+
+		encoded, err := json.Marshal(reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("marshal graphql request: %w", err)
+		}
+
+		var resp *http.Response
+		for attempt := 0; attempt <= c.maxRetries; attempt++ {
+			if err := c.rateLimiter.wait(ctx); err != nil {
+				return nil, fmt.Errorf("rate limiter wait: %w", err)
+			}
+
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(encoded))
+			if err != nil {
+				return nil, fmt.Errorf("create http request: %w", err)
+			}
+
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("User-Agent", c.userAgent)
+
+			resp, err = c.httpClient.Do(req)
+			if err != nil {
+				return nil, fmt.Errorf("execute http request: %w", err)
+			}
+
+			if resp.StatusCode == http.StatusTooManyRequests {
+				retryAfterHeader := resp.Header.Get("Retry-After")
+				_ = resp.Body.Close()
+				if attempt == c.maxRetries {
+					return nil, fmt.Errorf("rate limit exceeded (HTTP 429): max retries (%d) reached", c.maxRetries)
+				}
+
+				waitDuration := c.parseRetryAfter(retryAfterHeader, attempt)
+				timer := time.NewTimer(waitDuration)
+
+				select {
+				case <-timer.C:
+					timer.Stop()
+					continue
+				case <-ctx.Done():
+					timer.Stop()
+					return nil, ctx.Err()
+				}
+			}
+			break
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		}
+
+		var gqlResp overviewGraphQLResponse
+		err = json.NewDecoder(resp.Body).Decode(&gqlResp)
+		_ = resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("decode graphql response: %w", err)
+		}
+
+		if len(gqlResp.Errors) > 0 {
+			errs := make([]error, len(gqlResp.Errors))
+			for i, e := range gqlResp.Errors {
+				errs[i] = errors.New(e.Message)
+			}
+			return nil, fmt.Errorf("graphql error: %w", errors.Join(errs...))
+		}
+
+		if gqlResp.Data.MediaListCollection == nil {
+			return nil, errors.New("media list collection not found or inaccessible")
+		}
+
+		for _, l := range gqlResp.Data.MediaListCollection.Lists {
+			for _, entry := range l.Entries {
+				mediaID := entry.MediaID
+				if mediaID == 0 && entry.Media != nil {
+					mediaID = entry.Media.ID
+				}
+				if mediaID == 0 || seenMediaIDs[mediaID] {
+					continue
+				}
+				seenMediaIDs[mediaID] = true
+
+				entryStatus := entry.Status
+				if entryStatus == "" {
+					entryStatus = l.Status
+				}
+
+				allEntries = append(allEntries, MediaListOverviewEntry{
+					MediaID:  mediaID,
+					Status:   entryStatus,
+					Progress: entry.Progress,
+				})
+			}
+		}
+
+		if !gqlResp.Data.MediaListCollection.HasNextChunk {
+			break
+		}
+		chunk++
+	}
+
+	return allEntries, nil
 }
 
 // FetchWatchlist queries AniList for the user's media collection applying the provided filters.

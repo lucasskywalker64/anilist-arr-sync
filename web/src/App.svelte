@@ -12,13 +12,15 @@
   import SystemView from './components/views/SystemView.svelte';
   import LoginModal from './components/views/LoginModal.svelte';
   import { api, getBaseUrl, setApiKey } from './lib/api';
-  import type { ReviewItem, StagedAction, OverrideItem, CurrentUser } from './lib/types';
+  import type { ReviewItem, StagedAction, OverrideItem, CurrentUser, LibraryStats } from './lib/types';
 
   let currentRoute = '/';
   let currentUser: CurrentUser | null = null;
   let needsLogin = false;
   let isSetupMode = false;
   let isSyncing = false;
+  let completedSyncRunId = 0;
+  let libraryStats: LibraryStats | null = null;
   let instanceName = 'AniList-Arr-Sync';
 
   let reviewItems: ReviewItem[] = [];
@@ -85,14 +87,15 @@
 
   async function loadGlobalData() {
     try {
-      const [rev, stg, ovr, syncSt] = await Promise.allSettled([
+      const [rev, stg, ovr, syncSt, stats] = await Promise.allSettled([
         api.getReviewQueue(),
         api.getStaged(),
         api.getOverrides(),
         api.getSyncStatus(),
+        api.getLibraryStats(),
       ]);
 
-      const settled = [rev, stg, ovr, syncSt];
+      const settled = [rev, stg, ovr, syncSt, stats];
       for (const res of settled) {
         if (res.status === 'rejected') {
           const reason = res.reason;
@@ -106,7 +109,11 @@
       if (rev.status === 'fulfilled') reviewItems = rev.value;
       if (stg.status === 'fulfilled') stagedActions = stg.value;
       if (ovr.status === 'fulfilled') overrides = ovr.value;
-      if (syncSt.status === 'fulfilled') isSyncing = syncSt.value.isSyncing;
+      if (syncSt.status === 'fulfilled') {
+        isSyncing = syncSt.value.isSyncing;
+        if (!isSyncing) completedSyncRunId = syncSt.value.lastSync?.runId ?? 0;
+      }
+      libraryStats = stats.status === 'fulfilled' ? stats.value : null;
 
       try {
         const cfg = await api.getConfig();
@@ -178,6 +185,8 @@
     <!-- View Switcher -->
     {#if currentRoute === '/library'}
       <LibraryView
+        stats={libraryStats}
+        {completedSyncRunId}
         on:navigate={(e) => navigate(e.detail)}
         on:refresh={loadGlobalData}
       />
@@ -223,6 +232,7 @@
       <!-- Dashboard (handles '/' and route fallback) -->
       <SyncDashboard
         bind:isSyncing
+        {libraryStats}
         {reviewItems}
         {stagedActions}
         {overrides}

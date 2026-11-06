@@ -8,6 +8,36 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
 )
 
+func hasMidseasonBoundary(episodes []servarr.Episode, targetSeason int) bool {
+	for _, ep := range episodes {
+		if ep.SeasonNumber == targetSeason && strings.EqualFold(strings.TrimSpace(ep.FinaleType), "midseason") {
+			return true
+		}
+	}
+	return false
+}
+
+// scopedEpisodeFileIDs excludes files shared with any episode outside the scope.
+func scopedEpisodeFileIDs(episodes []servarr.Episode, episodeIDs []int) []int {
+	var fileIDs []int
+	for _, ep := range episodes {
+		if !containsInt(episodeIDs, ep.ID) || !ep.HasFile || ep.EpisodeFileID <= 0 || containsInt(fileIDs, ep.EpisodeFileID) {
+			continue
+		}
+		shared := false
+		for _, other := range episodes {
+			if other.EpisodeFileID == ep.EpisodeFileID && !containsInt(episodeIDs, other.ID) {
+				shared = true
+				break
+			}
+		}
+		if !shared {
+			fileIDs = append(fileIDs, ep.EpisodeFileID)
+		}
+	}
+	return fileIDs
+}
+
 // FindSubSeasonEpisodeSlice partitions the episodes of targetSeason into sub-season slices
 // based on Sonarr's midseason finale indicators. If the season is split into multiple parts,
 // it selects the slice corresponding to subSeasonNumber (1-indexed) or matching startDate

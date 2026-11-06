@@ -36,7 +36,7 @@ export interface OverrideItem {
 
 export interface StagedAction {
   id: number;
-  actionType: 'ADD_SERIES' | 'ADD_MOVIE' | 'MONITOR_SEASON' | 'UNMONITOR_SEASON' | 'UNMONITOR_MOVIE';
+  actionType: 'ADD_SERIES' | 'ADD_MOVIE' | 'MONITOR_SEASON' | 'UNMONITOR_SEASON' | 'UNMONITOR_MOVIE' | 'DELETE_FILE' | 'UNMONITOR_EPISODE' | 'DELETE_EPISODE_FILE';
   mediaType: 'SERIES' | 'MOVIE';
   title: string;
   targetService?: string;
@@ -127,6 +127,11 @@ export interface AppConfig {
   dateToleranceDays: number;
   confidenceThreshold: number;
   unmonitorDropped: boolean;
+  unmonitorCompleted?: boolean;
+  deleteDropped?: boolean;
+  deleteCompleted?: boolean;
+  unmonitorWatched?: boolean;
+  deleteWatched?: boolean;
   firstRunDryRun: boolean;
   sonarrUrl: string;
   sonarrApiKey: string;

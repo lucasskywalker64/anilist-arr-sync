@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 )
 
 // Movie represents a Radarr movie entry.
@@ -27,6 +26,8 @@ type Movie struct {
 	TitleSlug           string           `json:"titleSlug,omitempty"`
 	Year                int              `json:"year,omitempty"`
 	Tags                []int            `json:"tags,omitempty"`
+	HasFile             bool             `json:"hasFile"`
+	MovieFileID         int              `json:"movieFileId"`
 	AddOptions          *AddMovieOptions `json:"addOptions,omitempty"`
 }
 
@@ -63,34 +64,9 @@ func NewRadarrClient(baseURL, apiKey string, opts ...Option) (*RadarrClient, err
 	return &RadarrClient{Client: base}, nil
 }
 
-// LookupMovieByTMDBID looks up movie metadata from Radarr by its TMDb ID.
+// LookupMovieByTMDBID retrieves a library movie, including its tags and file ID.
 func (c *RadarrClient) LookupMovieByTMDBID(ctx context.Context, tmdbID int) (*Movie, error) {
-	endpoint := fmt.Sprintf("/api/v3/movie/lookup/tmdb?tmdbId=%d", tmdbID)
-	req, err := c.newRequest(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var movie Movie
-	_, err = c.do(req, &movie)
-	if err != nil {
-		// If lookup/tmdb returns 404, fallback to /api/v3/movie/lookup?term=tmdb:{id}
-		if errors.Is(err, ErrNotFound) {
-			return c.lookupMovieByTerm(ctx, tmdbID)
-		}
-		return nil, fmt.Errorf("lookup movie tmdb id %d: %w", tmdbID, err)
-	}
-
-	if movie.TMDBID == 0 && movie.ID == 0 {
-		return nil, ErrNotFound
-	}
-
-	return &movie, nil
-}
-
-func (c *RadarrClient) lookupMovieByTerm(ctx context.Context, tmdbID int) (*Movie, error) {
-	term := fmt.Sprintf("tmdb:%d", tmdbID)
-	endpoint := fmt.Sprintf("/api/v3/movie/lookup?term=%s", url.QueryEscape(term))
+	endpoint := fmt.Sprintf("/api/v3/movie?tmdbId=%d", tmdbID)
 	req, err := c.newRequest(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -99,7 +75,7 @@ func (c *RadarrClient) lookupMovieByTerm(ctx context.Context, tmdbID int) (*Movi
 	var movies []Movie
 	_, err = c.do(req, &movies)
 	if err != nil {
-		return nil, fmt.Errorf("lookup movie term %q: %w", term, err)
+		return nil, fmt.Errorf("lookup library movie tmdb id %d: %w", tmdbID, err)
 	}
 
 	for i := range movies {
@@ -177,4 +153,24 @@ func (c *RadarrClient) UpdateMovie(ctx context.Context, movie *Movie) (*Movie, e
 	}
 
 	return &updated, nil
+}
+
+// DeleteMovieFile deletes a movie file from Radarr.
+// HTTP 404 responses are treated as idempotent successes.
+func (c *RadarrClient) DeleteMovieFile(ctx context.Context, movieFileID int) error {
+	endpoint := fmt.Sprintf("/api/v3/moviefile/%d", movieFileID)
+	req, err := c.newRequest(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.do(req, nil)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("delete movie file %d: %w", movieFileID, err)
+	}
+
+	return nil
 }

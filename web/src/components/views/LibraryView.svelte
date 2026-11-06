@@ -30,7 +30,13 @@
   }>();
 
   let libraryItems: LibraryItem[] = [];
-  let stats: LibraryStats | null = null;
+  export let stats: LibraryStats | null = null;
+  export let completedSyncRunId = 0;
+  let seenSyncRunId = completedSyncRunId;
+  $: if (completedSyncRunId !== seenSyncRunId) {
+    seenSyncRunId = completedSyncRunId;
+    loadData();
+  }
   let loading = false;
   let itemsError = false;
   let errorMsg = '';
@@ -349,6 +355,9 @@
       {#if stats && !itemsError}
         <div class="statsBadge" title="Total synchronized library count">
           {libraryItems.length} of {stats.total}
+        </div>
+        <div class="statsBadge" title="Titles with CURRENT AniList status">
+          {stats.watchingCount} watching
         </div>
       {/if}
     </svelte:fragment>

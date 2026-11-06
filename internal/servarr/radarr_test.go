@@ -25,16 +25,19 @@ func TestRadarrClient_LookupMovieByTMDBID(t *testing.T) {
 				return
 			}
 
-			// Radarr v3 lookup by tmdbId
-			if r.URL.Path == "/api/v3/movie/lookup/tmdb" && r.URL.Query().Get("tmdbId") == "508947" {
+			if r.URL.Path == "/api/v3/movie" && r.URL.Query().Get("tmdbId") == "508947" {
 				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(servarr.Movie{
+				_ = json.NewEncoder(w).Encode([]servarr.Movie{{
+					ID:               42,
 					TMDBID:           508947,
 					Title:            "Turning Red",
 					Year:             2022,
 					QualityProfileID: 1,
 					Monitored:        true,
-				})
+					Tags:             []int{7},
+					HasFile:          true,
+					MovieFileID:      99,
+				}})
 				return
 			}
 			http.NotFound(w, r)
@@ -59,11 +62,15 @@ func TestRadarrClient_LookupMovieByTMDBID(t *testing.T) {
 		if movie.Title != "Turning Red" {
 			t.Fatalf("expected title 'Turning Red', got %q", movie.Title)
 		}
+		if movie.ID != 42 || movie.MovieFileID != 99 || !movie.HasFile || len(movie.Tags) != 1 || movie.Tags[0] != 7 {
+			t.Fatalf("library state missing: %+v", movie)
+		}
 	})
 
 	t.Run("returns ErrNotFound when movie not found", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.NotFound(w, r)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]servarr.Movie{})
 		}))
 		defer srv.Close()
 
@@ -81,13 +88,9 @@ func TestRadarrClient_LookupMovieByTMDBID(t *testing.T) {
 		}
 	})
 
-	t.Run("returns ErrNotFound when fallback term search does not match tmdb id", func(t *testing.T) {
+	t.Run("returns ErrNotFound when library response does not match tmdb id", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/api/v3/movie/lookup/tmdb" {
-				http.NotFound(w, r)
-				return
-			}
-			if r.URL.Path == "/api/v3/movie/lookup" {
+			if r.URL.Path == "/api/v3/movie" {
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode([]servarr.Movie{
 					{TMDBID: 11111, Title: "Some Other Movie"},
@@ -329,4 +332,81 @@ func TestRadarrClient_UpdateMovie(t *testing.T) {
 			t.Fatal("expected movie to be unmonitored")
 		}
 	})
+}
+
+func TestRadarrClient_DeleteMovieFile(t *testing.T) {
+	t.Run("successfully deletes movie file", func(t *testing.T) {
+		deletedFileID := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodDelete || r.URL.Path != "/api/v3/moviefile/88" {
+				t.Errorf("expected DELETE /api/v3/moviefile/88, got %s %s", r.Method, r.URL.Path)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			deletedFileID = 88
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		client, err := servarr.NewRadarrClient(srv.URL, "radarr-key")
+		if err != nil {
+			t.Fatalf("NewRadarrClient failed: %v", err)
+		}
+
+		err = client.DeleteMovieFile(context.Background(), 88)
+		if err != nil {
+			t.Fatalf("DeleteMovieFile failed: %v", err)
+		}
+		if deletedFileID != 88 {
+			t.Fatalf("expected deletedFileID 88, got %d", deletedFileID)
+		}
+	})
+
+	t.Run("treats HTTP 404 as idempotent success", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.NotFound(w, r)
+		}))
+		defer srv.Close()
+
+		client, err := servarr.NewRadarrClient(srv.URL, "radarr-key")
+		if err != nil {
+			t.Fatalf("NewRadarrClient failed: %v", err)
+		}
+
+		err = client.DeleteMovieFile(context.Background(), 999)
+		if err != nil {
+			t.Fatalf("expected nil error on 404, got %v", err)
+		}
+	})
+
+	t.Run("returns error on HTTP 500", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+
+		client, err := servarr.NewRadarrClient(srv.URL, "radarr-key")
+		if err != nil {
+			t.Fatalf("NewRadarrClient failed: %v", err)
+		}
+
+		err = client.DeleteMovieFile(context.Background(), 88)
+		if err == nil {
+			t.Fatal("expected error on 500, got nil")
+		}
+	})
+}
+
+func TestRadarrClient_MovieHasFileAndMovieFileID(t *testing.T) {
+	raw := `{"id": 1, "title": "Akira", "hasFile": true, "movieFileId": 5678}`
+	var movie servarr.Movie
+	if err := json.Unmarshal([]byte(raw), &movie); err != nil {
+		t.Fatalf("unmarshal movie: %v", err)
+	}
+	if !movie.HasFile {
+		t.Errorf("expected movie.HasFile = true")
+	}
+	if movie.MovieFileID != 5678 {
+		t.Errorf("expected movie.MovieFileID = 5678, got %d", movie.MovieFileID)
+	}
 }

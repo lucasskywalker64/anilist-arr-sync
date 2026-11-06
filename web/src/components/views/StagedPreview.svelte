@@ -230,7 +230,7 @@
                 </td>
                 <td>
                   <Label
-                    kind={action.actionType.startsWith('ADD') ? 'success' : action.actionType.startsWith('UNMONITOR') ? 'danger' : 'info'}
+                    kind={action.actionType.startsWith('ADD') ? 'success' : (action.actionType.startsWith('UNMONITOR') || action.actionType.startsWith('DELETE')) ? 'danger' : 'info'}
                     size="small"
                   >
                     {action.actionType}

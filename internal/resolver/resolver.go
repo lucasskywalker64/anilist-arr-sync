@@ -64,6 +64,15 @@ func New(db *storage.DB) *Resolver {
 // Resolve attempts to resolve an AniList media item across Tier 1 (mapping_overrides)
 // and Tier 2 (fribb_entries), diverting unmapped entries into the review queue.
 func (r *Resolver) Resolve(ctx context.Context, media anilist.Media) (*Result, error) {
+	return r.resolve(ctx, media, true)
+}
+
+// ResolveForCleanup resolves existing mappings without queueing historical imports.
+func (r *Resolver) ResolveForCleanup(ctx context.Context, media anilist.Media) (*Result, error) {
+	return r.resolve(ctx, media, false)
+}
+
+func (r *Resolver) resolve(ctx context.Context, media anilist.Media, queueReview bool) (*Result, error) {
 	normalizedFormat := router.MediaFormat(strings.ToUpper(strings.TrimSpace(media.Format)))
 	decision := router.Route(normalizedFormat)
 	if decision == router.RouteDiscard {
@@ -174,6 +183,9 @@ func (r *Resolver) Resolve(ctx context.Context, media anilist.Media) (*Result, e
 	}
 
 	// Unmapped: divert to review_queue
+	if !queueReview {
+		return &Result{}, nil
+	}
 	queueMediaType := "SERIES"
 	if decision == router.RouteRadarr {
 		queueMediaType = "MOVIE"

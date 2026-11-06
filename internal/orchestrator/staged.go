@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/anilist"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/resolver"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 )
@@ -29,6 +32,12 @@ const (
 	ActionUnmonitorSeason StagedActionType = "UNMONITOR_SEASON"
 	// ActionUnmonitorMovie represents a planned unmonitoring toggle for a Radarr movie.
 	ActionUnmonitorMovie StagedActionType = "UNMONITOR_MOVIE"
+	// ActionDeleteFile represents a planned deletion of a movie file in Radarr or episode file(s) in Sonarr.
+	ActionDeleteFile StagedActionType = "DELETE_FILE"
+	// ActionUnmonitorEpisode represents a planned unmonitoring toggle for specific episodes in Sonarr.
+	ActionUnmonitorEpisode StagedActionType = "UNMONITOR_EPISODE"
+	// ActionDeleteEpisodeFile represents a planned deletion of episode file(s) for watched episodes in Sonarr.
+	ActionDeleteEpisodeFile StagedActionType = "DELETE_EPISODE_FILE"
 )
 
 // StagedActionStatus represents the execution lifecycle of a staged action.
@@ -58,6 +67,13 @@ type StagedAction struct {
 	CreatedAt     time.Time          `json:"createdAt"`
 }
 
+// AddSeriesPayload retains watched progress when searching must follow pruning.
+type AddSeriesPayload struct {
+	servarr.AddSeriesRequest
+	WatchedEntry *anilist.MediaListEntry `json:"watchedEntry,omitempty"`
+	TargetSeason int                     `json:"targetSeason,omitempty"`
+}
+
 // MonitorSeasonPayload stores parameters for monitoring or unmonitoring a season or episode slice.
 type MonitorSeasonPayload struct {
 	SeriesID     int   `json:"seriesId"`
@@ -72,6 +88,33 @@ type UnmonitorMoviePayload struct {
 	MovieID int    `json:"movieId"`
 	TMDBID  int    `json:"tmdbId"`
 	Title   string `json:"title"`
+}
+
+// DeleteFilePayload stores parameters for deleting files in Sonarr or Radarr.
+type DeleteFilePayload struct {
+	MovieID            int    `json:"movieId,omitempty"`
+	MovieFileID        int    `json:"movieFileId,omitempty"`
+	SeriesID           int    `json:"seriesId,omitempty"`
+	EpisodeFileIDs     []int  `json:"episodeFileIds,omitempty"`
+	Title              string `json:"title,omitempty"`
+	EpisodeIDs         []int  `json:"episodeIds,omitempty"`
+	RequireUnmonitored *bool  `json:"requireUnmonitored,omitempty"`
+}
+
+// UnmonitorEpisodePayload stores parameters for unmonitoring episodes in Sonarr.
+type UnmonitorEpisodePayload struct {
+	SeriesID   int    `json:"seriesId"`
+	EpisodeIDs []int  `json:"episodeIds"`
+	Title      string `json:"title,omitempty"`
+}
+
+// DeleteEpisodeFilePayload stores parameters for deleting episode files in Sonarr.
+type DeleteEpisodeFilePayload struct {
+	SeriesID           int    `json:"seriesId"`
+	EpisodeFileIDs     []int  `json:"episodeFileIds"`
+	Title              string `json:"title,omitempty"`
+	EpisodeIDs         []int  `json:"episodeIds,omitempty"`
+	RequireUnmonitored *bool  `json:"requireUnmonitored,omitempty"`
 }
 
 // stageAction persists a planned Servarr action into staged_sync_actions.
@@ -202,10 +245,11 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		}
 
 	case ActionAddSeries:
-		var req servarr.AddSeriesRequest
-		if unmarshalErr := json.Unmarshal([]byte(action.PayloadJSON), &req); unmarshalErr != nil {
+		var payload AddSeriesPayload
+		if unmarshalErr := json.Unmarshal([]byte(action.PayloadJSON), &payload); unmarshalErr != nil {
 			return fmt.Errorf("unmarshal add series payload: %w", unmarshalErr)
 		}
+		req := payload.AddSeriesRequest
 		if o.sonarr == nil {
 			return errors.New("sonarr client is nil")
 		}
@@ -214,9 +258,28 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 				req.Tags = []int{tagID}
 			}
 		}
-		_, addErr := o.sonarr.AddSeries(ctx, req)
-		if addErr != nil {
-			return fmt.Errorf("execute add series: %w", addErr)
+		var existing *servarr.Series
+		if payload.WatchedEntry != nil {
+			var lookupErr error
+			existing, lookupErr = o.sonarr.LookupSeriesByTVDBID(ctx, req.TVDBID)
+			if lookupErr != nil && !errors.Is(lookupErr, servarr.ErrNotFound) {
+				return fmt.Errorf("lookup staged series: %w", lookupErr)
+			}
+		}
+		if existing == nil || existing.ID == 0 {
+			if _, addErr := o.sonarr.AddSeries(ctx, req); addErr != nil {
+				return fmt.Errorf("execute add series: %w", addErr)
+			}
+		}
+		if payload.WatchedEntry != nil {
+			report := &SyncReport{}
+			outcome := o.dispatchSonarrWithDryRun(ctx, *payload.WatchedEntry, &resolver.Result{TargetID: req.TVDBID, TVDBSeason: payload.TargetSeason}, report, false, true)
+			if len(report.Errors) > 0 {
+				return fmt.Errorf("prune staged series before search: %s", strings.Join(report.Errors, "; "))
+			}
+			if outcome.pendingSonarrFollowup {
+				return errors.New("waiting for Sonarr episode refresh; retry this staged action")
+			}
 		}
 		var targetSeasonStr string
 		for _, s := range req.Seasons {
@@ -292,8 +355,12 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 				return fmt.Errorf("update series season monitoring: %w", updateErr)
 			}
 		}
-		if o.cfg.SonarrSearchOnAdd && payload.SeriesID > 0 && payload.SeasonNumber > 0 {
-			_, _ = o.sonarr.SearchSeason(ctx, payload.SeriesID, payload.SeasonNumber)
+		if o.cfg.SonarrSearchOnAdd && payload.SeriesID > 0 && payload.SeasonNumber >= 0 {
+			if len(payload.EpisodeIDs) > 0 {
+				_, _ = o.sonarr.ExecuteCommand(ctx, map[string]any{"name": "EpisodeSearch", "episodeIds": payload.EpisodeIDs})
+			} else {
+				_, _ = o.sonarr.SearchSeason(ctx, payload.SeriesID, payload.SeasonNumber)
+			}
 		}
 		seasonStr := strconv.Itoa(payload.SeasonNumber)
 		syncUpdateFn = func(ctx context.Context, tx *sql.Tx) error {
@@ -387,6 +454,94 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 			return err
 		}
 
+	case ActionDeleteFile:
+		var payload DeleteFilePayload
+		if unmarshalErr := json.Unmarshal([]byte(action.PayloadJSON), &payload); unmarshalErr != nil {
+			return fmt.Errorf("unmarshal delete file payload: %w", unmarshalErr)
+		}
+		if payload.RequireUnmonitored == nil {
+			return errors.New("staged deletion predates safety checks; reject it and sync again")
+		}
+		switch action.TargetService {
+		case "RADARR":
+			if o.radarr == nil {
+				return errors.New("radarr client is nil")
+			}
+			movie, err := o.radarr.GetMovieByID(ctx, payload.MovieID)
+			if err != nil {
+				return fmt.Errorf("validate movie deletion: %w", err)
+			}
+			managed, err := o.hasManagedTag(ctx, o.radarr.Client, movie.Tags)
+			if err != nil {
+				return fmt.Errorf("validate movie managed tag: %w", err)
+			}
+			if !managed {
+				return errors.New("movie no longer has the managed tag")
+			}
+			if *payload.RequireUnmonitored && movie.Monitored {
+				return errors.New("unmonitor movie before applying file deletion")
+			}
+			if !movie.HasFile {
+				break
+			}
+			if movie.MovieFileID != payload.MovieFileID {
+				return errors.New("movie file changed since staging")
+			}
+			if payload.MovieFileID > 0 {
+				if err := o.radarr.DeleteMovieFile(ctx, payload.MovieFileID); err != nil && !errors.Is(err, servarr.ErrNotFound) {
+					return fmt.Errorf("execute delete movie file: %w", err)
+				}
+			}
+		case "SONARR":
+			if o.sonarr == nil {
+				return errors.New("sonarr client is nil")
+			}
+			fileIDs, err := o.validateEpisodeDeletion(ctx, payload.SeriesID, payload.EpisodeIDs, payload.EpisodeFileIDs, *payload.RequireUnmonitored)
+			if err != nil {
+				return err
+			}
+			for _, fileID := range fileIDs {
+				if err := o.sonarr.DeleteEpisodeFile(ctx, fileID); err != nil && !errors.Is(err, servarr.ErrNotFound) {
+					return fmt.Errorf("execute delete episode file %d: %w", fileID, err)
+				}
+			}
+		}
+
+	case ActionUnmonitorEpisode:
+		var payload UnmonitorEpisodePayload
+		if unmarshalErr := json.Unmarshal([]byte(action.PayloadJSON), &payload); unmarshalErr != nil {
+			return fmt.Errorf("unmarshal unmonitor episode payload: %w", unmarshalErr)
+		}
+		if o.sonarr == nil {
+			return errors.New("sonarr client is nil")
+		}
+		if len(payload.EpisodeIDs) > 0 {
+			if monErr := o.sonarr.MonitorEpisodes(ctx, payload.EpisodeIDs, false); monErr != nil {
+				return fmt.Errorf("execute unmonitor episodes: %w", monErr)
+			}
+		}
+
+	case ActionDeleteEpisodeFile:
+		var payload DeleteEpisodeFilePayload
+		if unmarshalErr := json.Unmarshal([]byte(action.PayloadJSON), &payload); unmarshalErr != nil {
+			return fmt.Errorf("unmarshal delete episode file payload: %w", unmarshalErr)
+		}
+		if payload.RequireUnmonitored == nil {
+			return errors.New("staged deletion predates safety checks; reject it and sync again")
+		}
+		if o.sonarr == nil {
+			return errors.New("sonarr client is nil")
+		}
+		fileIDs, err := o.validateEpisodeDeletion(ctx, payload.SeriesID, payload.EpisodeIDs, payload.EpisodeFileIDs, *payload.RequireUnmonitored)
+		if err != nil {
+			return err
+		}
+		for _, fid := range fileIDs {
+			if delErr := o.sonarr.DeleteEpisodeFile(ctx, fid); delErr != nil && !errors.Is(delErr, servarr.ErrNotFound) {
+				return fmt.Errorf("execute delete episode file %d: %w", fid, delErr)
+			}
+		}
+
 	default:
 		return fmt.Errorf("unknown action type: %s", action.ActionType)
 	}
@@ -414,6 +569,43 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		}
 		return nil
 	})
+}
+
+func (o *Orchestrator) validateEpisodeDeletion(ctx context.Context, seriesID int, episodeIDs, fileIDs []int, requireUnmonitored bool) ([]int, error) {
+	if len(episodeIDs) == 0 {
+		return nil, errors.New("staged deletion has no episode scope; reject it and sync again")
+	}
+	series, err := o.sonarr.GetSeriesByID(ctx, seriesID)
+	if err != nil {
+		return nil, fmt.Errorf("validate deletion series: %w", err)
+	}
+	managed, err := o.hasManagedTag(ctx, o.sonarr.Client, series.Tags)
+	if err != nil {
+		return nil, fmt.Errorf("validate series managed tag: %w", err)
+	}
+	if !managed {
+		return nil, errors.New("series no longer has the managed tag")
+	}
+	episodes, err := o.sonarr.GetEpisodes(ctx, seriesID)
+	if err != nil {
+		return nil, fmt.Errorf("validate deletion episodes: %w", err)
+	}
+	var presentFileIDs []int
+	for _, ep := range episodes {
+		if !containsInt(fileIDs, ep.EpisodeFileID) {
+			continue
+		}
+		if !containsInt(episodeIDs, ep.ID) {
+			return nil, fmt.Errorf("file %d includes an episode outside the approved scope", ep.EpisodeFileID)
+		}
+		if requireUnmonitored && ep.Monitored {
+			return nil, errors.New("unmonitor episodes before applying file deletion")
+		}
+		if ep.HasFile && !containsInt(presentFileIDs, ep.EpisodeFileID) {
+			presentFileIDs = append(presentFileIDs, ep.EpisodeFileID)
+		}
+	}
+	return presentFileIDs, nil
 }
 
 // RejectStagedAction marks a pending staged action as rejected.

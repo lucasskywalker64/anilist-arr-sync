@@ -919,6 +919,61 @@
           </FormGroup>
 
           <FormGroup
+            label="Unmonitor Completed"
+            helpText="Automatically unmonitor media in Sonarr/Radarr when completed on AniList"
+            isDirty={isFieldDirty("unmonitorCompleted")}
+          >
+            <CheckInput
+              checked={!!formConfig.unmonitorCompleted}
+              on:change={(e) => (formConfig.unmonitorCompleted = e.detail)}
+            />
+          </FormGroup>
+
+          <FormGroup
+            label="Delete Dropped Files"
+            helpText="Delete downloaded files in Sonarr/Radarr when media is dropped on AniList"
+            isDirty={isFieldDirty("deleteDropped")}
+          >
+            <CheckInput
+              checked={!!formConfig.deleteDropped}
+              on:change={(e) => (formConfig.deleteDropped = e.detail)}
+            />
+          </FormGroup>
+
+          <FormGroup
+            label="Delete Completed Files"
+            helpText="Delete downloaded files in Sonarr/Radarr when media is completed on AniList"
+            isDirty={isFieldDirty("deleteCompleted")}
+          >
+            <CheckInput
+              checked={!!formConfig.deleteCompleted}
+              on:change={(e) => (formConfig.deleteCompleted = e.detail)}
+            />
+          </FormGroup>
+
+          <FormGroup
+            label="Unmonitor Watched"
+            helpText="Automatically unmonitor watched episodes in Sonarr based on AniList progress"
+            isDirty={isFieldDirty("unmonitorWatched")}
+          >
+            <CheckInput
+              checked={!!formConfig.unmonitorWatched}
+              on:change={(e) => (formConfig.unmonitorWatched = e.detail)}
+            />
+          </FormGroup>
+
+          <FormGroup
+            label="Delete Watched Files"
+            helpText="Delete downloaded episode files in Sonarr for episodes watched on AniList"
+            isDirty={isFieldDirty("deleteWatched")}
+          >
+            <CheckInput
+              checked={!!formConfig.deleteWatched}
+              on:change={(e) => (formConfig.deleteWatched = e.detail)}
+            />
+          </FormGroup>
+
+          <FormGroup
             label="First Run Dry Run"
             helpText="Stage all actions for approval on the first sync cycle instead of applying immediately"
             isDirty={isFieldDirty("firstRunDryRun")}

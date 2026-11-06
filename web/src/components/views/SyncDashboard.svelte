@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, createEventDispatcher } from 'svelte';
-  import { RefreshCw, Play, AlertTriangle, Layers, ListFilter, CheckCircle, XCircle } from 'lucide-svelte';
+  import { RefreshCw, Play, AlertTriangle, Layers, ListFilter, CheckCircle, XCircle, Tv } from 'lucide-svelte';
   import PageToolbar from '../layout/PageToolbar.svelte';
   import PageToolbarButton from '../layout/PageToolbarButton.svelte';
   import Card from '../common/Card.svelte';
@@ -10,12 +10,13 @@
   import FieldSet from '../common/FieldSet.svelte';
   import DescriptionList from '../common/DescriptionList.svelte';
   import { api } from '../../lib/api';
-  import type { SyncStatus, ReviewItem, StagedAction, OverrideItem } from '../../lib/types';
+  import type { SyncStatus, ReviewItem, StagedAction, OverrideItem, LibraryStats } from '../../lib/types';
 
   export let isSyncing = false;
   export let reviewItems: ReviewItem[] = [];
   export let stagedActions: StagedAction[] = [];
   export let overrides: OverrideItem[] = [];
+  export let libraryStats: LibraryStats | null = null;
 
   const dispatch = createEventDispatcher<{
     navigate: string;
@@ -161,6 +162,21 @@
 
       <!-- Metric Summary Cards -->
       <div class="metricsGrid">
+        {#if libraryStats}
+          <button
+            type="button"
+            class="metricCard"
+            on:click={() => dispatch('navigate', '/library')}
+          >
+            <div class="metricIcon primaryBg">
+              <Tv size={24} />
+            </div>
+            <div class="metricInfo">
+              <span class="metricCount">{libraryStats.watchingCount}</span>
+              <span class="metricLabel">Watching</span>
+            </div>
+          </button>
+        {/if}
         <button
           type="button"
           class="metricCard"

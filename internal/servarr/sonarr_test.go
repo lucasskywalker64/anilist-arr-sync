@@ -600,3 +600,80 @@ func TestSonarrClient_MonitorEpisodes(t *testing.T) {
 		}
 	})
 }
+
+func TestSonarrClient_DeleteEpisodeFile(t *testing.T) {
+	t.Run("successfully deletes episode file", func(t *testing.T) {
+		deletedFileID := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodDelete || r.URL.Path != "/api/v3/episodefile/42" {
+				t.Errorf("expected DELETE /api/v3/episodefile/42, got %s %s", r.Method, r.URL.Path)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			deletedFileID = 42
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		client, err := servarr.NewSonarrClient(srv.URL, "sonarr-key")
+		if err != nil {
+			t.Fatalf("NewSonarrClient failed: %v", err)
+		}
+
+		err = client.DeleteEpisodeFile(context.Background(), 42)
+		if err != nil {
+			t.Fatalf("DeleteEpisodeFile failed: %v", err)
+		}
+		if deletedFileID != 42 {
+			t.Fatalf("expected deletedFileID 42, got %d", deletedFileID)
+		}
+	})
+
+	t.Run("treats HTTP 404 as idempotent success", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.NotFound(w, r)
+		}))
+		defer srv.Close()
+
+		client, err := servarr.NewSonarrClient(srv.URL, "sonarr-key")
+		if err != nil {
+			t.Fatalf("NewSonarrClient failed: %v", err)
+		}
+
+		err = client.DeleteEpisodeFile(context.Background(), 999)
+		if err != nil {
+			t.Fatalf("expected nil error on 404, got %v", err)
+		}
+	})
+
+	t.Run("returns error on HTTP 500", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+
+		client, err := servarr.NewSonarrClient(srv.URL, "sonarr-key")
+		if err != nil {
+			t.Fatalf("NewSonarrClient failed: %v", err)
+		}
+
+		err = client.DeleteEpisodeFile(context.Background(), 42)
+		if err == nil {
+			t.Fatal("expected error on 500, got nil")
+		}
+	})
+}
+
+func TestSonarrClient_EpisodeHasFileAndEpisodeFileID(t *testing.T) {
+	raw := `{"id": 1, "seriesId": 10, "seasonNumber": 1, "episodeNumber": 1, "hasFile": true, "episodeFileId": 1234}`
+	var ep servarr.Episode
+	if err := json.Unmarshal([]byte(raw), &ep); err != nil {
+		t.Fatalf("unmarshal episode: %v", err)
+	}
+	if !ep.HasFile {
+		t.Errorf("expected ep.HasFile = true")
+	}
+	if ep.EpisodeFileID != 1234 {
+		t.Errorf("expected ep.EpisodeFileID = 1234, got %d", ep.EpisodeFileID)
+	}
+}

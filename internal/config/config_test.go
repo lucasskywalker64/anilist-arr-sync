@@ -50,6 +50,11 @@ func TestNewDefault(t *testing.T) {
 	check("DateToleranceDays", cfg.DateToleranceDays, 14)
 	check("ConfidenceThreshold", cfg.ConfidenceThreshold, 0.60)
 	check("UnmonitorDropped", cfg.UnmonitorDropped, false)
+	check("UnmonitorCompleted", cfg.UnmonitorCompleted, false)
+	check("DeleteDropped", cfg.DeleteDropped, false)
+	check("DeleteCompleted", cfg.DeleteCompleted, false)
+	check("UnmonitorWatched", cfg.UnmonitorWatched, false)
+	check("DeleteWatched", cfg.DeleteWatched, false)
 	check("FirstRunDryRun", cfg.FirstRunDryRun, true)
 
 	if err := cfg.Validate(); err != nil {
