@@ -27,21 +27,36 @@ import (
 )
 
 type appRuntime struct {
-	cfg       *config.Config
-	db        *storage.DB
-	server    *server.Server
-	orch      *orchestrator.Orchestrator
-	scheduler *scheduler.Scheduler
-	loader    *fribb.Loader
-	client    *http.Client
-	ctx       context.Context
-	cancel    context.CancelFunc
-	workers   sync.WaitGroup
+	cfg         *config.Config
+	listenerCfg config.Config
+	db          *storage.DB
+	server      *server.Server
+	orch        *orchestrator.Orchestrator
+	scheduler   *scheduler.Scheduler
+	loader      *fribb.Loader
+	client      *http.Client
+	ctx         context.Context
+	cancel      context.CancelFunc
+	workers     sync.WaitGroup
 }
 
 func bootstrap(ctx context.Context, o options, paths runtimePaths) (*appRuntime, error) {
-	cfg, err := loadConfig(o, paths)
+	cfg, err := loadConfig(paths)
 	if err != nil {
+		return nil, err
+	}
+	listenerCfg := *cfg
+	var portOverride *int
+	var bindOverride *string
+	if o.portSet {
+		portOverride = &o.port
+		listenerCfg.Port = o.port
+	}
+	if o.bindSet {
+		bindOverride = &o.bindAddress
+		listenerCfg.BindAddress = o.bindAddress
+	}
+	if err := listenerCfg.Validate(); err != nil {
 		return nil, err
 	}
 	backupDir := dataPath(paths.data, cfg.BackupFolder)
@@ -69,6 +84,7 @@ func bootstrap(ctx context.Context, o options, paths runtimePaths) (*appRuntime,
 	orch := orchestrator.New(db, cfg, al, sonarrClient, radarrClient)
 	backups := backup.NewEngine(db, paths.config, backupDir, backup.WithRetention(cfg.BackupRetention))
 	srv := server.NewServer(cfg, paths.config, db, orch, backups)
+	srv.SetListenerOverrides(portOverride, bindOverride)
 	srv.SetVersion(version)
 	srv.SetNotifier(notification.NewDispatcher(notification.NewStore(db), client))
 	scheduledOrch := orch
@@ -79,7 +95,7 @@ func bootstrap(ctx context.Context, o options, paths runtimePaths) (*appRuntime,
 	scheduled := scheduler.New(*cfg, scheduledOrch, backups, nil)
 	srv.SetScheduler(scheduled)
 	ctx, cancel := context.WithCancel(ctx)
-	return &appRuntime{cfg: cfg, db: db, server: srv, orch: orch, scheduler: scheduled,
+	return &appRuntime{cfg: cfg, listenerCfg: listenerCfg, db: db, server: srv, orch: orch, scheduler: scheduled,
 		loader: fribb.NewLoader(db, fribb.WithHTTPClient(client)), client: client, ctx: ctx, cancel: cancel}, nil
 }
 
@@ -182,13 +198,13 @@ func (r *appRuntime) close() error {
 }
 
 func (r *appRuntime) browserURL() string {
-	host := r.cfg.BindAddress
+	host := r.listenerCfg.BindAddress
 	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "localhost"
 	}
-	scheme, port := "http", r.cfg.Port
-	if r.cfg.EnableSsl {
-		scheme, port = "https", r.cfg.SslPort
+	scheme, port := "http", r.listenerCfg.Port
+	if r.listenerCfg.EnableSsl {
+		scheme, port = "https", r.listenerCfg.SslPort
 	}
-	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/" + strings.Trim(r.cfg.URLBase, "/")
+	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/" + strings.Trim(r.listenerCfg.URLBase, "/")
 }

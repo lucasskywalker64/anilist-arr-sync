@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
 )
 
 // LifecycleAction tells the runtime owner to restart or stop this instance.
@@ -58,6 +60,21 @@ func (s *Server) NotifyLifecycle(action LifecycleAction) {
 // SetVersion supplies the runtime build version for health and status responses.
 func (s *Server) SetVersion(version string) { s.version = version }
 
+// SetListenerOverrides applies transient CLI settings before Start is called.
+func (s *Server) SetListenerOverrides(port *int, bindAddress *string) {
+	s.portOverride, s.bindOverride = port, bindAddress
+}
+
+func (s *Server) listenerConfig(cfg config.Config) config.Config {
+	if s.portOverride != nil {
+		cfg.Port = *s.portOverride
+	}
+	if s.bindOverride != nil {
+		cfg.BindAddress = *s.bindOverride
+	}
+	return cfg
+}
+
 func (s *Server) handleSystemStatus(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.Config()
 	w.Header().Set("Content-Type", "application/json")
@@ -69,9 +86,9 @@ func (s *Server) handleSystemStatus(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
-	cfg := s.Config()
+	cfg := s.listenerConfig(s.Config())
 	scheme := "http"
-	if r.TLS != nil {
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
 		scheme = "https"
 	}
 	host := r.Host
@@ -79,10 +96,13 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	if cfg.EnableSsl {
 		port = cfg.SslPort
 	}
-	if cfg.Port != s.boundPort || cfg.SslPort != s.boundSslPort || cfg.EnableSsl != s.boundEnableSsl {
+	if cfg.Port != s.boundPort || cfg.SslPort != s.boundSslPort || cfg.EnableSsl != s.boundEnableSsl || cfg.BindAddress != s.boundBindAddress {
 		hostname := r.URL.Hostname()
 		if parsed, err := url.Parse("//" + r.Host); err == nil {
 			hostname = parsed.Hostname()
+		}
+		if cfg.BindAddress != s.boundBindAddress && cfg.BindAddress != "" && cfg.BindAddress != "0.0.0.0" && cfg.BindAddress != "::" {
+			hostname = cfg.BindAddress
 		}
 		host = net.JoinHostPort(hostname, strconv.Itoa(port))
 		if cfg.EnableSsl {

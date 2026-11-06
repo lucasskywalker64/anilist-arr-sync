@@ -52,6 +52,8 @@ type Server struct {
 	stopping     bool
 	instanceID   string
 	version      string
+	portOverride *int
+	bindOverride *string
 
 	httpServer  *http.Server
 	httpsServer *http.Server
@@ -318,17 +320,18 @@ func (s *Server) Handler() http.Handler {
 
 // Start begins listening on configured HTTP and optional HTTPS ports.
 func (s *Server) Start() error {
+	cfg := s.listenerConfig(s.Config())
 	s.cfgMu.Lock()
-	s.boundBindAddress = s.cfg.BindAddress
-	s.boundPort = s.cfg.Port
-	s.boundURLBase = s.cfg.URLBase
-	s.boundEnableSsl = s.cfg.EnableSsl
-	s.boundSslPort = s.cfg.SslPort
+	s.boundBindAddress = cfg.BindAddress
+	s.boundPort = cfg.Port
+	s.boundURLBase = cfg.URLBase
+	s.boundEnableSsl = cfg.EnableSsl
+	s.boundSslPort = cfg.SslPort
 	s.cfgMu.Unlock()
 
 	handler := s.Handler()
 
-	httpAddr := fmt.Sprintf("%s:%d", s.cfg.BindAddress, s.cfg.Port)
+	httpAddr := net.JoinHostPort(cfg.BindAddress, fmt.Sprint(cfg.Port))
 	s.httpServer = &http.Server{
 		Addr:              httpAddr,
 		Handler:           handler,
@@ -351,9 +354,9 @@ func (s *Server) Start() error {
 		}
 	}()
 
-	if s.isSslEnabled() {
-		httpsAddr := fmt.Sprintf("%s:%d", s.cfg.BindAddress, s.cfg.SslPort)
-		cert, certErr := tls.LoadX509KeyPair(s.cfg.SslCertPath, s.cfg.SslKeyPath)
+	if cfg.EnableSsl {
+		httpsAddr := net.JoinHostPort(cfg.BindAddress, fmt.Sprint(cfg.SslPort))
+		cert, certErr := tls.LoadX509KeyPair(cfg.SslCertPath, cfg.SslKeyPath)
 		if certErr != nil {
 			_ = s.httpServer.Close()
 			return fmt.Errorf("server: failed to load SSL certificates: %w", certErr)

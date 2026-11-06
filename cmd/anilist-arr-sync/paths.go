@@ -78,7 +78,7 @@ func writableDirectory(path string) error {
 	return removeErr
 }
 
-func loadConfig(o options, paths runtimePaths) (*config.Config, error) {
+func loadConfig(paths runtimePaths) (*config.Config, error) {
 	cfg, err := config.Load(paths.config, os.Environ())
 	if err != nil {
 		return nil, err
@@ -92,15 +92,6 @@ func loadConfig(o options, paths runtimePaths) (*config.Config, error) {
 		if err := config.Save(paths.config, cfg); err != nil {
 			return nil, err
 		}
-	}
-	if o.portSet {
-		cfg.Port = o.port
-	}
-	if o.bindSet {
-		cfg.BindAddress = o.bindAddress
-	}
-	if err := cfg.Validate(); err != nil {
-		return nil, err
 	}
 	return cfg, nil
 }

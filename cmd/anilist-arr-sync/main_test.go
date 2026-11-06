@@ -23,7 +23,7 @@ func TestCLIConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := loadConfig(opts, paths)
+	cfg, err := loadConfig(paths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,8 +31,8 @@ func TestCLIConfiguration(t *testing.T) {
 	if err != nil || len(key) != 16 {
 		t.Fatalf("expected random 32-character hex key, got %q", cfg.APIKey)
 	}
-	if cfg.Port != 9123 || cfg.BindAddress != "127.0.0.1" {
-		t.Fatalf("CLI overrides not applied: %+v", cfg)
+	if opts.port != 9123 || !opts.portSet || opts.bindAddress != "127.0.0.1" || !opts.bindSet {
+		t.Fatalf("CLI overrides not parsed: %+v", opts)
 	}
 	persisted, err := config.Load(paths.config, nil)
 	if err != nil {
@@ -41,7 +41,7 @@ func TestCLIConfiguration(t *testing.T) {
 	if persisted.APIKey != cfg.APIKey || persisted.Port == 9123 {
 		t.Fatal("key must persist; CLI overrides must remain transient")
 	}
-	cfg2, err := loadConfig(opts, paths)
+	cfg2, err := loadConfig(paths)
 	if err != nil || cfg2.APIKey != cfg.APIKey {
 		t.Fatal("startup replaced the existing key")
 	}
@@ -49,7 +49,7 @@ func TestCLIConfiguration(t *testing.T) {
 	if err := config.Save(paths.config, persisted); err != nil {
 		t.Fatal(err)
 	}
-	healed, err := loadConfig(opts, paths)
+	healed, err := loadConfig(paths)
 	if err != nil || len(healed.APIKey) != 32 || healed.APIKey == cfg.APIKey {
 		t.Fatal("missing API key was not healed")
 	}

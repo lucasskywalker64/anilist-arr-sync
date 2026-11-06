@@ -105,7 +105,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		r.start()
 		url := r.browserURL()
 		log.Printf("listening at %s", url)
-		if r.cfg.LaunchBrowser && !o.noBrowser && out == os.Stdout && isatty.IsTerminal(os.Stdout.Fd()) && !server.IsContainerized(r.cfg.UpdateMechanism) {
+		if r.listenerCfg.LaunchBrowser && !o.noBrowser && out == os.Stdout && isatty.IsTerminal(os.Stdout.Fd()) && !server.IsContainerized(r.listenerCfg.UpdateMechanism) {
 			if err := openBrowser(url); err != nil {
 				log.Printf("browser: %v", err)
 			}

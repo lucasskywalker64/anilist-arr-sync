@@ -11,6 +11,8 @@
   let busy = false;
   let reconnecting = false;
   let stopped = false;
+  let reconnectUrl = '';
+  let requiresNavigation = false;
   let error = '';
   const polling = new AbortController();
 
@@ -33,8 +35,13 @@
         const result = await api.restart();
         action = '';
         reconnecting = true;
-        await waitForRestart(result.instanceId, result.reconnectUrl, polling.signal);
+        reconnectUrl = result.reconnectUrl;
         const target = new URL(result.reconnectUrl);
+        if (window.location.protocol === 'https:' && target.protocol === 'http:') {
+          requiresNavigation = true;
+          return;
+        }
+        await waitForRestart(result.instanceId, result.reconnectUrl, polling.signal);
         if (target.origin === window.location.origin && target.pathname === `${window.AniListArrSync?.urlBase || ''}/`) {
           window.location.reload();
         } else {
@@ -86,7 +93,8 @@
     <div class="message">
       <RotateCw size={28} class={reconnecting ? 'spinning' : ''} />
       <h2>{stopped ? 'Application stopped' : 'Restarting application'}</h2>
-      <p>{stopped ? 'Start the application to reconnect.' : 'Waiting for the application to reconnect...'}</p>
+      <p>{stopped ? 'Start the application to reconnect.' : requiresNavigation ? 'HTTPS was disabled. Your browser requires opening the HTTP address to reconnect.' : 'Waiting for the application to reconnect...'}</p>
+      {#if reconnectUrl}<a href={reconnectUrl}>Reconnect to application</a>{/if}
       {#if error}<p role="alert">{error}</p>{/if}
     </div>
   </div>

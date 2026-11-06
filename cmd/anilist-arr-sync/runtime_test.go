@@ -307,3 +307,50 @@ func TestRuntimeStopsActiveWebSyncBeforeClosingStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRuntimeCLIOverridesStayTransient(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.APIKey, cfg.BindAddress, cfg.Port = "runtime-key", "0.0.0.0", freePort(t)
+	path := filepath.Join(dir, "config.xml")
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	port := freePort(t)
+	r, err := bootstrap(t.Context(), options{port: port, portSet: true, bindAddress: "127.0.0.1", bindSet: true}, runtimePaths{data: dir, config: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := r.close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := r.server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Timeout: time.Second}
+	defer client.CloseIdleConnections()
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	waitBoot(t, client, base, "")
+	code, response := apiCall(t, client, "PUT", base+"/api/v1/config", `{"instanceName":"changed"}`)
+	if code != 200 {
+		t.Fatal(response)
+	}
+	persisted, err := config.Load(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Port != cfg.Port || persisted.BindAddress != cfg.BindAddress {
+		t.Fatal("unrelated save persisted CLI overrides")
+	}
+	newPort := freePort(t)
+	code, response = apiCall(t, client, "PUT", base+"/api/v1/config", fmt.Sprintf(`{"port":%d}`, newPort))
+	if code != 200 {
+		t.Fatal(response)
+	}
+	code, response = apiCall(t, client, "POST", base+"/api/v1/system/restart", "")
+	if code != 200 || response["reconnectUrl"] != base+"/" {
+		t.Fatalf("restart must return to the effective CLI listener: %+v", response)
+	}
+}
