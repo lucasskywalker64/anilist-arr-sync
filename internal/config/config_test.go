@@ -34,7 +34,7 @@ func TestNewDefault(t *testing.T) {
 	check("UpdateAutomatically", cfg.UpdateAutomatically, false)
 	check("UpdateMechanism", cfg.UpdateMechanism, "Docker")
 	check("BackupFolder", cfg.BackupFolder, "Backups")
-	check("BackupInterval", cfg.BackupInterval, 7)
+	check("BackupInterval", cfg.BackupInterval, 1)
 	check("BackupRetention", cfg.BackupRetention, 28)
 	check("DatabasePath", cfg.DatabasePath, "sync.db")
 	check("AniListTvStatus", cfg.AniListTvStatus, "CURRENT")

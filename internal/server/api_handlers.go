@@ -577,6 +577,12 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 	*s.cfg = next
 	s.trustedNets = newTrustedNets
+	if s.orch != nil {
+		s.orch.UpdateConfig(next)
+	}
+	if s.scheduler != nil {
+		s.scheduler.UpdateConfig(next)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -594,26 +600,17 @@ func (s *Server) handleStartSync(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	s.syncMu.Lock()
-	if s.isSyncing {
-		s.syncMu.Unlock()
-		s.writeJSONError(w, http.StatusConflict, "sync is already in progress")
+	result, err := s.orch.StartSync(context.Background(), orchestrator.TriggerManualWeb)
+	if err != nil {
+		s.writeJSONError(w, http.StatusConflict, err.Error())
 		return
 	}
-	s.isSyncing = true
-	s.syncMu.Unlock()
 
 	go func() {
-		defer func() {
+		completed := <-result
+		if completed.Report != nil {
 			s.syncMu.Lock()
-			s.isSyncing = false
-			s.syncMu.Unlock()
-		}()
-
-		report, _ := s.orch.Sync(context.Background(), orchestrator.TriggerManualWeb)
-		if report != nil {
-			s.syncMu.Lock()
-			s.lastSyncReport = report
+			s.lastSyncReport = completed.Report
 			s.syncMu.Unlock()
 		}
 	}()
@@ -629,11 +626,11 @@ func (s *Server) handleStartSync(w http.ResponseWriter, _ *http.Request) {
 // handleGetSyncStatus returns orchestrator progress and active sync state.
 func (s *Server) handleGetSyncStatus(w http.ResponseWriter, r *http.Request) {
 	s.syncMu.Lock()
-	running := s.isSyncing
+	running := s.orch != nil && s.orch.IsSyncing()
 	lastReport := s.lastSyncReport
 	s.syncMu.Unlock()
 
-	if lastReport == nil && s.db != nil {
+	if s.db != nil {
 		_ = s.db.Read(r.Context(), func(ctx context.Context, q storage.Querier) error {
 			var rec SyncHistoryRecord
 			var errs sql.NullString
