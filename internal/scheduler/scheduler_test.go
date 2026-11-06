@@ -73,6 +73,9 @@ func TestUpdateChecksRespectSettingAndCancellation(t *testing.T) {
 		if len(started) != 1 {
 			t.Fatal("enabled update check never ran")
 		}
+		if !s.Status().Update.Last.Equal(time.Now()) {
+			t.Fatalf("active update check has no start timestamp: %+v", s.Status().Update)
+		}
 		s.Stop()
 		select {
 		case <-cancelled:
@@ -90,6 +93,38 @@ func TestUpdateChecksRespectSettingAndCancellation(t *testing.T) {
 		synctest.Wait()
 		if len(started) != 1 || !s.Status().Update.Next.IsZero() {
 			t.Fatal("disabling automatic updates left a live ticker")
+		}
+	})
+}
+
+func TestScheduledSyncCancellationAndStartStatus(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := config.NewDefault()
+		cfg.AniListUsername = "testuser"
+		entered, cancelled := make(chan struct{}), make(chan struct{})
+		o := newOrchestrator(t, cfg, func(r *http.Request) (*http.Response, error) {
+			close(entered)
+			<-r.Context().Done()
+			close(cancelled)
+			return nil, r.Context().Err()
+		})
+		s := scheduler.New(*cfg, o, nil, nil)
+		s.Start(t.Context())
+		defer s.Stop()
+		time.Sleep(4 * time.Hour)
+		<-entered
+		synctest.Wait()
+		if !s.Status().Sync.Last.Equal(time.Now()) {
+			t.Errorf("active scheduled sync has no start timestamp: %+v", s.Status().Sync)
+		}
+		s.Stop()
+		select {
+		case <-cancelled:
+		default:
+			t.Fatal("Stop did not cancel the scheduled AniList request")
+		}
+		if o.IsSyncing() {
+			t.Fatal("Stop returned before scheduled sync released its guard")
 		}
 	})
 }

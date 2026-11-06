@@ -610,7 +610,9 @@ func (s *Server) handleStartSync(w http.ResponseWriter, _ *http.Request) {
 		completed := <-result
 		if completed.Report != nil {
 			s.syncMu.Lock()
-			s.lastSyncReport = completed.Report
+			if s.lastSyncReport == nil || completed.Report.StartTime.After(s.lastSyncReport.StartTime) {
+				s.lastSyncReport = completed.Report
+			}
 			s.syncMu.Unlock()
 		}
 	}()
@@ -646,7 +648,7 @@ func (s *Server) handleGetSyncStatus(w http.ResponseWriter, r *http.Request) {
 				&rec.AddedRadarr, &rec.MonitoredSonarr, &rec.UnmonitoredSonarr, &rec.UnmonitoredRadarr,
 				&rec.QueuedReview, &errs, &rec.TriggerType,
 			)
-			if rowErr == nil {
+			if rowErr == nil && (lastReport == nil || rec.RunTimestamp.After(lastReport.StartTime)) {
 				var errList []string
 				if errs.Valid && errs.String != "" {
 					_ = json.Unmarshal([]byte(errs.String), &errList)

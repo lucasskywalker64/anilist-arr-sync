@@ -55,8 +55,14 @@ func New(cfg config.Config, orch *orchestrator.Orchestrator, backups *backup.Eng
 		s.tasks[0] = task{
 			name: "sync", interval: time.Duration(cfg.SyncIntervalHours) * time.Hour,
 			run: func(ctx context.Context) error {
-				_, err := orch.Sync(ctx, orchestrator.TriggerScheduled)
-				return err
+				result, err := orch.StartSync(ctx, orchestrator.TriggerScheduled)
+				if err != nil {
+					return err
+				}
+				s.mu.Lock()
+				s.tasks[0].status.Last = time.Now()
+				s.mu.Unlock()
+				return (<-result).Err
 			},
 		}
 	}
@@ -233,6 +239,11 @@ func (s *Scheduler) loop(ctx context.Context) {
 		s.mu.Unlock()
 		go func() {
 			defer workers.Done()
+			if index != 0 {
+				s.mu.Lock()
+				t.status.Last = time.Now()
+				s.mu.Unlock()
+			}
 			err := t.run(ctx)
 			if errors.Is(err, orchestrator.ErrSyncInProgress) {
 				log.Printf("scheduler: skipping sync tick: %v", err)
@@ -240,9 +251,6 @@ func (s *Scheduler) loop(ctx context.Context) {
 				log.Printf("scheduler: %s failed: %v", t.name, err)
 			}
 			s.mu.Lock()
-			if !errors.Is(err, orchestrator.ErrSyncInProgress) {
-				t.status.Last = tick
-			}
 			t.running = false
 			s.mu.Unlock()
 		}()

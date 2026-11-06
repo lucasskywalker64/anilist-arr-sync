@@ -52,6 +52,11 @@ func TestSyncRejectsConcurrentTriggers(t *testing.T) {
 					t.Errorf("concurrent %s: report=%v err=%v", trigger, report, err)
 				}
 			}
+			live, stop := context.WithTimeout(ctx, time.Second)
+			if report, err := o.Sync(live, orchestrator.TriggerCLI); !errors.Is(err, orchestrator.ErrSyncInProgress) || report != nil || live.Err() != nil {
+				t.Errorf("live CLI contender: report=%v err=%v context=%v", report, err, live.Err())
+			}
+			stop()
 			cancel()
 			<-done
 			cancelled, stop := context.WithCancel(t.Context())
