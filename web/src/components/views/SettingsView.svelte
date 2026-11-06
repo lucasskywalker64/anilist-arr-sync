@@ -465,7 +465,7 @@
 
             <FormGroup
               label="Enable SSL"
-              helpText="Enables HTTPS listener on configured SSL port with certificates (requires service restart)"
+              helpText="Enables HTTPS listener on configured SSL port with certificates. Changing this setting requires a service restart and signing in again after restart."
               isAdvanced={true}
               isDirty={isFieldDirty("enableSsl")}
             >
