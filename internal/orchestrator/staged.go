@@ -273,9 +273,12 @@ func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
 		}
 		if payload.WatchedEntry != nil {
 			report := &SyncReport{}
-			o.dispatchSonarrWithDryRun(ctx, *payload.WatchedEntry, &resolver.Result{TargetID: req.TVDBID, TVDBSeason: payload.TargetSeason}, report, false, true)
+			outcome := o.dispatchSonarrWithDryRun(ctx, *payload.WatchedEntry, &resolver.Result{TargetID: req.TVDBID, TVDBSeason: payload.TargetSeason}, report, false, true)
 			if len(report.Errors) > 0 {
 				return fmt.Errorf("prune staged series before search: %s", strings.Join(report.Errors, "; "))
+			}
+			if outcome.pendingSonarrFollowup {
+				return errors.New("waiting for Sonarr episode refresh; retry this staged action")
 			}
 		}
 		var targetSeasonStr string

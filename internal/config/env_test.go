@@ -1,10 +1,67 @@
 package config_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
 )
+
+func TestCleanupSettingsIndependent(t *testing.T) {
+	fields := []struct {
+		name  string
+		value func(*config.Config) *bool
+	}{
+		{"UnmonitorCompleted", func(c *config.Config) *bool { return &c.UnmonitorCompleted }},
+		{"DeleteDropped", func(c *config.Config) *bool { return &c.DeleteDropped }},
+		{"DeleteCompleted", func(c *config.Config) *bool { return &c.DeleteCompleted }},
+		{"UnmonitorWatched", func(c *config.Config) *bool { return &c.UnmonitorWatched }},
+		{"DeleteWatched", func(c *config.Config) *bool { return &c.DeleteWatched }},
+	}
+	check := func(t *testing.T, cfg *config.Config, enabled string) {
+		t.Helper()
+		for _, field := range fields {
+			if got, want := *field.value(cfg), field.name == enabled; got != want {
+				t.Errorf("%s = %v, want %v", field.name, got, want)
+			}
+		}
+	}
+	for _, selected := range fields {
+		t.Run(selected.name, func(t *testing.T) {
+			t.Run("environment", func(t *testing.T) {
+				cfg := config.NewDefault()
+				if err := cfg.ApplyEnv([]string{"ANILIST_SYNC__SYNC__" + strings.ToUpper(selected.name) + "=true"}); err != nil {
+					t.Fatal(err)
+				}
+				check(t, cfg, selected.name)
+			})
+			t.Run("XML input", func(t *testing.T) {
+				cfg, err := config.ParseXML([]byte("<Config><" + selected.name + ">True</" + selected.name + "></Config>"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				check(t, cfg, selected.name)
+			})
+			t.Run("XML output", func(t *testing.T) {
+				cfg := config.NewDefault()
+				*selected.value(cfg) = true
+				data, err := cfg.ToXML()
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, field := range fields {
+					want := "False"
+					if field.name == selected.name {
+						want = "True"
+					}
+					if !strings.Contains(string(data), "<"+field.name+">"+want+"</"+field.name+">") {
+						t.Errorf("XML must set %s to %s: %s", field.name, want, data)
+					}
+				}
+			})
+		})
+	}
+}
 
 func TestApplyEnv_Overrides(t *testing.T) {
 	cfg := config.NewDefault()

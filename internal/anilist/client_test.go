@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -939,7 +940,16 @@ func TestFetchWatchlist_QueriesCoverImageAndMapsCoverImagePayloads(t *testing.T)
 }
 
 func TestFetchWatchlist_PopulatesProgress(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode watchlist request: %v", err)
+		}
+		if !regexp.MustCompile(`(?s)\bentries\s*\{[^{}]*\bprogress\b`).MatchString(request.Query) {
+			t.Errorf("watchlist query does not request entry progress: %s", request.Query)
+		}
 		resp := map[string]any{
 			"data": map[string]any{
 				"MediaListCollection": map[string]any{
@@ -997,12 +1007,20 @@ func TestFetchUserMediaListOverview_PaginatedMinimalFields(t *testing.T) {
 		mu.Lock()
 		chunksRequested++
 		currentChunk := chunksRequested
-		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if q, ok := body["query"].(string); ok {
-			capturedQueries = append(capturedQueries, q)
+		var body struct {
+			Query     string `json:"query"`
+			Variables struct {
+				Chunk int `json:"chunk"`
+			} `json:"variables"`
 		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode overview request: %v", err)
+		}
+		capturedQueries = append(capturedQueries, body.Query)
 		mu.Unlock()
+		if body.Variables.Chunk != currentChunk {
+			t.Errorf("request %d: expected chunk %d, got %d", currentChunk, currentChunk, body.Variables.Chunk)
+		}
 
 		var resp map[string]any
 		if currentChunk == 1 {

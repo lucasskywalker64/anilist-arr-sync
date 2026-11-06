@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/anilist"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/orchestrator"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 )
 
@@ -175,4 +177,71 @@ func TestLibraryEndpoints(t *testing.T) {
 			t.Errorf("expected completedCount 2, got %d", stats.CompletedCount)
 		}
 	})
+}
+
+func TestLibraryCountsAfterReconciliation(t *testing.T) {
+	db := newTestStorage(t)
+	if err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		for id := 1; id <= 5; id++ {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO synced_media (anilist_id, media_type, title_romaji, anilist_status) VALUES (?, 'SERIES', 'Anime', 'CURRENT')`, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	aniList := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"MediaListCollection":{"hasNextChunk":false,"lists":[{"entries":[{"mediaId":1,"status":"CURRENT"},{"mediaId":2,"status":"COMPLETED"},{"mediaId":3,"status":"PAUSED"},{"mediaId":4,"status":"DROPPED"}]}]}}}`))
+	}))
+	defer aniList.Close()
+	cfg := config.NewDefault()
+	cfg.AniListUsername = "user"
+	cfg.AuthenticationRequired = "DisabledForLocalAddresses"
+	orc := orchestrator.New(db, cfg, anilist.NewClient(aniList.URL), nil, nil)
+	handler := NewServer(cfg, "", db, orc, nil).Handler()
+	getJSON := func(path string, dst any) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), dst); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var before LibraryStats
+	getJSON("/api/v1/library/stats", &before)
+	if before.WatchingCount != 5 {
+		t.Fatalf("initial watching count = %d", before.WatchingCount)
+	}
+	report, err := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+	if err != nil || len(report.Errors) != 0 {
+		t.Fatalf("sync failed: %+v %v", report, err)
+	}
+	var after LibraryStats
+	getJSON("/api/v1/library/stats", &after)
+	if after.Total != 5 || after.WatchingCount != 1 || after.CompletedCount != 1 {
+		t.Fatalf("stale counts after reconciliation: %+v", after)
+	}
+	var watching []SyncedMediaItem
+	getJSON("/api/v1/library?status=CURRENT", &watching)
+	if len(watching) != 1 || watching[0].AniListID != 1 {
+		t.Fatalf("stale watching filter: %+v", watching)
+	}
+	var history []SyncedMediaItem
+	getJSON("/api/v1/library", &history)
+	statuses := map[int]string{}
+	for _, item := range history {
+		statuses[item.AniListID] = item.AniListStatus
+	}
+	for id, want := range map[int]string{1: "CURRENT", 2: "COMPLETED", 3: "PAUSED", 4: "DROPPED", 5: "REMOVED"} {
+		if statuses[id] != want {
+			t.Errorf("title %d: status=%s want=%s", id, statuses[id], want)
+		}
+	}
 }

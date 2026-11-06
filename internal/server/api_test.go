@@ -176,6 +176,48 @@ func TestOverridesEndpoints(t *testing.T) {
 	}
 }
 
+func TestConfigEndpoints_CleanupSettingsIndependent(t *testing.T) {
+	fields := []string{"unmonitorCompleted", "deleteDropped", "deleteCompleted", "unmonitorWatched", "deleteWatched"}
+	for _, selected := range fields {
+		t.Run(selected, func(t *testing.T) {
+			cfg := config.NewDefault()
+			cfg.AuthenticationRequired = "DisabledForLocalAddresses"
+			cfg.APIKey = "test-key"
+			srv := NewServer(cfg, "", newTestStorage(t), nil, nil)
+			handler := srv.Handler()
+			payload, err := json.Marshal(map[string]bool{selected: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(payload))
+			req.RemoteAddr = "127.0.0.1:12345"
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Api-Key", "test-key")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("update %s: %d %s", selected, rec.Code, rec.Body.String())
+			}
+			req = httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+			req.RemoteAddr = "127.0.0.1:12345"
+			rec = httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("read config: %d %s", rec.Code, rec.Body.String())
+			}
+			var actual map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &actual); err != nil {
+				t.Fatal(err)
+			}
+			for _, field := range fields {
+				if got, want := actual[field], field == selected; got != want {
+					t.Errorf("%s = %v, want %v", field, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestConfigEndpoints(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.xml")

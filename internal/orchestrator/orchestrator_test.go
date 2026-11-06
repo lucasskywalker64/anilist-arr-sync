@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2219,6 +2220,9 @@ func TestSync_DroppedAndCompleted_Cleanup_SonarrAndRadarr(t *testing.T) {
 				var body map[string]any
 				_ = json.NewDecoder(r.Body).Decode(&body)
 				callLog = append(callLog, "unmonitor")
+				if body["monitored"] != false {
+					t.Errorf("expected monitored=false, got %v", body["monitored"])
+				}
 				if epIDs, ok := body["episodeIds"].([]any); ok {
 					for _, id := range epIDs {
 						unmonitoredEpisodes = append(unmonitoredEpisodes, int(id.(float64)))
@@ -2591,6 +2595,9 @@ func TestSync_WatchedEpisodeUnmonitoringAndPruning(t *testing.T) {
 				var body map[string]any
 				_ = json.NewDecoder(r.Body).Decode(&body)
 				callLog = append(callLog, "unmonitor")
+				if body["monitored"] != false {
+					t.Errorf("expected monitored=false, got %v", body["monitored"])
+				}
 				if epIDs, ok := body["episodeIds"].([]any); ok {
 					for _, id := range epIDs {
 						unmonitoredEpIDs = append(unmonitoredEpIDs, int(id.(float64)))
@@ -2794,6 +2801,13 @@ func TestSync_WatchedEpisodeUnmonitoringAndPruning(t *testing.T) {
 					{ID: 3, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 3, Monitored: !appliedUnmonitor, HasFile: true, EpisodeFileID: 503},
 				})
 			case r.Method == http.MethodPut && r.URL.Path == "/api/v3/episode/monitor":
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decode unmonitor request: %v", err)
+				}
+				if body["monitored"] != false {
+					t.Errorf("expected monitored=false, got %v", body["monitored"])
+				}
 				appliedUnmonitor = true
 				_ = json.NewEncoder(w).Encode([]any{})
 			case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v3/episodefile/"):
@@ -2825,8 +2839,9 @@ func TestSync_WatchedEpisodeUnmonitoringAndPruning(t *testing.T) {
 		if err := applyOrc.ApplyStagedAction(context.Background(), delAction.ID); err != nil {
 			t.Fatalf("ApplyStagedAction for delete file failed: %v", err)
 		}
-		if len(appliedDeleteFiles) != 3 {
-			t.Errorf("expected 3 files deleted on apply, got %d (%v)", len(appliedDeleteFiles), appliedDeleteFiles)
+		slices.Sort(appliedDeleteFiles)
+		if !slices.Equal(appliedDeleteFiles, []int{501, 502, 503}) {
+			t.Errorf("expected files 501, 502, 503 deleted exactly once, got %v", appliedDeleteFiles)
 		}
 	})
 }

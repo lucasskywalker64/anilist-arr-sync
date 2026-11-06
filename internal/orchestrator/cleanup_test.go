@@ -26,6 +26,8 @@ type cleanupLibrary struct {
 	failUnmonitor bool
 	failTags      bool
 	newSeries     bool
+	emptyEpisodes bool
+	tagLookups    int
 }
 
 func newCleanupTest(t *testing.T) (*Orchestrator, *cleanupLibrary) {
@@ -50,6 +52,7 @@ func newCleanupTest(t *testing.T) (*Orchestrator, *cleanupLibrary) {
 		}
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
+			library.tagLookups++
 			if library.failTags {
 				http.Error(w, "tag failure", http.StatusUnauthorized)
 				return
@@ -74,6 +77,10 @@ func newCleanupTest(t *testing.T) (*Orchestrator, *cleanupLibrary) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/series/1":
 			_ = json.NewEncoder(w).Encode(library.series)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
+			if library.emptyEpisodes {
+				_ = json.NewEncoder(w).Encode([]servarr.Episode{})
+				return
+			}
 			_ = json.NewEncoder(w).Encode(library.episodes)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/series":
 			var req servarr.AddSeriesRequest
@@ -518,5 +525,116 @@ func TestCleanup_StagedAdditionRetriesPruningWithoutAddingAgain(t *testing.T) {
 	}
 	if adds != 1 || lib.episodes[0].Monitored {
 		t.Fatalf("retry added twice or lost progress: %v", lib.calls)
+	}
+}
+
+func setupCleanupSync(t *testing.T, o *Orchestrator) {
+	t.Helper()
+	o.cfg.AniListUsername = "user"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"MediaListCollection": map[string]any{
+			"lists":        []any{map[string]any{"status": "CURRENT", "entries": []anilist.MediaListEntry{cleanupEntry(anilist.StatusCurrent)}}},
+			"hasNextChunk": false,
+		}}})
+	}))
+	t.Cleanup(srv.Close)
+	o.al = anilist.NewClient(srv.URL)
+	if err := o.db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `INSERT INTO mapping_overrides (anilist_id, media_type, tvdb_id, seasons) VALUES (100, 'SERIES', 10, '1')`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCleanup_NormalMonitoringDoesNotNeedTags(t *testing.T) {
+	o, lib := newCleanupTest(t)
+	setupCleanupSync(t, o)
+	lib.failTags = true
+	lib.series.Seasons[0].Monitored = false
+	report, err := o.Sync(context.Background(), TriggerManualWeb)
+	if err != nil || len(report.Errors) != 0 || !lib.series.Seasons[0].Monitored || lib.tagLookups != 0 {
+		t.Fatalf("normal monitoring depended on tags: report=%+v err=%v lookups=%d", report, err, lib.tagLookups)
+	}
+	if err := o.db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+		var count int
+		if err := q.QueryRowContext(ctx, "SELECT COUNT(*) FROM synced_media WHERE anilist_id = 100").Scan(&count); err != nil {
+			return err
+		}
+		if count != 1 {
+			t.Errorf("monitored series was not recorded")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCleanup_DelayedEpisodesRetainSearch(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(map[bool]string{false: "active", true: "staged"}[dryRun], func(t *testing.T) {
+			o, lib := newCleanupTest(t)
+			setupCleanupSync(t, o)
+			o.cfg.FirstRunDryRun, o.cfg.UnmonitorWatched, o.cfg.SonarrSearchOnAdd = dryRun, true, true
+			lib.newSeries, lib.emptyEpisodes = true, true
+			for i := range lib.episodes {
+				lib.episodes[i].HasFile = false
+			}
+			report, err := o.Sync(context.Background(), TriggerManualWeb)
+			if err != nil || len(report.Errors) != 0 {
+				t.Fatalf("initial sync failed: %+v %v", report, err)
+			}
+			var actionID int
+			if dryRun {
+				actions, err := o.GetStagedActions(context.Background(), StagedStatusPending)
+				if err != nil || len(actions) != 1 {
+					t.Fatalf("staging failed: %v %v", actions, err)
+				}
+				actionID = actions[0].ID
+				if err := o.ApplyStagedAction(context.Background(), actionID); err == nil {
+					t.Fatal("empty episode list completed staged addition")
+				}
+			}
+			if !reflect.DeepEqual(lib.calls, []string{"POST /api/v3/series"}) {
+				t.Fatalf("searched or pruned before refresh: %v", lib.calls)
+			}
+			if err := o.db.Read(context.Background(), func(ctx context.Context, q storage.Querier) error {
+				var count int
+				if err := q.QueryRowContext(ctx, "SELECT COUNT(*) FROM synced_media WHERE anilist_id = 100").Scan(&count); err != nil {
+					return err
+				}
+				if count != 1 {
+					t.Error("successful addition was not recorded")
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			// A fresh orchestrator must retain the follow-up across sync runs.
+			o = New(o.db, o.cfg, o.al, o.sonarr, o.radarr)
+			lib.emptyEpisodes = false
+			if dryRun {
+				if err := o.ApplyStagedAction(context.Background(), actionID); err != nil {
+					t.Fatal(err)
+				}
+				actions, err := o.GetStagedActions(context.Background(), StagedStatusPending)
+				if err != nil || len(actions) != 0 {
+					t.Fatalf("completed addition remained pending: %v %v", actions, err)
+				}
+			} else {
+				report, err = o.Sync(context.Background(), TriggerManualWeb)
+				if err != nil || len(report.Errors) != 0 {
+					t.Fatalf("follow-up sync failed: %+v %v", report, err)
+				}
+				if _, err := o.Sync(context.Background(), TriggerManualWeb); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want := []string{"POST /api/v3/series", "PUT /api/v3/episode/monitor", "POST /api/v3/command"}
+			if !reflect.DeepEqual(lib.calls, want) || lib.episodes[0].Monitored {
+				t.Fatalf("deferred follow-up lost or repeated: %v", lib.calls)
+			}
+		})
 	}
 }
