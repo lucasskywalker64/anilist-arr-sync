@@ -195,6 +195,10 @@ func (o *Orchestrator) GetStagedActions(ctx context.Context, status StagedAction
 
 // ApplyStagedAction executes a single pending staged action against Sonarr or Radarr.
 func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
+	return o.snapshot().applyStagedAction(ctx, id)
+}
+
+func (o *Orchestrator) applyStagedAction(ctx context.Context, id int) error {
 	var action StagedAction
 	var executedAt sql.NullTime
 	err := o.db.Read(ctx, func(ctx context.Context, q storage.Querier) error {

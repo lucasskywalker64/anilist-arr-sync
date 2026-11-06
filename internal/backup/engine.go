@@ -27,6 +27,18 @@ type Engine struct {
 	nowFn      func() time.Time
 }
 
+type contextWriter struct {
+	ctx context.Context
+	dst io.Writer
+}
+
+func (w contextWriter) Write(p []byte) (int, error) {
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return w.dst.Write(p)
+}
+
 // Option configures optional parameters on Engine.
 type Option func(*Engine)
 
@@ -113,7 +125,7 @@ func (e *Engine) Create(ctx context.Context, backupType Type) (*Info, error) {
 		return nil, fmt.Errorf("backup: failed to create sync.db zip entry: %w", err)
 	}
 
-	if _, err := io.Copy(dbEntry, dbIn); err != nil {
+	if _, err := io.Copy(contextWriter{ctx: ctx, dst: dbEntry}, dbIn); err != nil {
 		_ = dbIn.Close()
 		_ = zw.Close()
 		_ = zipFile.Close()
@@ -132,7 +144,7 @@ func (e *Engine) Create(ctx context.Context, backupType Type) (*Info, error) {
 				_ = os.Remove(tempZipPath)
 				return nil, fmt.Errorf("backup: failed to create config.xml zip entry: %w", err)
 			}
-			if _, err := cfgEntry.Write(cfgData); err != nil {
+			if _, err := (contextWriter{ctx: ctx, dst: cfgEntry}).Write(cfgData); err != nil {
 				_ = zw.Close()
 				_ = zipFile.Close()
 				_ = os.Remove(tempZipPath)
@@ -141,6 +153,12 @@ func (e *Engine) Create(ctx context.Context, backupType Type) (*Info, error) {
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		_ = zw.Close()
+		_ = zipFile.Close()
+		_ = os.Remove(tempZipPath)
+		return nil, fmt.Errorf("backup: archive creation canceled: %w", err)
+	}
 	if err := zw.Close(); err != nil {
 		_ = zipFile.Close()
 		_ = os.Remove(tempZipPath)
@@ -150,13 +168,18 @@ func (e *Engine) Create(ctx context.Context, backupType Type) (*Info, error) {
 		_ = os.Remove(tempZipPath)
 		return nil, fmt.Errorf("backup: failed to close zip file: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		_ = os.Remove(tempZipPath)
+		return nil, fmt.Errorf("backup: archive creation canceled: %w", err)
+	}
 
 	// Move temporary zip archive to final path
 	_ = os.Remove(archivePath)
 	if err := os.Rename(tempZipPath, archivePath); err != nil {
 		// Fallback to copy if rename fails
-		if errCopy := copyFile(tempZipPath, archivePath); errCopy != nil {
+		if errCopy := copyFile(ctx, tempZipPath, archivePath); errCopy != nil {
 			_ = os.Remove(tempZipPath)
+			_ = os.Remove(archivePath)
 			return nil, fmt.Errorf("backup: failed to place backup archive at %s: %w", archivePath, errCopy)
 		}
 		_ = os.Remove(tempZipPath)
@@ -438,7 +461,7 @@ func atomicReplace(src, dst string) error {
 		_ = os.Remove(tmpPath)
 	}()
 
-	if err := copyFile(src, tmpPath); err != nil {
+	if err := copyFile(context.Background(), src, tmpPath); err != nil {
 		return fmt.Errorf("failed to stage replacement file for %s: %w", dst, err)
 	}
 
@@ -449,7 +472,7 @@ func atomicReplace(src, dst string) error {
 }
 
 // copyFile copies src contents to dst and flushes buffers to disk.
-func copyFile(src, dst string) error {
+func copyFile(ctx context.Context, src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -466,7 +489,7 @@ func copyFile(src, dst string) error {
 		_ = out.Close()
 	}()
 
-	if _, err := io.Copy(out, in); err != nil {
+	if _, err := io.Copy(contextWriter{ctx: ctx, dst: out}, in); err != nil {
 		return err
 	}
 	return out.Sync()

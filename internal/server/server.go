@@ -23,6 +23,7 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/notification"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/orchestrator"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/scheduler"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 	"github.com/lucasskywalker64/anilist-arr-sync/web"
 )
@@ -35,6 +36,7 @@ type Server struct {
 	db           *storage.DB
 	orch         *orchestrator.Orchestrator
 	backup       *backup.Engine
+	scheduler    *scheduler.Scheduler
 	notifier     *notification.Dispatcher
 	notifStore   *notification.Store
 	sessions     *SessionStore
@@ -53,8 +55,18 @@ type Server struct {
 	boundSslPort     int
 
 	syncMu         sync.Mutex
-	isSyncing      bool
 	lastSyncReport *orchestrator.SyncReport
+}
+
+// SetScheduler connects configuration changes to the background scheduler.
+// The runtime bootstrap owns the scheduler's Start and Stop lifecycle.
+func (s *Server) SetScheduler(scheduled *scheduler.Scheduler) {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	s.scheduler = scheduled
+	if scheduled != nil {
+		scheduled.UpdateConfig(*s.cfg)
+	}
 }
 
 // NewServer creates a new Server instance.

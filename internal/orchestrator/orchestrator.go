@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/anilist"
@@ -74,6 +76,8 @@ type Notifier interface {
 
 // Orchestrator coordinates the end-to-end synchronization workflow.
 type Orchestrator struct {
+	stateMu  sync.RWMutex
+	running  atomic.Bool
 	db       *storage.DB
 	cfg      *config.Config
 	al       *anilist.Client
@@ -83,9 +87,30 @@ type Orchestrator struct {
 	notifier Notifier
 }
 
+// ErrSyncInProgress indicates another trigger already owns synchronization.
+var ErrSyncInProgress = errors.New("sync is already in progress")
+
 // SetNotifier sets a notification dispatcher on the Orchestrator.
 func (o *Orchestrator) SetNotifier(n Notifier) {
+	o.stateMu.Lock()
+	defer o.stateMu.Unlock()
 	o.notifier = n
+}
+
+// UpdateConfig installs an immutable configuration snapshot for future runs.
+func (o *Orchestrator) UpdateConfig(cfg config.Config) {
+	o.stateMu.Lock()
+	defer o.stateMu.Unlock()
+	o.cfg = &cfg
+}
+
+func (o *Orchestrator) snapshot() *Orchestrator {
+	o.stateMu.RLock()
+	defer o.stateMu.RUnlock()
+	return &Orchestrator{
+		db: o.db, cfg: o.cfg, al: o.al, sonarr: o.sonarr, radarr: o.radarr,
+		resolver: o.resolver, notifier: o.notifier,
+	}
 }
 
 // New creates an Orchestrator instance.
@@ -96,9 +121,10 @@ func New(
 	sonarr *servarr.SonarrClient,
 	radarr *servarr.RadarrClient,
 ) *Orchestrator {
+	cfgCopy := *cfg
 	return &Orchestrator{
 		db:       db,
-		cfg:      cfg,
+		cfg:      &cfgCopy,
 		al:       al,
 		sonarr:   sonarr,
 		radarr:   radarr,
@@ -108,6 +134,44 @@ func New(
 
 // Sync executes the core synchronization loop following the four-step sequence.
 func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncReport, error) {
+	if !o.running.CompareAndSwap(false, true) {
+		return nil, ErrSyncInProgress
+	}
+	return o.runSync(ctx, trigger)
+}
+
+// SyncResult contains the outcome of an asynchronous synchronization run.
+type SyncResult struct {
+	Report *SyncReport
+	Err    error
+}
+
+// StartSync reserves execution before returning, then runs asynchronously.
+// The buffered result channel never blocks completion if the caller goes away.
+func (o *Orchestrator) StartSync(ctx context.Context, trigger TriggerType) (<-chan SyncResult, error) {
+	if !o.running.CompareAndSwap(false, true) {
+		return nil, ErrSyncInProgress
+	}
+	result := make(chan SyncResult, 1)
+	go func() {
+		report, err := o.runSync(ctx, trigger)
+		result <- SyncResult{Report: report, Err: err}
+		close(result)
+	}()
+	return result, nil
+}
+
+// IsSyncing reports whether any trigger currently owns synchronization.
+func (o *Orchestrator) IsSyncing() bool {
+	return o.running.Load()
+}
+
+func (o *Orchestrator) runSync(ctx context.Context, trigger TriggerType) (*SyncReport, error) {
+	defer o.running.Store(false)
+	return o.snapshot().sync(ctx, trigger)
+}
+
+func (o *Orchestrator) sync(ctx context.Context, trigger TriggerType) (*SyncReport, error) {
 	startTime := time.Now()
 	report := &SyncReport{
 		Trigger: trigger,

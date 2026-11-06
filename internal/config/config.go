@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"strings"
+	"time"
 )
 
 // Config represents the application configuration matching Servarr conventions.
@@ -133,7 +134,7 @@ func NewDefault() *Config {
 		UpdateAutomatically:        false,
 		UpdateMechanism:            "Docker",
 		BackupFolder:               "Backups",
-		BackupInterval:             7,
+		BackupInterval:             1,
 		BackupRetention:            28,
 		DatabasePath:               "sync.db",
 		AniListUsername:            "",
@@ -234,6 +235,9 @@ func (c *Config) Validate() error {
 	}
 
 	check(c.SyncIntervalHours > 0, "SyncIntervalHours must be greater than 0, got %d", c.SyncIntervalHours)
+	check(c.SyncIntervalHours <= int((1<<63-1)/time.Hour), "SyncIntervalHours exceeds maximum duration, got %d", c.SyncIntervalHours)
+	check(c.BackupInterval > 0, "BackupInterval must be greater than 0, got %d", c.BackupInterval)
+	check(c.BackupInterval <= int((1<<63-1)/(24*time.Hour)), "BackupInterval exceeds maximum duration, got %d", c.BackupInterval)
 	check(c.DateToleranceDays >= 0, "DateToleranceDays cannot be negative, got %d", c.DateToleranceDays)
 	check(!math.IsNaN(c.ConfidenceThreshold) && c.ConfidenceThreshold >= 0.0 && c.ConfidenceThreshold <= 1.0, "ConfidenceThreshold must be between 0.0 and 1.0, got %f", c.ConfidenceThreshold)
 
