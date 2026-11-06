@@ -91,10 +91,10 @@
 {#if reconnecting || stopped}
   <div class="overlay" role="dialog" aria-modal="true" aria-label={stopped ? 'Application stopped' : 'Reconnecting'} tabindex="-1">
     <div class="message">
-      <RotateCw size={28} class={reconnecting ? 'spinning' : ''} />
-      <h2>{stopped ? 'Application stopped' : 'Restarting application'}</h2>
+      {#if reconnecting && !requiresNavigation}<RotateCw size={28} class="spinning" />{/if}
+      <h2>{stopped ? 'Application stopped' : requiresNavigation ? 'Reconnect to application' : 'Restarting application'}</h2>
       <p>{stopped ? 'Start the application to reconnect.' : requiresNavigation ? 'HTTPS was disabled. Your browser requires opening the HTTP address to reconnect.' : 'Waiting for the application to reconnect...'}</p>
-      {#if reconnectUrl}<a href={reconnectUrl}>Reconnect to application</a>{/if}
+      {#if requiresNavigation}<a href={reconnectUrl}>Reconnect to application</a>{/if}
       {#if error}<p role="alert">{error}</p>{/if}
     </div>
   </div>

@@ -502,6 +502,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update user credentials if requested
+	credentialsChanged := hasPasswordUpdate
 	if (hasUsernameUpdate || hasPasswordUpdate) && s.db != nil {
 		err := s.db.Write(r.Context(), func(ctx context.Context, tx *sql.Tx) error {
 			var count int
@@ -536,9 +537,15 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 					return err
 				}
 			} else if hasUsernameUpdate {
-				if _, err := tx.ExecContext(ctx, "UPDATE users SET username = ? WHERE id = (SELECT id FROM users ORDER BY id ASC LIMIT 1);", newUsername); err != nil {
+				result, err := tx.ExecContext(ctx, "UPDATE users SET username = ? WHERE id = (SELECT id FROM users ORDER BY id ASC LIMIT 1) AND username != ?;", newUsername, newUsername)
+				if err != nil {
 					return err
 				}
+				changed, err := result.RowsAffected()
+				if err != nil {
+					return err
+				}
+				credentialsChanged = changed > 0
 			}
 
 			if s.configPath != "" {
@@ -558,7 +565,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if s.sessions != nil {
+		if credentialsChanged && s.sessions != nil {
 			s.sessions.RevokeAll()
 		}
 	} else if s.configPath != "" {
