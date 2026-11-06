@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
+	"time"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/server"
 	"github.com/mattn/go-isatty"
@@ -87,20 +88,47 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	sessions := server.NewSessionStore(24 * time.Hour)
+	sessionDatabase := ""
+	var handoff *server.RestartHandoff
+	defer func() {
+		if handoff != nil {
+			handoff.Close()
+		}
+	}()
+	failRestart := func(err error) error {
+		if handoff != nil {
+			log.Printf("restart failed: %v", err)
+			handoff.Fail()
+			handoff.Wait(ctx)
+		}
+		return err
+	}
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 		r, err := bootstrap(ctx, o, paths)
 		if err != nil {
-			return err
+			return failRestart(err)
 		}
+		database := dataPath(paths.data, r.cfg.DatabasePath)
+		if sessionDatabase != "" && sessionDatabase != database {
+			sessions.RevokeAll()
+		}
+		sessionDatabase = database
+		r.server.SetSessionStore(sessions)
 		if o.sync {
 			err := r.syncOnce(ctx, out)
 			return errors.Join(err, r.close())
 		}
 		if err := r.server.Start(); err != nil {
-			return errors.Join(err, r.close())
+			return failRestart(errors.Join(err, r.close()))
+		}
+		if handoff != nil {
+			if err := handoff.Ready(ctx, r.server); err != nil {
+				log.Printf("restart readiness: %v", err)
+			}
 		}
 		r.start()
 		url := r.browserURL()
@@ -125,10 +153,23 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		}()
 		action := r.server.WaitLifecycle()
 		close(stopWatching)
+		if handoff != nil {
+			handoff.Close()
+			handoff = nil
+		}
+		pendingHandoff := r.server.RestartHandoff()
 		closeErr := r.close()
 		<-watched
+		if action == server.LifecycleRestart && ctx.Err() == nil && pendingHandoff != nil {
+			if err := pendingHandoff.Start(ctx); err != nil {
+				log.Printf("restart handoff unavailable: %v", err)
+				pendingHandoff.Close()
+			} else {
+				handoff = pendingHandoff
+			}
+		}
 		if err := errors.Join(listenerErr, closeErr); err != nil {
-			return err
+			return failRestart(err)
 		}
 		if action != server.LifecycleRestart || ctx.Err() != nil {
 			return nil

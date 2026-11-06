@@ -54,6 +54,7 @@ type Server struct {
 	version      string
 	portOverride *int
 	bindOverride *string
+	handoff      *RestartHandoff
 
 	httpServer  *http.Server
 	httpsServer *http.Server
@@ -66,6 +67,11 @@ type Server struct {
 
 	syncMu         sync.Mutex
 	lastSyncReport *orchestrator.SyncReport
+}
+
+// SetSessionStore attaches process-owned sessions before the listeners start.
+func (s *Server) SetSessionStore(sessions *SessionStore) {
+	s.sessions = sessions
 }
 
 // SetScheduler connects configuration changes to the background scheduler.

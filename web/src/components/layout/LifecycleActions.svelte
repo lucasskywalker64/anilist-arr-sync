@@ -37,11 +37,13 @@
         reconnecting = true;
         reconnectUrl = result.reconnectUrl;
         const target = new URL(result.reconnectUrl);
-        if (window.location.protocol === 'https:' && target.protocol === 'http:') {
+        const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(target.hostname);
+        if (window.location.protocol === 'https:' && target.protocol === 'http:' && !result.statusUrl && !loopback) {
           requiresNavigation = true;
+          error = 'Automatic reconnection is unavailable for this address.';
           return;
         }
-        await waitForRestart(result.instanceId, result.reconnectUrl, polling.signal);
+        await waitForRestart(result.instanceId, result.reconnectUrl, polling.signal, result.statusUrl);
         if (target.origin === window.location.origin && target.pathname === `${window.AniListArrSync?.urlBase || ''}/`) {
           window.location.reload();
         } else {
@@ -54,6 +56,7 @@
       }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Action failed';
+      if (reconnecting) requiresNavigation = true;
     } finally {
       busy = false;
     }
@@ -93,7 +96,7 @@
     <div class="message">
       {#if reconnecting && !requiresNavigation}<RotateCw size={28} class="spinning" />{/if}
       <h2>{stopped ? 'Application stopped' : requiresNavigation ? 'Reconnect to application' : 'Restarting application'}</h2>
-      <p>{stopped ? 'Start the application to reconnect.' : requiresNavigation ? 'HTTPS was disabled. Your browser requires opening the HTTP address to reconnect.' : 'Waiting for the application to reconnect...'}</p>
+      <p>{stopped ? 'Start the application to reconnect.' : requiresNavigation ? 'Open the application address to reconnect.' : 'Waiting for the application to reconnect...'}</p>
       {#if requiresNavigation}<a href={reconnectUrl}>Reconnect to application</a>{/if}
       {#if error}<p role="alert">{error}</p>{/if}
     </div>

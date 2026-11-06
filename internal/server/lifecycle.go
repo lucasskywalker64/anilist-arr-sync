@@ -112,8 +112,12 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	reconnectURL := scheme + "://" + host + normalizeURLBase(cfg.URLBase) + "/"
+	statusURL := ""
+	if r.TLS != nil && scheme == "http" {
+		statusURL = s.prepareRestartHandoff(cfg, reconnectURL)
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"restarting": true, "instanceId": s.instanceID, "reconnectUrl": reconnectURL})
+	_ = json.NewEncoder(w).Encode(map[string]any{"restarting": true, "instanceId": s.instanceID, "reconnectUrl": reconnectURL, "statusUrl": statusURL})
 	s.NotifyLifecycle(LifecycleRestart)
 }
 

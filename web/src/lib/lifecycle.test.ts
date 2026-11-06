@@ -34,4 +34,31 @@ describe('lifecycle API', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:9123/new/api/v1/health');
     expect(finished).toBe(true);
   });
+
+  it('polls the old HTTPS status endpoint before navigating to HTTP', async () => {
+    vi.useFakeTimers();
+    const status = (body: object) => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error('listener restarting'))
+      .mockResolvedValueOnce(status({ status: 'starting' }))
+      .mockResolvedValueOnce(status({ status: 'ready', instanceId: 'new' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const waiting = waitForRestart('old', 'http://remote.example:7171/', undefined, '/old/api/v1/system/restart-status/operation');
+    await vi.advanceTimersByTimeAsync(2000);
+    await waiting;
+    expect(fetchMock.mock.calls.map(call => call[0])).toEqual(Array(3).fill('/old/api/v1/system/restart-status/operation'));
+  });
+
+  it('reports a failed handoff instead of polling forever', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'failed' }), { headers: { 'Content-Type': 'application/json' } })));
+    await expect(waitForRestart('old', 'http://remote.example/', undefined, '/restart-status')).rejects.toThrow('Restart failed');
+  });
+
+  it('stops polling after the restart deadline', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    const waiting = expect(waitForRestart('old', 'http://remote.example/')).rejects.toThrow('Timed out');
+    await vi.advanceTimersByTimeAsync(65000);
+    await waiting;
+  });
 });

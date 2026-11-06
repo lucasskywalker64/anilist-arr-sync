@@ -142,22 +142,24 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 }
 
 // A healthy response from the previous boot does not mean restart has finished.
-export async function waitForRestart(previousInstance: string, reconnectUrl: string, signal?: AbortSignal): Promise<void> {
-  while (!signal?.aborted) {
+export async function waitForRestart(previousInstance: string, reconnectUrl: string, signal?: AbortSignal, statusUrl = ''): Promise<void> {
+  const deadline = Date.now() + 60000;
+  while (!signal?.aborted && Date.now() < deadline) {
+    let health: { status?: string; instanceId?: string } | undefined;
     try {
-      const response = await fetch(`${reconnectUrl}api/v1/health`, {
+      const response = await fetch(statusUrl || `${reconnectUrl}api/v1/health`, {
         cache: 'no-store', credentials: 'omit',
-        signal: AbortSignal.any([AbortSignal.timeout(3000), ...(signal ? [signal] : [])]),
+        signal: AbortSignal.any([AbortSignal.timeout(Math.min(3000, deadline - Date.now())), ...(signal ? [signal] : [])]),
       });
-      if (response.ok) {
-        const health = await response.json();
-        if (health.status === 'ok' && health.instanceId && health.instanceId !== previousInstance) return;
-      }
+      if (response.ok) health = await response.json();
     } catch {
       // Listener downtime, proxy errors, and request timeouts are expected here.
     }
+    if (health?.status === 'failed') throw new Error('Restart failed. Check the server log.');
+    if (health?.status === (statusUrl ? 'ready' : 'ok') && health.instanceId && health.instanceId !== previousInstance) return;
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
+  if (!signal?.aborted) throw new Error('Timed out waiting for the application to restart.');
   throw new DOMException('Restart polling cancelled', 'AbortError');
 }
 
@@ -171,7 +173,7 @@ export const api = {
     return request('/api/v1/system/status');
   },
 
-  async restart(): Promise<{ restarting: boolean; instanceId: string; reconnectUrl: string }> {
+  async restart(): Promise<{ restarting: boolean; instanceId: string; reconnectUrl: string; statusUrl?: string }> {
     return request('/api/v1/system/restart', { method: 'POST' });
   },
 
