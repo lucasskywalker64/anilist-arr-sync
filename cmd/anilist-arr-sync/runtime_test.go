@@ -337,6 +337,9 @@ func TestRuntimeCLIOverridesStayTransient(t *testing.T) {
 	if code != 200 {
 		t.Fatal(response)
 	}
+	if response["restartRequired"] != false {
+		t.Fatalf("an unrelated save must not require restart with CLI listener overrides: %+v", response)
+	}
 	persisted, err := config.Load(path, nil)
 	if err != nil {
 		t.Fatal(err)

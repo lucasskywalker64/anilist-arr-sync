@@ -25,3 +25,5 @@ using the existing authentication middleware. Shutdown is disabled in containers
 Restart rebuilds dependencies and reloads configuration in the same process;
 browser sessions require signing in again. SIGINT and SIGTERM request shutdown,
 with a 15-second cleanup deadline.
+When HTTPS is disabled, use the overlay's reconnect link because browsers block
+health polling from HTTPS to HTTP.

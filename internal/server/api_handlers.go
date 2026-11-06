@@ -569,8 +569,9 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	restartRequired := (s.boundPort != next.Port) ||
-		(s.boundBindAddress != next.BindAddress) ||
+	listenerNext := s.listenerConfig(next)
+	restartRequired := (s.boundPort != listenerNext.Port) ||
+		(s.boundBindAddress != listenerNext.BindAddress) ||
 		(s.boundURLBase != next.URLBase) ||
 		(s.boundEnableSsl != next.EnableSsl) ||
 		(s.boundSslPort != next.SslPort) ||
