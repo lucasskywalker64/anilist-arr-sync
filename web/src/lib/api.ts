@@ -141,10 +141,44 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   return {} as T;
 }
 
+// A healthy response from the previous boot does not mean restart has finished.
+export async function waitForRestart(previousInstance: string, reconnectUrl: string, signal?: AbortSignal, statusUrl = ''): Promise<void> {
+  const deadline = Date.now() + 60000;
+  while (!signal?.aborted && Date.now() < deadline) {
+    let health: { status?: string; instanceId?: string } | undefined;
+    try {
+      const response = await fetch(statusUrl || `${reconnectUrl}api/v1/health`, {
+        cache: 'no-store', credentials: 'omit',
+        signal: AbortSignal.any([AbortSignal.timeout(Math.min(3000, deadline - Date.now())), ...(signal ? [signal] : [])]),
+      });
+      if (response.ok) health = await response.json();
+    } catch {
+      // Listener downtime, proxy errors, and request timeouts are expected here.
+    }
+    if (health?.status === 'failed') throw new Error('Restart failed. Check the server log.');
+    if (health?.status === (statusUrl ? 'ready' : 'ok') && health.instanceId && health.instanceId !== previousInstance) return;
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  if (!signal?.aborted) throw new Error('Timed out waiting for the application to restart.');
+  throw new DOMException('Restart polling cancelled', 'AbortError');
+}
+
 export const api = {
   // System Health & Version
-  async getHealth(): Promise<{ status: string; version: string }> {
+  async getHealth(): Promise<{ status: string; version: string; instanceId: string }> {
     return request('/api/v1/health');
+  },
+
+  async getSystemStatus(): Promise<{ isContainerized: boolean; instanceId: string; version: string; os: string; architecture: string }> {
+    return request('/api/v1/system/status');
+  },
+
+  async restart(): Promise<{ restarting: boolean; instanceId: string; reconnectUrl: string; statusUrl?: string }> {
+    return request('/api/v1/system/restart', { method: 'POST' });
+  },
+
+  async shutdown(): Promise<{ shuttingDown: boolean }> {
+    return request('/api/v1/system/shutdown', { method: 'POST' });
   },
 
   // Auth

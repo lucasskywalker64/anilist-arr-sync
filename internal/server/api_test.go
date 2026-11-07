@@ -328,6 +328,88 @@ func TestConfigEndpoints(t *testing.T) {
 	}
 }
 
+func TestConfigRejectsUnusableRuntimeSettings(t *testing.T) {
+	for _, tc := range []struct {
+		field, body string
+	}{
+		{"SonarrURL", `{"sonarrUrl":"localhost:8989"}`},
+		{"RadarrURL", `{"radarrUrl":"   "}`},
+		{"ProxyType", `{"useProxy":true,"proxyType":"Socks4","proxyHostname":"proxy.example"}`},
+		{"ProxyHostname", `{"useProxy":true,"proxyHostname":"   "}`},
+		{"ProxyPort", `{"useProxy":true,"proxyHostname":"proxy.example","proxyPort":0}`},
+		{"ProxyPort", `{"useProxy":true,"proxyHostname":"proxy.example","proxyPort":65536}`},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.xml")
+			cfg := config.NewDefault()
+			cfg.APIKey = "key"
+			original := *cfg
+			if err := config.Save(path, cfg); err != nil {
+				t.Fatal(err)
+			}
+			srv := NewServer(cfg, path, nil, nil, nil)
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewBufferString(tc.body))
+			req.Header.Set("X-Api-Key", "key")
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest || !bytes.Contains(rec.Body.Bytes(), []byte(tc.field)) {
+				t.Fatalf("expected a 400 error for %s, got %d %s", tc.field, rec.Code, rec.Body.String())
+			}
+			persisted, err := config.Load(path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if *persisted != original || srv.Config() != original {
+				t.Fatal("invalid settings changed the saved or running configuration")
+			}
+		})
+	}
+}
+
+func TestDependencyRestartWarningSurvivesSubsequentSaves(t *testing.T) {
+	for _, tc := range []struct {
+		field    string
+		value    any
+		original any
+	}{
+		{"sonarrUrl", "http://sonarr.example", ""},
+		{"backupFolder", "other-backups", config.NewDefault().BackupFolder},
+		{"proxyHostname", "proxy.example", ""},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			cfg := config.NewDefault()
+			cfg.APIKey = "key"
+			srv := NewServer(cfg, "", nil, nil, nil)
+			for i, step := range []struct {
+				payload map[string]any
+				want    bool
+			}{
+				{map[string]any{tc.field: tc.value}, true},
+				{map[string]any{"instanceName": "updated"}, true},
+				{map[string]any{tc.field: tc.original}, false},
+			} {
+				body, err := json.Marshal(step.payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req := httptest.NewRequest("PUT", "/api/v1/config", bytes.NewReader(body))
+				req.Header.Set("X-Api-Key", "key")
+				rec := httptest.NewRecorder()
+				srv.Handler().ServeHTTP(rec, req)
+				var result struct {
+					RestartRequired bool `json:"restartRequired"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+					t.Fatal(err)
+				}
+				if rec.Code != http.StatusOK || result.RestartRequired != step.want {
+					t.Fatalf("save %d: %d %s, want restartRequired=%v", i, rec.Code, rec.Body.String(), step.want)
+				}
+			}
+		})
+	}
+}
+
 func TestConfigEndpoints_RestartBaselineRefreshedOnStart(t *testing.T) {
 	l1, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

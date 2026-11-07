@@ -55,7 +55,25 @@ func Save(path string, cfg *Config) error {
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("refusing to save invalid configuration: %w", err)
 	}
+	return save(path, cfg)
+}
 
+// SaveAPIKey changes only the stored key, without persisting environment overrides.
+// The file may rely on environment overrides to pass effective validation.
+func SaveAPIKey(path, key string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	cfg, err := ParseXML(data)
+	if err != nil {
+		return err
+	}
+	cfg.APIKey = key
+	return save(path, cfg)
+}
+
+func save(path string, cfg *Config) error {
 	data, err := cfg.ToXML()
 	if err != nil {
 		return err

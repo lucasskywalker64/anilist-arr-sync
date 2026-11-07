@@ -139,7 +139,7 @@ func TestSelectBackupsToPrune(t *testing.T) {
 	}
 
 	// Retention of 7 should prune the 3 oldest backups
-	toPrune := backup.SelectBackupsToPrune(backups, 7)
+	toPrune := backup.SelectBackupsToPrune(backups, 7, baseTime.AddDate(0, 0, 9))
 	if len(toPrune) != 3 {
 		t.Fatalf("expected 3 backups to prune, got %d", len(toPrune))
 	}
@@ -153,12 +153,12 @@ func TestSelectBackupsToPrune(t *testing.T) {
 	}
 
 	// Retention of 10 should prune nothing
-	if len(backup.SelectBackupsToPrune(backups, 10)) != 0 {
+	if len(backup.SelectBackupsToPrune(backups, 10, baseTime.AddDate(0, 0, 9))) != 0 {
 		t.Error("expected 0 backups to prune with retention 10")
 	}
 
 	// Retention of 12 should prune nothing
-	if len(backup.SelectBackupsToPrune(backups, 12)) != 0 {
+	if len(backup.SelectBackupsToPrune(backups, 12, baseTime.AddDate(0, 0, 9))) != 0 {
 		t.Error("expected 0 backups to prune with retention 12")
 	}
 }

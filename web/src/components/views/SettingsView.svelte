@@ -465,7 +465,7 @@
 
             <FormGroup
               label="Enable SSL"
-              helpText="Enables HTTPS listener on configured SSL port with certificates (requires service restart)"
+              helpText="Enables HTTPS listener on configured SSL port with certificates. Changing this setting requires a service restart and signing in again after restart."
               isAdvanced={true}
               isDirty={isFieldDirty("enableSsl")}
             >
@@ -622,7 +622,6 @@
             <FormGroup label="Proxy Type" isDirty={isFieldDirty("proxyType")}>
               <select class="formInput" bind:value={formConfig.proxyType}>
                 <option value="Http">HTTP(S)</option>
-                <option value="Socks4">SOCKS4</option>
                 <option value="Socks5">SOCKS5</option>
               </select>
             </FormGroup>

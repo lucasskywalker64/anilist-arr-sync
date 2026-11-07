@@ -42,7 +42,7 @@ func (w contextWriter) Write(p []byte) (int, error) {
 // Option configures optional parameters on Engine.
 type Option func(*Engine)
 
-// WithRetention sets the rolling retention count for backups.
+// WithRetention sets the rolling retention window in days.
 func WithRetention(retention int) Option {
 	return func(e *Engine) {
 		e.retention = retention
@@ -192,7 +192,7 @@ func (e *Engine) Create(ctx context.Context, backupType Type) (*Info, error) {
 	}
 
 	// Automatically prune old archives according to rolling retention window
-	_, _ = e.Prune(ctx)
+	_, _ = e.prune(now)
 
 	return &Info{
 		Filename:  archiveName,
@@ -250,12 +250,16 @@ func (e *Engine) List() ([]Info, error) {
 // Prune deletes backup archives that exceed the rolling retention limit,
 // returning the list of deleted archive file paths.
 func (e *Engine) Prune(_ context.Context) ([]string, error) {
+	return e.prune(e.nowFn())
+}
+
+func (e *Engine) prune(now time.Time) ([]string, error) {
 	backups, err := e.List()
 	if err != nil {
 		return nil, err
 	}
 
-	toPrune := SelectBackupsToPrune(backups, e.retention)
+	toPrune := SelectBackupsToPrune(backups, e.retention, now)
 	var purged []string
 	for _, item := range toPrune {
 		if err := os.Remove(item.Path); err == nil {

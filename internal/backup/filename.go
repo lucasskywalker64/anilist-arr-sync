@@ -25,7 +25,7 @@ const (
 	Prefix = "anilist-arr-sync_backup_"
 	// Extension defines the backup zip file extension.
 	Extension = ".zip"
-	// DefaultRetention defines the default number of daily backups kept.
+	// DefaultRetention defines the default retention window in days.
 	DefaultRetention = 7
 )
 
@@ -71,23 +71,21 @@ func ParseBackupFilename(path string) (*Info, error) {
 	}, nil
 }
 
-// SelectBackupsToPrune returns the archives that exceed the retention limit,
+// SelectBackupsToPrune returns archives at least retentionDays old,
 // ordered from oldest to newest.
-func SelectBackupsToPrune(backups []Info, retentionCount int) []Info {
-	if retentionCount <= 0 {
-		retentionCount = DefaultRetention
+func SelectBackupsToPrune(backups []Info, retentionDays int, now time.Time) []Info {
+	if retentionDays <= 0 {
+		retentionDays = DefaultRetention
 	}
-	if len(backups) <= retentionCount {
-		return nil
+	cutoff := now.UTC().AddDate(0, 0, -retentionDays)
+	var expired []Info
+	for _, item := range backups {
+		if !item.CreatedAt.After(cutoff) {
+			expired = append(expired, item)
+		}
 	}
-
-	// Sort backups ascending by CreatedAt (oldest first)
-	sorted := make([]Info, len(backups))
-	copy(sorted, backups)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].CreatedAt.Before(sorted[j].CreatedAt)
+	sort.Slice(expired, func(i, j int) bool {
+		return expired[i].CreatedAt.Before(expired[j].CreatedAt)
 	})
-
-	excessCount := len(sorted) - retentionCount
-	return sorted[:excessCount]
+	return expired
 }

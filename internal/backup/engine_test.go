@@ -245,6 +245,30 @@ func TestBackupEngine_RollingRetentionPruning(t *testing.T) {
 	}
 }
 
+func TestBackupEngine_ClockJumpDuringCreation(t *testing.T) {
+	db, _, configPath, backupDir := setupTestEnvironment(t)
+	now := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	engine := backup.NewEngine(db, configPath, backupDir, backup.WithRetention(1), backup.WithNowFunc(func() time.Time {
+		result := now
+		now = now.AddDate(0, 0, 2)
+		return result
+	}))
+	info, err := engine.Create(t.Context(), backup.TypeManual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backup.ValidateArchive(info.Path); err != nil {
+		t.Fatalf("successful creation did not leave a restorable archive: %v", err)
+	}
+	if _, err := engine.Prune(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := engine.List()
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("explicit pruning must still expire all old archives: %v %v", remaining, err)
+	}
+}
+
 func TestBackupEngine_Restore_ValidatesIntegrityCheckAndRejectsCorruptDB(t *testing.T) {
 	t.Parallel()
 

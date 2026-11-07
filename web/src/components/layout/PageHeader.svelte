@@ -1,6 +1,7 @@
 <script lang="ts">
   import { RotateCw, LogOut } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
+  import LifecycleActions from './LifecycleActions.svelte';
 
   export let instanceName = 'AniList-Arr-Sync';
   export let isSyncing = false;
@@ -16,6 +17,7 @@
   </div>
 
   <div class="right">
+    <LifecycleActions />
     {#if isSyncing}
       <div class="syncIndicator" title="Sync is running">
         <RotateCw size={16} class="spinning" />

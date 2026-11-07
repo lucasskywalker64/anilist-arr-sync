@@ -2,6 +2,7 @@ package notification_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -133,4 +134,39 @@ func TestDispatcher_Dispatch_NilGuard(_ *testing.T) {
 	// Must not panic on nil store
 	emptyDispatcher := notification.NewDispatcher(nil, nil)
 	emptyDispatcher.Dispatch(notification.SyncEvent{Type: notification.EventSyncComplete})
+}
+
+type cancelTransport struct{ entered, cancelled chan struct{} }
+
+func (c cancelTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	close(c.entered)
+	<-r.Context().Done()
+	close(c.cancelled)
+	return nil, r.Context().Err()
+}
+
+func TestDispatcher_CloseCancelsDeliveriesAtDeadline(t *testing.T) {
+	store := notification.NewStore(setupTestDB(t))
+	_, err := store.Insert(t.Context(), notification.Connection{
+		Name: "pending", Provider: "WEBHOOK", ConfigJSON: `{"url":"http://notify.example/hook"}`, OnComplete: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := cancelTransport{make(chan struct{}), make(chan struct{})}
+	dispatcher := notification.NewDispatcher(store, &http.Client{Transport: transport})
+	dispatcher.Dispatch(notification.SyncEvent{Type: notification.EventSyncComplete})
+	<-transport.entered
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if err := dispatcher.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("close: %v", err)
+	}
+	select {
+	case <-transport.cancelled:
+	default:
+		t.Fatal("close returned before its delivery stopped")
+	}
+	dispatcher.Dispatch(notification.SyncEvent{Type: notification.EventSyncComplete})
+	dispatcher.Wait()
 }
