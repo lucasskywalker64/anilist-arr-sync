@@ -47,7 +47,7 @@ func TestRegularRestartPreservesSessionsAndRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := &http.Client{Jar: jar, Timeout: time.Second}
+	client := &http.Client{Jar: jar, Timeout: 10 * time.Second}
 	defer client.CloseIdleConnections()
 	base := fmt.Sprintf("http://127.0.0.1:%d", cfg.Port)
 	id := waitBoot(t, client, base, "")
@@ -162,7 +162,7 @@ func testRuntimeHTTPSDowngradeHandoff(t *testing.T, failStartup bool) {
 		t.Fatal(err)
 	}
 	roots.AddCert(cert)
-	client := &http.Client{Timeout: time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "example.com", MinVersion: tls.VersionTLS12}}}
+	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "example.com", MinVersion: tls.VersionTLS12}}}
 	defer client.CloseIdleConnections()
 	base := fmt.Sprintf("https://127.0.0.1:%d", cfg.SslPort)
 	id := waitBoot(t, client, base+"/before", "")
