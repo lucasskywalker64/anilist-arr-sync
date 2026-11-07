@@ -328,6 +328,44 @@ func TestConfigEndpoints(t *testing.T) {
 	}
 }
 
+func TestConfigRejectsUnusableRuntimeSettings(t *testing.T) {
+	for _, tc := range []struct {
+		field, body string
+	}{
+		{"SonarrURL", `{"sonarrUrl":"localhost:8989"}`},
+		{"RadarrURL", `{"radarrUrl":"   "}`},
+		{"ProxyType", `{"useProxy":true,"proxyType":"Socks4","proxyHostname":"proxy.example"}`},
+		{"ProxyHostname", `{"useProxy":true,"proxyHostname":"   "}`},
+		{"ProxyPort", `{"useProxy":true,"proxyHostname":"proxy.example","proxyPort":0}`},
+		{"ProxyPort", `{"useProxy":true,"proxyHostname":"proxy.example","proxyPort":65536}`},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.xml")
+			cfg := config.NewDefault()
+			cfg.APIKey = "key"
+			original := *cfg
+			if err := config.Save(path, cfg); err != nil {
+				t.Fatal(err)
+			}
+			srv := NewServer(cfg, path, nil, nil, nil)
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewBufferString(tc.body))
+			req.Header.Set("X-Api-Key", "key")
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest || !bytes.Contains(rec.Body.Bytes(), []byte(tc.field)) {
+				t.Fatalf("expected a 400 error for %s, got %d %s", tc.field, rec.Code, rec.Body.String())
+			}
+			persisted, err := config.Load(path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if *persisted != original || srv.Config() != original {
+				t.Fatal("invalid settings changed the saved or running configuration")
+			}
+		})
+	}
+}
+
 func TestDependencyRestartWarningSurvivesSubsequentSaves(t *testing.T) {
 	for _, tc := range []struct {
 		field    string

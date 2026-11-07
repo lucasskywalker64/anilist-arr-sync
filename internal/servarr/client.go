@@ -79,20 +79,29 @@ func WithTimeout(timeout time.Duration) Option {
 	}
 }
 
-// NewClient creates and validates a base Servarr client.
-func NewClient(rawURL, apiKey string, opts ...Option) (*Client, error) {
+// NormalizeBaseURL validates a Servarr URL and strips surrounding whitespace and trailing slashes.
+func NormalizeBaseURL(rawURL string) (string, error) {
 	trimmedURL := strings.TrimRight(strings.TrimSpace(rawURL), "/")
 	if trimmedURL == "" {
-		return nil, errors.New("servarr base url cannot be empty")
+		return "", errors.New("servarr base url cannot be empty")
 	}
 
 	parsed, err := url.Parse(trimmedURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return nil, fmt.Errorf("invalid servarr base url %q", rawURL)
+		return "", fmt.Errorf("invalid servarr base url %q", rawURL)
+	}
+	return trimmedURL, nil
+}
+
+// NewClient creates and validates a base Servarr client.
+func NewClient(rawURL, apiKey string, opts ...Option) (*Client, error) {
+	baseURL, err := NormalizeBaseURL(rawURL)
+	if err != nil {
+		return nil, err
 	}
 
 	c := &Client{
-		baseURL: trimmedURL,
+		baseURL: baseURL,
 		apiKey:  strings.TrimSpace(apiKey),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,

@@ -622,7 +622,6 @@
             <FormGroup label="Proxy Type" isDirty={isFieldDirty("proxyType")}>
               <select class="formInput" bind:value={formConfig.proxyType}>
                 <option value="Http">HTTP(S)</option>
-                <option value="Socks4">SOCKS4</option>
                 <option value="Socks5">SOCKS5</option>
               </select>
             </FormGroup>

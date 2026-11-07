@@ -7,8 +7,12 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
 )
 
 // Config represents the application configuration matching Servarr conventions.
@@ -227,6 +231,18 @@ func (c *Config) Validate() error {
 	}
 
 	check(strings.TrimSpace(c.DatabasePath) != "", "DatabasePath cannot be empty")
+	if _, err := c.ProxyURL(); err != nil {
+		errs = append(errs, err)
+	}
+	for _, endpoint := range []struct{ field, url string }{
+		{"SonarrURL", c.SonarrURL},
+		{"RadarrURL", c.RadarrURL},
+	} {
+		if endpoint.url != "" {
+			_, err := servarr.NormalizeBaseURL(endpoint.url)
+			check(err == nil, "%s must be a valid HTTP or HTTPS URL", endpoint.field)
+		}
+	}
 
 	switch c.SonarrSeriesType {
 	case "anime", "standard":
@@ -246,6 +262,30 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// ProxyURL validates and builds the configured proxy URL, returning nil when disabled.
+func (c *Config) ProxyURL() (*url.URL, error) {
+	if !c.UseProxy {
+		return nil, nil
+	}
+	scheme := strings.ToLower(c.ProxyType)
+	switch scheme {
+	case "http", "https", "socks5":
+	default:
+		return nil, fmt.Errorf("ProxyType must be Http, Https, or Socks5, got %q", c.ProxyType)
+	}
+	if strings.TrimSpace(c.ProxyHostname) == "" {
+		return nil, errors.New("ProxyHostname cannot be empty when UseProxy is true")
+	}
+	if c.ProxyPort < 1 || c.ProxyPort > 65535 {
+		return nil, fmt.Errorf("ProxyPort must be between 1 and 65535, got %d", c.ProxyPort)
+	}
+	proxyURL := &url.URL{Scheme: scheme, Host: net.JoinHostPort(c.ProxyHostname, strconv.Itoa(c.ProxyPort))}
+	if c.ProxyUsername != "" {
+		proxyURL.User = url.UserPassword(c.ProxyUsername, c.ProxyPassword)
+	}
+	return proxyURL, nil
 }
 
 // isValidLogLevel checks whether the given log level string is supported.

@@ -1,11 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -13,22 +11,13 @@ import (
 )
 
 func outboundClient(cfg config.Config) (*http.Client, error) {
+	proxyURL, err := cfg.ProxyURL()
+	if err != nil {
+		return nil, err
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
-	if cfg.UseProxy {
-		scheme := strings.ToLower(cfg.ProxyType)
-		switch scheme {
-		case "http", "https", "socks5":
-		default:
-			return nil, fmt.Errorf("unsupported proxy type %q", cfg.ProxyType)
-		}
-		if strings.TrimSpace(cfg.ProxyHostname) == "" || cfg.ProxyPort < 1 || cfg.ProxyPort > 65535 {
-			return nil, fmt.Errorf("proxy requires a hostname and port between 1 and 65535")
-		}
-		proxyURL := &url.URL{Scheme: scheme, Host: net.JoinHostPort(cfg.ProxyHostname, strconv.Itoa(cfg.ProxyPort))}
-		if cfg.ProxyUsername != "" {
-			proxyURL.User = url.UserPassword(cfg.ProxyUsername, cfg.ProxyPassword)
-		}
+	if proxyURL != nil {
 		transport.Proxy = func(r *http.Request) (*url.URL, error) {
 			host := r.URL.Hostname()
 			if cfg.ProxyBypassLocalAddresses {
