@@ -25,7 +25,8 @@ using the existing authentication middleware. Shutdown is disabled in containers
 Restart rebuilds dependencies and reloads configuration in the same process;
 valid browser sessions survive regular restarts. A process restart, protocol
 change, or change of database requires signing in again. SIGINT and SIGTERM
-request shutdown, with a 15-second cleanup deadline.
+request shutdown, with a 15-second graceful shutdown deadline. On timeout,
+pending deliveries are canceled and storage cleanup finishes before returning.
 
 When disabling HTTPS, the runtime temporarily serves restart status at the old
 HTTPS address and automatically navigates to HTTP after the new instance is

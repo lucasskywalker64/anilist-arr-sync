@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -74,6 +76,33 @@ func TestHTTPProxyAndLocalBypass(t *testing.T) {
 	_ = response.Body.Close()
 	if string(body) != "direct" {
 		t.Fatalf("local request used proxy: %s", body)
+	}
+}
+
+func TestDisabledProxyIgnoresEnvironment(t *testing.T) {
+	// Use a fresh process because net/http caches environment proxy settings.
+	if os.Getenv("ANILIST_TEST_PROXY") != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestDisabledProxyIgnoresEnvironment$")
+		cmd.Env = append(os.Environ(), "ANILIST_TEST_PROXY=1", "HTTP_PROXY=http://proxy.example:8080", "HTTPS_PROXY=http://proxy.example:8080", "NO_PROXY=")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("disabled proxy: %v\n%s", err, output)
+		}
+		return
+	}
+	client, err := outboundClient(*config.NewDefault())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.CloseIdleConnections()
+	for _, scheme := range []string{"http", "https"} {
+		req := httptest.NewRequest("GET", scheme+"://sonarr.example/api/v3/tag", nil)
+		transport := client.Transport.(*http.Transport)
+		if transport.Proxy != nil {
+			proxy, err := transport.Proxy(req)
+			if err != nil || proxy != nil {
+				t.Fatalf("disabled proxy routed %s through %v: %v", scheme, proxy, err)
+			}
+		}
 	}
 }
 

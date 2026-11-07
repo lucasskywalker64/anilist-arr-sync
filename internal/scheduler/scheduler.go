@@ -45,6 +45,8 @@ type Scheduler struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	wake   chan struct{}
+
+	prepareSync func(context.Context) error
 }
 
 // New constructs an idle scheduler. cfg must have passed config.Validate.
@@ -55,6 +57,11 @@ func New(cfg config.Config, orch *orchestrator.Orchestrator, backups *backup.Eng
 		s.tasks[0] = task{
 			name: "sync", interval: time.Duration(cfg.SyncIntervalHours) * time.Hour,
 			run: func(ctx context.Context) error {
+				if s.prepareSync != nil {
+					if err := s.prepareSync(ctx); err != nil {
+						return err
+					}
+				}
 				result, err := orch.StartSync(ctx, orchestrator.TriggerScheduled)
 				if err != nil {
 					return err
@@ -80,6 +87,11 @@ func New(cfg config.Config, orch *orchestrator.Orchestrator, backups *backup.Eng
 		s.tasks[2].interval = 24 * time.Hour
 	}
 	return s
+}
+
+// SetSyncPreparation installs the sync prerequisite before scheduling starts.
+func (s *Scheduler) SetSyncPreparation(prepare func(context.Context) error) {
+	s.prepareSync = prepare
 }
 
 // UpdateConfig resets only tasks whose intervals changed. cfg must be validated.

@@ -577,22 +577,23 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	listenerNext := s.listenerConfig(next)
+	running := s.runtimeCfg
 	restartRequired := (s.boundPort != listenerNext.Port) ||
 		(s.boundBindAddress != listenerNext.BindAddress) ||
 		(s.boundURLBase != next.URLBase) ||
 		(s.boundEnableSsl != next.EnableSsl) ||
 		(s.boundSslPort != next.SslPort) ||
-		(s.cfg.SslCertPath != next.SslCertPath) || (s.cfg.SslKeyPath != next.SslKeyPath) ||
-		(s.cfg.AniListUsername != next.AniListUsername) ||
-		(s.cfg.SonarrURL != next.SonarrURL) || (s.cfg.SonarrAPIKey != next.SonarrAPIKey) ||
-		(s.cfg.RadarrURL != next.RadarrURL) || (s.cfg.RadarrAPIKey != next.RadarrAPIKey) ||
-		(s.cfg.DatabasePath != next.DatabasePath) ||
-		(s.cfg.BackupFolder != next.BackupFolder) || (s.cfg.BackupRetention != next.BackupRetention) ||
-		(s.cfg.UseProxy != next.UseProxy) || (s.cfg.ProxyType != next.ProxyType) ||
-		(s.cfg.ProxyHostname != next.ProxyHostname) || (s.cfg.ProxyPort != next.ProxyPort) ||
-		(s.cfg.ProxyUsername != next.ProxyUsername) || (s.cfg.ProxyPassword != next.ProxyPassword) ||
-		(s.cfg.ProxyIgnoredAddresses != next.ProxyIgnoredAddresses) ||
-		(s.cfg.ProxyBypassLocalAddresses != next.ProxyBypassLocalAddresses)
+		(running.SslCertPath != next.SslCertPath) || (running.SslKeyPath != next.SslKeyPath) ||
+		(running.AniListUsername != next.AniListUsername) ||
+		(running.SonarrURL != next.SonarrURL) || (running.SonarrAPIKey != next.SonarrAPIKey) ||
+		(running.RadarrURL != next.RadarrURL) || (running.RadarrAPIKey != next.RadarrAPIKey) ||
+		(running.DatabasePath != next.DatabasePath) ||
+		(running.BackupFolder != next.BackupFolder) || (running.BackupRetention != next.BackupRetention) ||
+		(running.UseProxy != next.UseProxy) || (running.ProxyType != next.ProxyType) ||
+		(running.ProxyHostname != next.ProxyHostname) || (running.ProxyPort != next.ProxyPort) ||
+		(running.ProxyUsername != next.ProxyUsername) || (running.ProxyPassword != next.ProxyPassword) ||
+		(running.ProxyIgnoredAddresses != next.ProxyIgnoredAddresses) ||
+		(running.ProxyBypassLocalAddresses != next.ProxyBypassLocalAddresses)
 
 	*s.cfg = next
 	s.trustedNets = newTrustedNets

@@ -328,6 +328,50 @@ func TestConfigEndpoints(t *testing.T) {
 	}
 }
 
+func TestDependencyRestartWarningSurvivesSubsequentSaves(t *testing.T) {
+	for _, tc := range []struct {
+		field    string
+		value    any
+		original any
+	}{
+		{"sonarrUrl", "http://sonarr.example", ""},
+		{"backupFolder", "other-backups", config.NewDefault().BackupFolder},
+		{"proxyHostname", "proxy.example", ""},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			cfg := config.NewDefault()
+			cfg.APIKey = "key"
+			srv := NewServer(cfg, "", nil, nil, nil)
+			for i, step := range []struct {
+				payload map[string]any
+				want    bool
+			}{
+				{map[string]any{tc.field: tc.value}, true},
+				{map[string]any{"instanceName": "updated"}, true},
+				{map[string]any{tc.field: tc.original}, false},
+			} {
+				body, err := json.Marshal(step.payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req := httptest.NewRequest("PUT", "/api/v1/config", bytes.NewReader(body))
+				req.Header.Set("X-Api-Key", "key")
+				rec := httptest.NewRecorder()
+				srv.Handler().ServeHTTP(rec, req)
+				var result struct {
+					RestartRequired bool `json:"restartRequired"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+					t.Fatal(err)
+				}
+				if rec.Code != http.StatusOK || result.RestartRequired != step.want {
+					t.Fatalf("save %d: %d %s, want restartRequired=%v", i, rec.Code, rec.Body.String(), step.want)
+				}
+			}
+		})
+	}
+}
+
 func TestConfigEndpoints_RestartBaselineRefreshedOnStart(t *testing.T) {
 	l1, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

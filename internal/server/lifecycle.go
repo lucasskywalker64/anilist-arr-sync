@@ -88,15 +88,21 @@ func (s *Server) handleSystemStatus(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	cfg := s.listenerConfig(s.Config())
 	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+	if r.TLS != nil {
 		scheme = "https"
+	}
+	forwardedProto := r.Header.Get("X-Forwarded-Proto")
+	proxied := (forwardedProto == "http" || forwardedProto == "https") &&
+		ipInNets(ResolveClientIP(r.RemoteAddr, "", nil), s.getTrustedNetworks())
+	if proxied {
+		scheme = forwardedProto
 	}
 	host := r.Host
 	port := cfg.Port
 	if cfg.EnableSsl {
 		port = cfg.SslPort
 	}
-	if cfg.Port != s.boundPort || cfg.SslPort != s.boundSslPort || cfg.EnableSsl != s.boundEnableSsl || cfg.BindAddress != s.boundBindAddress {
+	if !proxied && (cfg.Port != s.boundPort || cfg.SslPort != s.boundSslPort || cfg.EnableSsl != s.boundEnableSsl || cfg.BindAddress != s.boundBindAddress) {
 		hostname := r.URL.Hostname()
 		if parsed, err := url.Parse("//" + r.Host); err == nil {
 			hostname = parsed.Hostname()
@@ -113,7 +119,7 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	}
 	reconnectURL := scheme + "://" + host + normalizeURLBase(cfg.URLBase) + "/"
 	statusURL := ""
-	if r.TLS != nil && scheme == "http" {
+	if !proxied && r.TLS != nil && scheme == "http" {
 		statusURL = s.prepareRestartHandoff(cfg, reconnectURL)
 	}
 	w.Header().Set("Content-Type", "application/json")

@@ -32,6 +32,7 @@ import (
 type Server struct {
 	cfgMu        sync.RWMutex
 	cfg          *config.Config
+	runtimeCfg   config.Config
 	configPath   string
 	db           *storage.DB
 	orch         *orchestrator.Orchestrator
@@ -127,6 +128,7 @@ func NewServer(
 
 	return &Server{
 		cfg:              cfg,
+		runtimeCfg:       *cfg,
 		configPath:       configPath,
 		db:               db,
 		orch:             orch,
@@ -426,6 +428,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	case <-done:
 	case <-ctx.Done():
 		errs = append(errs, ctx.Err())
+		// Canceled syncs must release storage before the runtime closes its pools.
+		<-done
 	}
 	return errors.Join(errs...)
 }

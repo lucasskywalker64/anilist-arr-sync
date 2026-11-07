@@ -89,7 +89,7 @@ func loadConfig(paths runtimePaths) (*config.Config, error) {
 			return nil, err
 		}
 		cfg.APIKey = hex.EncodeToString(key)
-		if err := config.Save(paths.config, cfg); err != nil {
+		if err := config.SaveAPIKey(paths.config, cfg.APIKey); err != nil {
 			return nil, err
 		}
 	}

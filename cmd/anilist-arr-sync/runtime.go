@@ -95,8 +95,10 @@ func bootstrap(ctx context.Context, o options, paths runtimePaths) (*appRuntime,
 	scheduled := scheduler.New(*cfg, scheduledOrch, backups, nil)
 	srv.SetScheduler(scheduled)
 	ctx, cancel := context.WithCancel(ctx)
-	return &appRuntime{cfg: cfg, listenerCfg: listenerCfg, db: db, server: srv, orch: orch, scheduler: scheduled,
-		loader: fribb.NewLoader(db, fribb.WithHTTPClient(client)), client: client, ctx: ctx, cancel: cancel}, nil
+	r := &appRuntime{cfg: cfg, listenerCfg: listenerCfg, db: db, server: srv, orch: orch, scheduler: scheduled,
+		loader: fribb.NewLoader(db, fribb.WithHTTPClient(client)), client: client, ctx: ctx, cancel: cancel}
+	scheduled.SetSyncPreparation(r.prepareScheduledSync)
+	return r, nil
 }
 
 func serviceClients(cfg *config.Config, client *http.Client) (*servarr.SonarrClient, *servarr.RadarrClient, error) {
@@ -132,6 +134,14 @@ func (r *appRuntime) refreshMappings(ctx context.Context) error {
 		log.Printf("Fribb refresh failed, using cached mappings: %v", err)
 	}
 	return nil
+}
+
+func (r *appRuntime) prepareScheduledSync(ctx context.Context) error {
+	meta, err := r.loader.GetMeta(ctx)
+	if err == nil && meta.EntryCount > 0 {
+		return nil
+	}
+	return r.refreshMappings(ctx)
 }
 
 func (r *appRuntime) syncOnce(ctx context.Context, out io.Writer) error {
@@ -174,27 +184,19 @@ func (r *appRuntime) start() {
 }
 
 func (r *appRuntime) close() error {
-	r.cancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		r.scheduler.Stop()
-		if err := r.server.Shutdown(ctx); err != nil {
-			done <- err
-			return
-		}
-		r.workers.Wait()
-		r.server.Notifier().Close()
-		r.client.CloseIdleConnections()
-		done <- errors.Join(r.db.Drain(ctx), r.db.Close())
-	}()
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
-		return fmt.Errorf("shutdown exceeded 15 seconds: %w", ctx.Err())
-	}
+	return r.shutdown(ctx)
+}
+
+func (r *appRuntime) shutdown(ctx context.Context) error {
+	r.cancel()
+	shutdownErr := r.server.Shutdown(ctx)
+	r.scheduler.Stop()
+	r.workers.Wait()
+	notificationErr := r.server.Notifier().Close(ctx)
+	r.client.CloseIdleConnections()
+	return errors.Join(shutdownErr, notificationErr, r.db.Drain(ctx), r.db.Close())
 }
 
 func (r *appRuntime) browserURL() string {

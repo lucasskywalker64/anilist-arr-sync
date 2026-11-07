@@ -17,6 +17,8 @@ type Dispatcher struct {
 	wg      sync.WaitGroup
 	closeMu sync.RWMutex
 	closed  bool
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
 // NewDispatcher creates a new notification dispatcher.
@@ -25,9 +27,12 @@ func NewDispatcher(store *Store, client *http.Client) *Dispatcher {
 	if c == nil {
 		c = &http.Client{Timeout: defaultRequestTimeout}
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Dispatcher{
 		store:  store,
 		client: c,
+		ctx:    ctx,
+		cancel: cancel,
 	}
 }
 
@@ -51,7 +56,7 @@ func (d *Dispatcher) Dispatch(event SyncEvent) {
 		defer d.wg.Done()
 
 		// Read connections from store with a short query timeout
-		fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		fetchCtx, fetchCancel := context.WithTimeout(d.ctx, 5*time.Second)
 		connections, err := d.store.List(fetchCtx)
 		fetchCancel()
 		if err != nil {
@@ -76,7 +81,7 @@ func (d *Dispatcher) Dispatch(event SyncEvent) {
 					return
 				}
 
-				sendCtx, sendCancel := context.WithTimeout(context.Background(), defaultRequestTimeout)
+				sendCtx, sendCancel := context.WithTimeout(d.ctx, defaultRequestTimeout)
 				defer sendCancel()
 
 				if sendErr := provider.Send(sendCtx, event); sendErr != nil {
@@ -111,11 +116,15 @@ func (d *Dispatcher) Wait() {
 	d.wg.Wait()
 }
 
-// Close closes the dispatcher and waits for pending background dispatches.
-func (d *Dispatcher) Close() {
+// Close waits for pending deliveries, canceling them at the cleanup deadline.
+func (d *Dispatcher) Close(ctx context.Context) error {
 	d.closeMu.Lock()
 	d.closed = true
 	d.closeMu.Unlock()
 
+	stop := context.AfterFunc(ctx, d.cancel)
+	defer stop()
+	defer d.cancel()
 	d.wg.Wait()
+	return ctx.Err()
 }

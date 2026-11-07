@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,6 +53,67 @@ func TestCLIConfiguration(t *testing.T) {
 	healed, err := loadConfig(paths)
 	if err != nil || len(healed.APIKey) != 32 || healed.APIKey == cfg.APIKey {
 		t.Fatal("missing API key was not healed")
+	}
+}
+
+func TestAPIKeyHealingDoesNotPersistEnvironment(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprint(existing), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.xml")
+			if existing {
+				if err := config.Save(path, config.NewDefault()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("ANILIST_SYNC__SONARR__APIKEY", "environment-key")
+			t.Setenv("ANILIST_SYNC__SERVER__PORT", "9123")
+			cfg, err := loadConfig(runtimePaths{config: path})
+			if err != nil {
+				t.Fatal(err)
+			}
+			persisted, err := config.Load(path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.APIKey == "" || persisted.APIKey != cfg.APIKey {
+				t.Fatal("generated key was not persisted")
+			}
+			if cfg.SonarrAPIKey != "environment-key" || cfg.Port != 9123 {
+				t.Fatal("environment overrides were not applied")
+			}
+			if persisted.SonarrAPIKey != "" || persisted.Port != config.NewDefault().Port {
+				t.Fatal("key healing persisted environment overrides")
+			}
+		})
+	}
+}
+
+func TestAPIKeyHealingPreservesEnvBackedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.xml")
+	cfg := config.NewDefault()
+	cfg.Port = 0
+	data, err := cfg.ToXML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ANILIST_SYNC__SERVER__PORT", "9123")
+	effective, err := loadConfig(runtimePaths{config: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := config.ParseXML(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Port != 0 || effective.Port != 9123 || persisted.APIKey == "" || persisted.APIKey != effective.APIKey {
+		t.Fatal("key healing changed the environment-backed file configuration")
 	}
 }
 

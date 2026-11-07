@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,11 +16,151 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/backup"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
 )
+
+type runtimeTransportFunc func(*http.Request) (*http.Response, error)
+
+func (f runtimeTransportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestRuntimeScheduledSyncWaitsForMappings(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := config.NewDefault()
+		cfg.APIKey, cfg.AniListUsername = "runtime-key", "user"
+		cfg.SonarrURL, cfg.SonarrAPIKey = "http://sonarr.example", "key"
+		cfg.SyncIntervalHours = 1
+		path := filepath.Join(dir, "config.xml")
+		if err := config.Save(path, cfg); err != nil {
+			t.Fatal(err)
+		}
+		r, err := bootstrap(t.Context(), options{}, runtimePaths{data: dir, config: path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := r.close(); err != nil {
+				t.Error(err)
+			}
+		}()
+		var available atomic.Bool
+		var syncs atomic.Int32
+		r.client.Transport = runtimeTransportFunc(func(req *http.Request) (*http.Response, error) {
+			body := `[{"anilist_id":1,"tvdb_id":2,"type":"TV"}]`
+			if req.Method == "POST" {
+				syncs.Add(1)
+				body = `{"data":{"MediaListCollection":{"lists":[],"hasNextChunk":false}}}`
+			} else if !available.Load() {
+				return nil, errors.New("mapping source unavailable")
+			}
+			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+		})
+		r.start()
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		if syncs.Load() != 0 || !r.scheduler.Status().Sync.Last.IsZero() {
+			t.Fatal("scheduled sync ran without mappings")
+		}
+		if r.scheduler.Status().Backup.Next.IsZero() {
+			t.Fatal("waiting for mappings disabled backup scheduling")
+		}
+		available.Store(true)
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		if syncs.Load() != 1 {
+			t.Fatalf("syncs after mapping recovery: %d", syncs.Load())
+		}
+		available.Store(false)
+		last := r.scheduler.Status().Sync.Last
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		if !r.scheduler.Status().Sync.Last.After(last) {
+			t.Fatal("cached mappings did not permit scheduled sync")
+		}
+	})
+}
+
+func TestRuntimeShutdownDeadlineStillClosesStorage(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.APIKey, cfg.AniListUsername = "runtime-key", "user"
+	cfg.SonarrURL, cfg.SonarrAPIKey = "http://sonarr.example", "key"
+	path := filepath.Join(dir, "config.xml")
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	r, err := bootstrap(t.Context(), options{}, runtimePaths{data: dir, config: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, writer := r.db.Reader(), r.db.Writer()
+	entered, release := make(chan struct{}), make(chan struct{})
+	r.client.Transport = runtimeTransportFunc(func(req *http.Request) (*http.Response, error) {
+		close(entered)
+		<-release
+		return nil, req.Context().Err()
+	})
+	req := httptest.NewRequest("POST", "/api/v1/sync/start", nil)
+	req.Header.Set("X-Api-Key", "runtime-key")
+	rec := httptest.NewRecorder()
+	r.server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("start: %d %s", rec.Code, rec.Body.String())
+	}
+	<-entered
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- r.shutdown(ctx) }()
+	<-ctx.Done()
+	close(release)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("shutdown: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not finish cleanup after its deadline")
+	}
+	for _, pool := range []*sql.DB{reader, writer} {
+		if err := pool.PingContext(t.Context()); err == nil {
+			t.Error("deadline skipped storage cleanup")
+		}
+	}
+}
+
+func TestRuntimeRepeatedBootClosesPools(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.APIKey, cfg.BindAddress, cfg.Port = "runtime-key", "127.0.0.1", freePort(t)
+	path := filepath.Join(dir, "config.xml")
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		r, err := bootstrap(t.Context(), options{}, runtimePaths{data: dir, config: path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader, writer := r.db.Reader(), r.db.Writer()
+		if err := r.server.Start(); err != nil {
+			_ = r.close()
+			t.Fatal(err)
+		}
+		if err := r.close(); err != nil {
+			t.Fatal(err)
+		}
+		for _, pool := range []*sql.DB{reader, writer} {
+			if err := pool.PingContext(t.Context()); err == nil {
+				t.Fatalf("boot %d left a pool open", i)
+			}
+		}
+	}
+}
 
 func freePort(t *testing.T) int {
 	t.Helper()
@@ -276,6 +418,7 @@ func TestRuntimeStopsActiveWebSyncBeforeClosingStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	reader, writer := r.db.Reader(), r.db.Writer()
 	req := httptest.NewRequest("POST", "/api/v1/sync/start", nil)
 	req.Header.Set("X-Api-Key", "runtime-key")
 	rec := httptest.NewRecorder()
@@ -302,6 +445,11 @@ func TestRuntimeStopsActiveWebSyncBeforeClosingStorage(t *testing.T) {
 	case <-cancelled:
 	case <-time.After(time.Second):
 		t.Fatal("outbound request was not cancelled")
+	}
+	for _, pool := range []*sql.DB{reader, writer} {
+		if err := pool.PingContext(t.Context()); err == nil {
+			t.Error("shutdown left a storage pool open")
+		}
 	}
 	if err := os.Rename(filepath.Join(dir, "sync.db"), filepath.Join(dir, "closed.db")); err != nil {
 		t.Fatal(err)

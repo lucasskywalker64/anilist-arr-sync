@@ -14,6 +14,7 @@ import (
 
 func outboundClient(cfg config.Config) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
 	if cfg.UseProxy {
 		scheme := strings.ToLower(cfg.ProxyType)
 		switch scheme {
