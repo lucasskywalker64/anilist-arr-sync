@@ -137,7 +137,7 @@ func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 	if !o.running.CompareAndSwap(false, true) {
 		return nil, ErrSyncInProgress
 	}
-	return o.runSync(ctx, trigger)
+	return o.runSync(ctx, trigger, false)
 }
 
 // SyncResult contains the outcome of an asynchronous synchronization run.
@@ -149,14 +149,23 @@ type SyncResult struct {
 // StartSync reserves execution before returning, then runs asynchronously.
 // The buffered result channel never blocks completion if the caller goes away.
 func (o *Orchestrator) StartSync(ctx context.Context, trigger TriggerType) (<-chan SyncResult, error) {
+	return o.startSync(ctx, trigger, false)
+}
+
+// StartDryRun starts a sync that stages changes regardless of the saved preference.
+func (o *Orchestrator) StartDryRun(ctx context.Context, trigger TriggerType) (<-chan SyncResult, error) {
+	return o.startSync(ctx, trigger, true)
+}
+
+func (o *Orchestrator) startSync(ctx context.Context, trigger TriggerType, dryRun bool) (<-chan SyncResult, error) {
 	if !o.running.CompareAndSwap(false, true) {
 		return nil, ErrSyncInProgress
 	}
 	result := make(chan SyncResult, 1)
 	go func() {
-		report, err := o.runSync(ctx, trigger)
+		defer close(result)
+		report, err := o.runSync(ctx, trigger, dryRun)
 		result <- SyncResult{Report: report, Err: err}
-		close(result)
 	}()
 	return result, nil
 }
@@ -166,9 +175,15 @@ func (o *Orchestrator) IsSyncing() bool {
 	return o.running.Load()
 }
 
-func (o *Orchestrator) runSync(ctx context.Context, trigger TriggerType) (*SyncReport, error) {
+func (o *Orchestrator) runSync(ctx context.Context, trigger TriggerType, dryRun bool) (*SyncReport, error) {
 	defer o.running.Store(false)
-	return o.snapshot().sync(ctx, trigger)
+	run := o.snapshot()
+	if dryRun {
+		cfg := *run.cfg
+		cfg.FirstRunDryRun = true
+		run.cfg = &cfg
+	}
+	return run.sync(ctx, trigger)
 }
 
 func (o *Orchestrator) sync(ctx context.Context, trigger TriggerType) (*SyncReport, error) {
@@ -574,7 +589,8 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 			(o.cleanupOnly(entry) || o.cfg.UnmonitorCompleted || o.cfg.DeleteCompleted)) {
 			return dispatchOutcome{shouldUpsert: false}
 		}
-		pruneOnAdd := o.cfg.UnmonitorWatched && entry.Progress > 0 &&
+		monitorOnAdd := o.cfg.SonarrMonitorOnAdd
+		pruneOnAdd := monitorOnAdd && o.cfg.UnmonitorWatched && entry.Progress > 0 &&
 			(entry.Status == "" || entry.Status == anilist.StatusCurrent) && o.cfg.TagName != ""
 
 		var seasons []servarr.Season
@@ -587,17 +603,17 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 				}
 				seasons = append(seasons, servarr.Season{
 					SeasonNumber: s.SeasonNumber,
-					Monitored:    isTarget,
+					Monitored:    monitorOnAdd && isTarget,
 				})
 			}
 			if !targetFound {
 				seasons = append(seasons, servarr.Season{
 					SeasonNumber: targetSeason,
-					Monitored:    true,
+					Monitored:    monitorOnAdd,
 				})
 			}
 		} else {
-			seasons = []servarr.Season{{SeasonNumber: targetSeason, Monitored: true}}
+			seasons = []servarr.Season{{SeasonNumber: targetSeason, Monitored: monitorOnAdd}}
 		}
 
 		var tags []int
@@ -616,13 +632,16 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 			QualityProfileID: o.cfg.SonarrQualityProfileID,
 			RootFolderPath:   o.cfg.SonarrRootFolderPath,
 			SeriesType:       o.cfg.SonarrSeriesType,
-			Monitored:        true,
+			Monitored:        monitorOnAdd,
 			SeasonFolder:     true,
 			Seasons:          seasons,
 			Tags:             tags,
 			AddOptions: &servarr.AddSeriesOptions{
-				SearchForMissingEpisodes: o.cfg.SonarrSearchOnAdd && !pruneOnAdd,
+				SearchForMissingEpisodes: monitorOnAdd && o.cfg.SonarrSearchOnAdd && !pruneOnAdd,
 			},
+		}
+		if !monitorOnAdd {
+			addReq.AddOptions.Monitor = "none"
 		}
 
 		if dryRun {
@@ -645,7 +664,11 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 			return dispatchOutcome{shouldUpsert: false}
 		}
 
-		report.MonitoredSonarr++
+		monitoredStatus := "UNMONITORED"
+		if monitorOnAdd {
+			report.MonitoredSonarr++
+			monitoredStatus = "MONITORED"
+		}
 		if o.notifier != nil {
 			o.notifier.Dispatch(notification.SyncEvent{
 				Type:          notification.EventMediaAdded,
@@ -659,7 +682,7 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 			})
 		}
 		if !pruneOnAdd {
-			return dispatchOutcome{monitoredStatus: "MONITORED", season: targetSeason, shouldUpsert: true}
+			return dispatchOutcome{monitoredStatus: monitoredStatus, season: targetSeason, shouldUpsert: true}
 		}
 		searchAfterPruning = true
 	}

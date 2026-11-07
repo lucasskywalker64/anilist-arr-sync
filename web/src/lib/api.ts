@@ -17,6 +17,8 @@ import type {
   LibraryItem,
   LibraryStats,
   FilesystemResponse,
+  AniListProfile,
+  ServarrConnectionOptions,
 } from './types';
 
 import { writable } from 'svelte/store';
@@ -225,8 +227,8 @@ export const api = {
     };
   },
 
-  async startSync(): Promise<{ status: string }> {
-    return request('/api/v1/sync/start', { method: 'POST' });
+  async startSync(dryRun = false): Promise<{ status: string }> {
+    return request(`/api/v1/sync/start${dryRun ? '?dryRun=true' : ''}`, { method: 'POST' });
   },
 
   async getSyncHistory(): Promise<SyncHistoryItem[]> {
@@ -357,6 +359,14 @@ export const api = {
   // Config
   async getConfig(): Promise<AppConfig> {
     return request('/api/v1/config');
+  },
+
+  async testAniList(username: string): Promise<AniListProfile> {
+    return request('/api/v1/anilist/test', { method: 'POST', body: JSON.stringify({ username }) });
+  },
+
+  async testServarr(type: 'sonarr' | 'radarr', baseUrl: string, apiKey: string): Promise<ServarrConnectionOptions> {
+    return request('/api/v1/servarr/test', { method: 'POST', body: JSON.stringify({ type, baseUrl, apiKey }) });
   },
 
   async updateConfig(config: Partial<AppConfig>): Promise<UpdateConfigResponse> {

@@ -52,6 +52,7 @@ type Config struct {
 
 	// App
 	InstanceName               string `xml:"InstanceName"`
+	WizardCompleted            bool   `xml:"WizardCompleted"`
 	LaunchBrowser              bool   `xml:"LaunchBrowser"`
 	EnableDesktopNotifications bool   `xml:"EnableDesktopNotifications"`
 
@@ -87,6 +88,7 @@ type Config struct {
 	SonarrQualityProfileID int    `xml:"SonarrQualityProfileId"`
 	SonarrRootFolderPath   string `xml:"SonarrRootFolderPath"`
 	SonarrSeriesType       string `xml:"SonarrSeriesType"`
+	SonarrMonitorOnAdd     bool   `xml:"SonarrMonitorOnAdd"`
 	SonarrSearchOnAdd      bool   `xml:"SonarrSearchOnAdd"`
 
 	// Sync
@@ -155,6 +157,7 @@ func NewDefault() *Config {
 		SonarrQualityProfileID:     1,
 		SonarrRootFolderPath:       "",
 		SonarrSeriesType:           "anime",
+		SonarrMonitorOnAdd:         true,
 		SonarrSearchOnAdd:          false,
 		TagName:                    "anilist-sync",
 		SyncIntervalHours:          4,

@@ -28,6 +28,7 @@
   import type { AppConfig, NotificationItem } from "../../lib/types";
 
   export let subTab: "general" | "sync" | "servarr" | "connect" = "general";
+  export let openOnboarding: (config: AppConfig) => void;
 
   let savedConfig: AppConfig | null = null;
   let formConfig: Partial<AppConfig> = {};
@@ -128,6 +129,7 @@
     successMsg = "";
     try {
       const payload: Partial<AppConfig> = { ...formConfig };
+      delete payload.wizardCompleted;
       if (formPassword) {
         payload.password = formPassword;
       }
@@ -382,6 +384,12 @@
       {/if}
 
       {#if subTab === "general"}
+        <FieldSet legend="Service Setup">
+          <Button disabled={!savedConfig || hasPendingChanges || saving}
+            on:click={() => { if (savedConfig) openOnboarding(savedConfig); }}>
+            Open Setup Wizard
+          </Button>
+        </FieldSet>
         <!-- Host -->
         <FieldSet legend="Host">
           <FormGroup

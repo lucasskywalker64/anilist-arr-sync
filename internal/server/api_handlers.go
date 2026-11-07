@@ -253,6 +253,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"consoleLogLevel":           sanitized.ConsoleLogLevel,
 		"logSizeLimit":              sanitized.LogSizeLimit,
 		"instanceName":              sanitized.InstanceName,
+		"wizardCompleted":           sanitized.WizardCompleted,
 		"updateBranch":              sanitized.UpdateBranch,
 		"updateAutomatically":       sanitized.UpdateAutomatically,
 		"updateMechanism":           sanitized.UpdateMechanism,
@@ -262,7 +263,14 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"databasePath":              sanitized.DatabasePath,
 		"aniListUsername":           sanitized.AniListUsername,
 		"radarrUrl":                 sanitized.RadarrURL,
+		"radarrApiKey":              sanitized.RadarrAPIKey,
+		"radarrQualityProfileId":    sanitized.RadarrQualityProfileID,
+		"radarrRootFolderPath":      sanitized.RadarrRootFolderPath,
 		"sonarrUrl":                 sanitized.SonarrURL,
+		"sonarrApiKey":              sanitized.SonarrAPIKey,
+		"sonarrQualityProfileId":    sanitized.SonarrQualityProfileID,
+		"sonarrRootFolderPath":      sanitized.SonarrRootFolderPath,
+		"sonarrMonitorOnAdd":        sanitized.SonarrMonitorOnAdd,
 		"tagName":                   sanitized.TagName,
 		"syncIntervalHours":         sanitized.SyncIntervalHours,
 		"dateToleranceDays":         sanitized.DateToleranceDays,
@@ -297,10 +305,12 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	defer s.cfgMu.Unlock()
 
 	next := *s.cfg
+	completingSetup := false
 
 	// Apply known fields to copy
-	for k, v := range updates {
-		switch strings.ToLower(k) {
+	for key, v := range updates {
+		k := strings.ToLower(key)
+		switch k {
 		case "bindaddress":
 			if str, ok := v.(string); ok {
 				next.BindAddress = str
@@ -463,6 +473,34 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			if b, ok := v.(bool); ok {
 				next.FirstRunDryRun = b
 			}
+		case "wizardcompleted":
+			if b, ok := v.(bool); ok && b {
+				next.WizardCompleted = true
+				completingSetup = true
+			}
+		case "sonarrmonitoronadd":
+			if b, ok := v.(bool); ok {
+				next.SonarrMonitorOnAdd = b
+			}
+		case "sonarrqualityprofileid", "radarrqualityprofileid":
+			num, ok := v.(float64)
+			if !ok || num < 0 || float64(int(num)) != num {
+				s.writeJSONError(w, http.StatusBadRequest, "quality profile ID must be a non-negative integer")
+				return
+			}
+			if k == "sonarrqualityprofileid" {
+				next.SonarrQualityProfileID = int(num)
+			} else {
+				next.RadarrQualityProfileID = int(num)
+			}
+		case "sonarrrootfolderpath":
+			if str, ok := v.(string); ok {
+				next.SonarrRootFolderPath = str
+			}
+		case "radarrrootfolderpath":
+			if str, ok := v.(string); ok {
+				next.RadarrRootFolderPath = str
+			}
 		case "tagname":
 			if str, ok := v.(string); ok {
 				next.TagName = str
@@ -487,6 +525,13 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			if str, ok := v.(string); ok && str != "******" {
 				next.SonarrAPIKey = str
 			}
+		}
+	}
+
+	if completingSetup {
+		if err := validateOnboardingConfig(next); err != nil {
+			s.writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
 		}
 	}
 
@@ -578,15 +623,14 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 	listenerNext := s.listenerConfig(next)
 	running := s.runtimeCfg
+	connectionsChanged := servarrConnectionsChanged(running, next)
 	restartRequired := (s.boundPort != listenerNext.Port) ||
 		(s.boundBindAddress != listenerNext.BindAddress) ||
 		(s.boundURLBase != next.URLBase) ||
 		(s.boundEnableSsl != next.EnableSsl) ||
 		(s.boundSslPort != next.SslPort) ||
 		(running.SslCertPath != next.SslCertPath) || (running.SslKeyPath != next.SslKeyPath) ||
-		(running.AniListUsername != next.AniListUsername) ||
-		(running.SonarrURL != next.SonarrURL) || (running.SonarrAPIKey != next.SonarrAPIKey) ||
-		(running.RadarrURL != next.RadarrURL) || (running.RadarrAPIKey != next.RadarrAPIKey) ||
+		(running.AniListUsername != next.AniListUsername) || connectionsChanged ||
 		(running.DatabasePath != next.DatabasePath) ||
 		(running.BackupFolder != next.BackupFolder) || (running.BackupRetention != next.BackupRetention) ||
 		(running.UseProxy != next.UseProxy) || (running.ProxyType != next.ProxyType) ||
@@ -597,7 +641,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 	*s.cfg = next
 	s.trustedNets = newTrustedNets
-	if s.orch != nil {
+	if s.orch != nil && !connectionsChanged {
 		s.orch.UpdateConfig(next)
 	}
 	if s.scheduler != nil {
@@ -614,9 +658,26 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleStartSync triggers a manual sync run in the background.
-func (s *Server) handleStartSync(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleStartSync(w http.ResponseWriter, r *http.Request) {
+	dryRun := r.URL.Query().Get("dryRun") == "true"
+	if dryRun && s.prepareDryRun != nil {
+		if err := s.CheckSyncConnections(); err != nil {
+			s.writeJSONError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if err := s.prepareDryRun(r.Context()); err != nil {
+			s.writeJSONError(w, http.StatusServiceUnavailable, "could not prepare mappings for the dry run: "+err.Error())
+			return
+		}
+	}
 	s.workMu.Lock()
 	defer s.workMu.Unlock()
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	if servarrConnectionsChanged(s.runtimeCfg, *s.cfg) {
+		s.writeJSONError(w, http.StatusConflict, "restart to activate the saved service connections")
+		return
+	}
 	if s.stopping {
 		s.writeJSONError(w, http.StatusServiceUnavailable, "server is stopping")
 		return
@@ -626,7 +687,11 @@ func (s *Server) handleStartSync(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	result, err := s.orch.StartSync(s.workCtx, orchestrator.TriggerManualWeb)
+	start := s.orch.StartSync
+	if dryRun {
+		start = s.orch.StartDryRun
+	}
+	result, err := start(s.workCtx, orchestrator.TriggerManualWeb)
 	if err != nil {
 		s.writeJSONError(w, http.StatusConflict, err.Error())
 		return
