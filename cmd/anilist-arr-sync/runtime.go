@@ -84,6 +84,7 @@ func bootstrap(ctx context.Context, o options, paths runtimePaths) (*appRuntime,
 	orch := orchestrator.New(db, cfg, al, sonarrClient, radarrClient)
 	backups := backup.NewEngine(db, paths.config, backupDir, backup.WithRetention(cfg.BackupRetention))
 	srv := server.NewServer(cfg, paths.config, db, orch, backups)
+	srv.SetConnectionTestClient(client)
 	srv.SetListenerOverrides(portOverride, bindOverride)
 	srv.SetVersion(version)
 	srv.SetNotifier(notification.NewDispatcher(notification.NewStore(db), client))
@@ -97,7 +98,13 @@ func bootstrap(ctx context.Context, o options, paths runtimePaths) (*appRuntime,
 	ctx, cancel := context.WithCancel(ctx)
 	r := &appRuntime{cfg: cfg, listenerCfg: listenerCfg, db: db, server: srv, orch: orch, scheduler: scheduled,
 		loader: fribb.NewLoader(db, fribb.WithHTTPClient(client)), client: client, ctx: ctx, cancel: cancel}
-	scheduled.SetSyncPreparation(r.prepareScheduledSync)
+	scheduled.SetSyncPreparation(func(ctx context.Context) error {
+		if err := r.ensureSyncMappings(ctx); err != nil {
+			return err
+		}
+		return srv.CheckSyncConnections()
+	})
+	srv.SetDryRunPreparation(r.ensureSyncMappings)
 	return r, nil
 }
 
@@ -136,12 +143,24 @@ func (r *appRuntime) refreshMappings(ctx context.Context) error {
 	return nil
 }
 
-func (r *appRuntime) prepareScheduledSync(ctx context.Context) error {
-	meta, err := r.loader.GetMeta(ctx)
-	if err == nil && meta.EntryCount > 0 {
-		return nil
+func (r *appRuntime) ensureSyncMappings(ctx context.Context) error {
+	for {
+		meta, err := r.loader.GetMeta(ctx)
+		if err == nil && meta.EntryCount > 0 {
+			return nil
+		}
+		if err := r.refreshMappings(ctx); !errors.Is(err, fribb.ErrSyncInProgress) {
+			return err
+		}
+		// The startup refresh is already loading mappings. Wait for it to publish them.
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
-	return r.refreshMappings(ctx)
 }
 
 func (r *appRuntime) syncOnce(ctx context.Context, out io.Writer) error {

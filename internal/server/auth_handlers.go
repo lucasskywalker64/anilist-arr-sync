@@ -149,6 +149,10 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 // handleCurrentUser returns authentication status and session details for the requesting user.
 func (s *Server) handleCurrentUser(w http.ResponseWriter, r *http.Request) {
 	username, _ := r.Context().Value(userContextKey).(string)
+	cfg := s.Config()
+	setupRequired := s.isSetupRequired(r.Context())
+	onboardingRequired := !cfg.WizardCompleted && (strings.TrimSpace(cfg.AniListUsername) == "" ||
+		(strings.TrimSpace(cfg.SonarrURL) == "" && (cfg.RadarrURL == "" || cfg.RadarrAPIKey == "")))
 
 	var csrfToken string
 	if cookie, err := r.Cookie(sessionCookieName); err == nil && cookie.Value != "" {
@@ -158,11 +162,13 @@ func (s *Server) handleCurrentUser(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"username":      username,
-		"authenticated": username != "",
-		"csrfToken":     csrfToken,
-		"setupRequired": s.isSetupRequired(r.Context()),
-		"authMethod":    s.getAuthMethod(),
+		"username":           username,
+		"authenticated":      username != "",
+		"csrfToken":          csrfToken,
+		"setupRequired":      setupRequired,
+		"authMethod":         cfg.AuthenticationMethod,
+		"wizardCompleted":    cfg.WizardCompleted,
+		"onboardingRequired": !setupRequired && onboardingRequired,
 	})
 }
 

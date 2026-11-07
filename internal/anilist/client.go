@@ -285,6 +285,42 @@ func NewClient(endpoint string, opts ...ClientOption) *Client {
 	return c
 }
 
+func (c *Client) query(ctx context.Context, request any) (*http.Response, error) {
+	body, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("marshal graphql request: %w", err)
+	}
+	for attempt := 0; ; attempt++ {
+		if err := c.rateLimiter.wait(ctx); err != nil {
+			return nil, fmt.Errorf("rate limiter wait: %w", err)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("create http request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", c.userAgent)
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("execute http request: %w", err)
+		}
+		if resp.StatusCode != http.StatusTooManyRequests {
+			return resp, nil
+		}
+		_ = resp.Body.Close()
+		if attempt == c.maxRetries {
+			return nil, fmt.Errorf("rate limit exceeded (HTTP 429): max retries (%d) reached", c.maxRetries)
+		}
+		timer := time.NewTimer(c.parseRetryAfter(resp.Header.Get("Retry-After"), attempt))
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		}
+	}
+}
+
 func (c *Client) parseRetryAfter(header string, attempt int) time.Duration {
 	if header != "" {
 		if sec, err := strconv.Atoi(header); err == nil && sec >= 0 {
@@ -464,50 +500,9 @@ func (c *Client) FetchUserMediaListOverview(ctx context.Context, username string
 			Variables: vars,
 		}
 
-		encoded, err := json.Marshal(reqBody)
+		resp, err := c.query(ctx, reqBody)
 		if err != nil {
-			return nil, fmt.Errorf("marshal graphql request: %w", err)
-		}
-
-		var resp *http.Response
-		for attempt := 0; attempt <= c.maxRetries; attempt++ {
-			if err := c.rateLimiter.wait(ctx); err != nil {
-				return nil, fmt.Errorf("rate limiter wait: %w", err)
-			}
-
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(encoded))
-			if err != nil {
-				return nil, fmt.Errorf("create http request: %w", err)
-			}
-
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("User-Agent", c.userAgent)
-
-			resp, err = c.httpClient.Do(req)
-			if err != nil {
-				return nil, fmt.Errorf("execute http request: %w", err)
-			}
-
-			if resp.StatusCode == http.StatusTooManyRequests {
-				retryAfterHeader := resp.Header.Get("Retry-After")
-				_ = resp.Body.Close()
-				if attempt == c.maxRetries {
-					return nil, fmt.Errorf("rate limit exceeded (HTTP 429): max retries (%d) reached", c.maxRetries)
-				}
-
-				waitDuration := c.parseRetryAfter(retryAfterHeader, attempt)
-				timer := time.NewTimer(waitDuration)
-
-				select {
-				case <-timer.C:
-					timer.Stop()
-					continue
-				case <-ctx.Done():
-					timer.Stop()
-					return nil, ctx.Err()
-				}
-			}
-			break
+			return nil, err
 		}
 
 		if resp.StatusCode != http.StatusOK {
@@ -590,50 +585,9 @@ func (c *Client) FetchWatchlist(ctx context.Context, filter WatchlistFilter) ([]
 			Variables: vars,
 		}
 
-		encoded, err := json.Marshal(reqBody)
+		resp, err := c.query(ctx, reqBody)
 		if err != nil {
-			return nil, fmt.Errorf("marshal graphql request: %w", err)
-		}
-
-		var resp *http.Response
-		for attempt := 0; attempt <= c.maxRetries; attempt++ {
-			if err := c.rateLimiter.wait(ctx); err != nil {
-				return nil, fmt.Errorf("rate limiter wait: %w", err)
-			}
-
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(encoded))
-			if err != nil {
-				return nil, fmt.Errorf("create http request: %w", err)
-			}
-
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("User-Agent", c.userAgent)
-
-			resp, err = c.httpClient.Do(req)
-			if err != nil {
-				return nil, fmt.Errorf("execute http request: %w", err)
-			}
-
-			if resp.StatusCode == http.StatusTooManyRequests {
-				retryAfterHeader := resp.Header.Get("Retry-After")
-				_ = resp.Body.Close()
-				if attempt == c.maxRetries {
-					return nil, fmt.Errorf("rate limit exceeded (HTTP 429): max retries (%d) reached", c.maxRetries)
-				}
-
-				waitDuration := c.parseRetryAfter(retryAfterHeader, attempt)
-				timer := time.NewTimer(waitDuration)
-
-				select {
-				case <-timer.C:
-					timer.Stop()
-					continue
-				case <-ctx.Done():
-					timer.Stop()
-					return nil, ctx.Err()
-				}
-			}
-			break
+			return nil, err
 		}
 
 		if resp.StatusCode != http.StatusOK {

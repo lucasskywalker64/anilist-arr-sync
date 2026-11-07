@@ -57,6 +57,9 @@ type Server struct {
 	bindOverride *string
 	handoff      *RestartHandoff
 
+	connectionTestClient *http.Client
+	prepareDryRun        func(context.Context) error
+
 	httpServer  *http.Server
 	httpsServer *http.Server
 
@@ -459,6 +462,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/v1/config", s.handleGetConfig)
 	mux.HandleFunc("PUT /api/v1/config", s.handleUpdateConfig)
+	mux.HandleFunc("POST /api/v1/anilist/test", s.handleTestAniList)
+	mux.HandleFunc("POST /api/v1/servarr/test", s.handleTestServarr)
 
 	mux.HandleFunc("POST /api/v1/sync/start", s.handleStartSync)
 	mux.HandleFunc("GET /api/v1/sync/status", s.handleGetSyncStatus)

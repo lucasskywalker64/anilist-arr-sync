@@ -303,11 +303,15 @@ func (o *Orchestrator) applyStagedAction(ctx context.Context, id int) error {
 				`, req.TVDBID, targetSeasonStr, targetSeasonStr)
 				return err
 			}
+			monitoredStatus := "UNMONITORED"
+			if req.Monitored {
+				monitoredStatus = "MONITORED"
+			}
 			_, err := tx.ExecContext(ctx, `
 				UPDATE synced_media
-				SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
+				SET monitored_status = ?, updated_at = CURRENT_TIMESTAMP
 				WHERE tvdb_id = ? AND monitored_status != 'IGNORED';
-			`, req.TVDBID)
+			`, monitoredStatus, req.TVDBID)
 			return err
 		}
 
