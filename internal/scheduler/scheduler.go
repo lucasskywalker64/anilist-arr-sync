@@ -55,7 +55,7 @@ func New(cfg config.Config, orch *orchestrator.Orchestrator, backups *backup.Eng
 	s := &Scheduler{wake: make(chan struct{}, 1)}
 	if orch != nil {
 		s.tasks[0] = task{
-			name: "sync", interval: time.Duration(cfg.SyncIntervalHours) * time.Hour,
+			name: "sync", interval: syncInterval(cfg),
 			run: func(ctx context.Context) error {
 				if s.prepareSync != nil {
 					if err := s.prepareSync(ctx); err != nil {
@@ -89,6 +89,13 @@ func New(cfg config.Config, orch *orchestrator.Orchestrator, backups *backup.Eng
 	return s
 }
 
+func syncInterval(cfg config.Config) time.Duration {
+	if !cfg.SyncConfigured() {
+		return 0
+	}
+	return time.Duration(cfg.SyncIntervalHours) * time.Hour
+}
+
 // SetSyncPreparation installs the sync prerequisite before scheduling starts.
 func (s *Scheduler) SetSyncPreparation(prepare func(context.Context) error) {
 	s.prepareSync = prepare
@@ -100,7 +107,7 @@ func (s *Scheduler) UpdateConfig(cfg config.Config) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	intervals := [3]time.Duration{
-		time.Duration(cfg.SyncIntervalHours) * time.Hour,
+		syncInterval(cfg),
 		time.Duration(cfg.BackupInterval) * 24 * time.Hour,
 	}
 	if cfg.UpdateAutomatically {
@@ -113,17 +120,16 @@ func (s *Scheduler) UpdateConfig(cfg config.Config) {
 		}
 		t.interval = interval
 		if s.cancel != nil && s.ctx.Err() == nil {
-			if interval == 0 {
+			if t.ticker != nil {
 				t.ticker.Stop()
 				t.ticker = nil
+			}
+			if interval == 0 {
 				t.status.Next = time.Time{}
 				continue
 			}
 			t.status.Next = time.Now().Add(interval)
 			t.initial = false
-			if t.ticker != nil {
-				t.ticker.Stop()
-			}
 			t.ticker = time.NewTicker(interval)
 		}
 	}

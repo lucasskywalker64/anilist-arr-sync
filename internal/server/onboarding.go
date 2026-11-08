@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,22 +16,14 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
 )
 
-// SetConnectionTestClient installs the runtime's outbound transport before serving requests.
-func (s *Server) SetConnectionTestClient(client *http.Client) {
-	s.connectionTestClient = client
+// SetOutboundHTTPClient installs the runtime's outbound transport before serving requests.
+func (s *Server) SetOutboundHTTPClient(client *http.Client) {
+	s.outboundHTTPClient = client
 }
 
-// SetDryRunPreparation installs the mapping prerequisite before serving requests.
-func (s *Server) SetDryRunPreparation(prepare func(context.Context) error) {
-	s.prepareDryRun = prepare
-}
-
-// CheckSyncConnections rejects new syncs until saved Servarr connections are active.
-func (s *Server) CheckSyncConnections() error {
-	if servarrConnectionsChanged(s.runtimeCfg, s.Config()) {
-		return errors.New("restart to activate the saved service connections")
-	}
-	return nil
+// SetSyncPreparation installs the mapping prerequisite before serving requests.
+func (s *Server) SetSyncPreparation(prepare func(context.Context) error) {
+	s.prepareSync = prepare
 }
 
 func servarrConnectionsChanged(running, saved config.Config) bool {
@@ -51,8 +44,11 @@ func validateOnboardingConfig(next config.Config) error {
 		return errors.New("could not validate setup against environment variables")
 	}
 	if servarrConnectionsChanged(next, effective) || effective.AniListUsername != next.AniListUsername ||
+		!slices.Equal(anilist.ParseListStatuses(effective.AniListTvStatus), anilist.ParseListStatuses(next.AniListTvStatus)) ||
+		!slices.Equal(anilist.ParseListStatuses(effective.AniListMovieStatus), anilist.ParseListStatuses(next.AniListMovieStatus)) ||
 		effective.SonarrQualityProfileID != next.SonarrQualityProfileID || effective.SonarrRootFolderPath != next.SonarrRootFolderPath ||
 		effective.RadarrQualityProfileID != next.RadarrQualityProfileID || effective.RadarrRootFolderPath != next.RadarrRootFolderPath ||
+		effective.SonarrSearchOnAdd != next.SonarrSearchOnAdd || effective.RadarrSearchOnAdd != next.RadarrSearchOnAdd ||
 		effective.FirstRunDryRun != next.FirstRunDryRun || effective.SyncIntervalHours != next.SyncIntervalHours {
 		return errors.New("environment variables override setup settings. Adjust those variables and restart before saving setup")
 	}
@@ -72,7 +68,7 @@ func (s *Server) handleTestAniList(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	client := anilist.NewClient("", anilist.WithHTTPClient(s.connectionTestClient))
+	client := anilist.NewClient("", anilist.WithHTTPClient(s.outboundHTTPClient))
 	profile, err := client.FetchProfile(ctx, username)
 	if err != nil {
 		status := http.StatusBadRequest
@@ -119,7 +115,7 @@ func (s *Server) handleTestServarr(w http.ResponseWriter, r *http.Request) {
 		s.writeJSONError(w, http.StatusBadRequest, "API key is required")
 		return
 	}
-	client := s.connectionTestClient
+	client := s.outboundHTTPClient
 	if client == nil {
 		client = http.DefaultClient
 	}

@@ -256,6 +256,14 @@ func TestConfigEndpoints(t *testing.T) {
 			t.Errorf("expected GET /api/v1/config to include field %s", field)
 		}
 	}
+	for _, field := range []string{"sonarrSearchOnAdd", "radarrSearchOnAdd"} {
+		if returnedCfg[field] != false {
+			t.Errorf("expected %s to default to false, got %v", field, returnedCfg[field])
+		}
+	}
+	if returnedCfg["aniListTvStatus"] != "CURRENT" || returnedCfg["aniListMovieStatus"] != "CURRENT" {
+		t.Error("expected both AniList selections to default to Watching")
+	}
 
 	// 2. PUT /api/v1/config updates settings (non-network fields do not require restart)
 	updatePayload, _ := json.Marshal(map[string]any{
@@ -266,6 +274,10 @@ func TestConfigEndpoints(t *testing.T) {
 		"deleteCompleted":    true,
 		"unmonitorWatched":   true,
 		"deleteWatched":      true,
+		"sonarrSearchOnAdd":  true,
+		"radarrSearchOnAdd":  true,
+		"aniListTvStatus":    "CURRENT,PLANNING",
+		"aniListMovieStatus": "COMPLETED",
 	})
 	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(updatePayload))
 	putReq.RemoteAddr = "127.0.0.1:1234"
@@ -290,6 +302,16 @@ func TestConfigEndpoints(t *testing.T) {
 	}
 	if !srv.cfg.UnmonitorCompleted || !srv.cfg.DeleteDropped || !srv.cfg.DeleteCompleted || !srv.cfg.UnmonitorWatched || !srv.cfg.DeleteWatched {
 		t.Errorf("expected cleanup and pruning settings to be true, got %+v", srv.cfg)
+	}
+	if !srv.cfg.SonarrSearchOnAdd || !srv.cfg.RadarrSearchOnAdd {
+		t.Error("expected search on add to be enabled for both services")
+	}
+	persisted, err := config.Load(configPath, nil)
+	if err != nil || !persisted.SonarrSearchOnAdd || !persisted.RadarrSearchOnAdd {
+		t.Fatalf("search on add settings were not saved: %v", err)
+	}
+	if persisted.AniListTvStatus != "CURRENT,PLANNING" || persisted.AniListMovieStatus != "COMPLETED" {
+		t.Error("AniList status selections were not saved")
 	}
 
 	// 3. PUT /api/v1/config with Port change requires restart
@@ -372,8 +394,7 @@ func TestDependencyRestartWarningSurvivesSubsequentSaves(t *testing.T) {
 		value    any
 		original any
 	}{
-		{"sonarrUrl", "http://sonarr.example", ""},
-		{"backupFolder", "other-backups", config.NewDefault().BackupFolder},
+		{"sslPort", 8443, config.NewDefault().SslPort},
 		{"proxyHostname", "proxy.example", ""},
 	} {
 		t.Run(tc.field, func(t *testing.T) {

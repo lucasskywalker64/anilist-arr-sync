@@ -21,7 +21,7 @@
   let isSetupMode = false;
   let booting = true;
   let onboardingConfig: AppConfig | null = null;
-  let onboardingActivated = false;
+  let resumeOnboarding = false;
   let onboardingError = '';
   let isSyncing = false;
   let completedSyncRunId = 0;
@@ -83,9 +83,9 @@
       }
     }
 
-    onboardingActivated = Boolean(currentUser?.wizardCompleted && new URLSearchParams(window.location.search).get('onboarding') === 'complete');
+    resumeOnboarding = Boolean(currentUser?.wizardCompleted && new URLSearchParams(window.location.search).get('onboarding') === 'complete');
     const showOnboarding = currentUser?.onboardingRequired && !sessionStorage.getItem(`${getBaseUrl()}:onboarding-dismissed`);
-    if (!needsLogin && (onboardingActivated || showOnboarding)) {
+    if (!needsLogin && (resumeOnboarding || showOnboarding)) {
       try {
         onboardingConfig = await api.getConfig();
       } catch (err) {
@@ -99,12 +99,12 @@
   function closeOnboarding(finished: boolean) {
     onboardingConfig = null;
     if (finished) {
-      if (onboardingActivated) {
-        const url = new URL(window.location.href);
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('onboarding') === 'complete') {
         url.searchParams.delete('onboarding');
         window.history.replaceState(null, '', url);
-        onboardingActivated = false;
       }
+      resumeOnboarding = false;
       navigate('/');
     } else {
       sessionStorage.setItem(`${getBaseUrl()}:onboarding-dismissed`, 'true');
@@ -198,7 +198,7 @@
   <p role="alert">{onboardingError}</p>
   <button on:click={checkAuthAndBoot}>Retry Setup</button>
 {:else if onboardingConfig}
-  <OnboardingWizard config={onboardingConfig} activated={onboardingActivated} on:dismiss={() => closeOnboarding(false)} on:finish={() => closeOnboarding(true)} />
+  <OnboardingWizard config={onboardingConfig} resume={resumeOnboarding} on:dismiss={() => closeOnboarding(false)} on:finish={() => closeOnboarding(true)} />
 {:else}
   <Page
     {currentRoute}
@@ -240,7 +240,7 @@
       <BlocklistView />
     {:else if currentRoute.startsWith('/settings')}
       <SettingsView
-        openOnboarding={(config) => onboardingConfig = config}
+        openOnboarding={currentUser?.onboardingRequired ? (config) => onboardingConfig = config : undefined}
         subTab={currentRoute === '/settings/sync'
           ? 'sync'
           : currentRoute === '/settings/servarr'

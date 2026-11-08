@@ -239,12 +239,16 @@ func (o *Orchestrator) applyStagedAction(ctx context.Context, id int) error {
 		if addErr != nil {
 			return fmt.Errorf("execute add movie: %w", addErr)
 		}
+		monitoredStatus := "UNMONITORED"
+		if req.Monitored {
+			monitoredStatus = "MONITORED"
+		}
 		syncUpdateFn = func(ctx context.Context, tx *sql.Tx) error {
 			_, err := tx.ExecContext(ctx, `
 				UPDATE synced_media
-				SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
+				SET monitored_status = ?, updated_at = CURRENT_TIMESTAMP
 				WHERE tmdb_id = ? AND monitored_status != 'IGNORED';
-			`, req.TMDBID)
+			`, monitoredStatus, req.TMDBID)
 			return err
 		}
 

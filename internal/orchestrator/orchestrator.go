@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -102,6 +103,13 @@ func (o *Orchestrator) UpdateConfig(cfg config.Config) {
 	o.stateMu.Lock()
 	defer o.stateMu.Unlock()
 	o.cfg = &cfg
+}
+
+// UpdateServarrConfig installs the configuration and its clients together for future work.
+func (o *Orchestrator) UpdateServarrConfig(cfg config.Config, sonarr *servarr.SonarrClient, radarr *servarr.RadarrClient) {
+	o.stateMu.Lock()
+	defer o.stateMu.Unlock()
+	o.cfg, o.sonarr, o.radarr = &cfg, sonarr, radarr
 }
 
 func (o *Orchestrator) snapshot() *Orchestrator {
@@ -228,10 +236,11 @@ func (o *Orchestrator) sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 	}
 
 	// Fetch AniList watchlist
-	statuses := o.configuredStatuses()
+	seriesStatuses := anilist.ParseListStatuses(o.cfg.AniListTvStatus)
+	movieStatuses := anilist.ParseListStatuses(o.cfg.AniListMovieStatus)
 	filter := anilist.WatchlistFilter{
 		Username:          o.cfg.AniListUsername,
-		Statuses:          statuses,
+		Statuses:          o.configuredStatuses(seriesStatuses, movieStatuses),
 		IncludeUnreleased: o.cfg.AniListIncludeUnreleased,
 	}
 
@@ -254,8 +263,18 @@ func (o *Orchestrator) sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 		}
 
 		mediaType := "SERIES"
+		allowedStatuses := seriesStatuses
 		if decision == router.RouteRadarr {
 			mediaType = "MOVIE"
+			allowedStatuses = movieStatuses
+		}
+		status := entry.Status
+		if status == "" {
+			status = anilist.StatusCurrent
+		}
+		selected := slices.Contains(allowedStatuses, status)
+		if !selected && !o.isCleanupStatus(status) {
+			continue
 		}
 
 		// Step 2: Skip titles present in ignored_titles table before resolution
@@ -269,7 +288,7 @@ func (o *Orchestrator) sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 		// Step 3 & 4: Check established database mappings and divert unmapped entries
 		var res *resolver.Result
 		var resErr error
-		if o.cleanupOnly(entry) {
+		if !selected || status == anilist.StatusDropped {
 			res, resErr = o.resolver.ResolveForCleanup(ctx, entry.Media)
 		} else {
 			res, resErr = o.resolver.Resolve(ctx, entry.Media)
@@ -500,11 +519,11 @@ func (o *Orchestrator) dispatchRadarr(ctx context.Context, entry anilist.MediaLi
 		Year:                year,
 		QualityProfileID:    o.cfg.RadarrQualityProfileID,
 		RootFolderPath:      o.cfg.RadarrRootFolderPath,
-		Monitored:           true,
+		Monitored:           o.cfg.RadarrMonitorOnAdd,
 		MinimumAvailability: "announced",
 		Tags:                tags,
 		AddOptions: &servarr.AddMovieOptions{
-			SearchForMovie: o.cfg.RadarrSearchOnAdd,
+			SearchForMovie: o.cfg.RadarrMonitorOnAdd && o.cfg.RadarrSearchOnAdd,
 		},
 	}
 
@@ -534,7 +553,11 @@ func (o *Orchestrator) dispatchRadarr(ctx context.Context, entry anilist.MediaLi
 			PosterURL:     entry.Media.CoverImageURL(),
 		})
 	}
-	return dispatchOutcome{monitoredStatus: "MONITORED", shouldUpsert: true}
+	monitoredStatus := "UNMONITORED"
+	if addReq.Monitored {
+		monitoredStatus = "MONITORED"
+	}
+	return dispatchOutcome{monitoredStatus: monitoredStatus, shouldUpsert: true}
 }
 
 func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaListEntry, res *resolver.Result, report *SyncReport) dispatchOutcome {
@@ -1206,7 +1229,7 @@ func (o *Orchestrator) cleanupOnly(entry anilist.MediaListEntry) bool {
 	if router.Route(router.MediaFormat(strings.ToUpper(strings.TrimSpace(entry.Media.Format)))) == router.RouteRadarr {
 		configured = o.cfg.AniListMovieStatus
 	}
-	return !strings.EqualFold(strings.TrimSpace(configured), string(entry.Status))
+	return !slices.Contains(anilist.ParseListStatuses(configured), entry.Status)
 }
 
 var subSeasonPattern = regexp.MustCompile(`(?i)\b(?:part|cour)\s+(\d+)\b`)
@@ -1306,29 +1329,20 @@ func (o *Orchestrator) reconcileWatchlistStatus(ctx context.Context) error {
 	})
 }
 
-func (o *Orchestrator) configuredStatuses() []anilist.MediaListStatus {
-	statusMap := make(map[anilist.MediaListStatus]bool)
-	if o.cfg.AniListTvStatus != "" {
-		statusMap[anilist.MediaListStatus(strings.ToUpper(strings.TrimSpace(o.cfg.AniListTvStatus)))] = true
-	}
-	if o.cfg.AniListMovieStatus != "" {
-		statusMap[anilist.MediaListStatus(strings.ToUpper(strings.TrimSpace(o.cfg.AniListMovieStatus)))] = true
-	}
-	if o.cfg.UnmonitorDropped || o.cfg.DeleteDropped {
-		statusMap[anilist.StatusDropped] = true
-	}
-	if o.cfg.UnmonitorCompleted || o.cfg.DeleteCompleted {
-		statusMap[anilist.StatusCompleted] = true
-	}
-	if len(statusMap) == 0 {
-		statusMap[anilist.StatusCurrent] = true
-	}
+func (o *Orchestrator) isCleanupStatus(status anilist.MediaListStatus) bool {
+	return (status == anilist.StatusDropped && (o.cfg.UnmonitorDropped || o.cfg.DeleteDropped)) ||
+		(status == anilist.StatusCompleted && (o.cfg.UnmonitorCompleted || o.cfg.DeleteCompleted))
+}
 
-	var list []anilist.MediaListStatus
-	for s := range statusMap {
-		list = append(list, s)
+func (o *Orchestrator) configuredStatuses(series, movies []anilist.MediaListStatus) []anilist.MediaListStatus {
+	statuses := slices.Concat(series, movies)
+	for _, status := range []anilist.MediaListStatus{anilist.StatusDropped, anilist.StatusCompleted} {
+		if o.isCleanupStatus(status) {
+			statuses = append(statuses, status)
+		}
 	}
-	return list
+	slices.Sort(statuses)
+	return slices.Compact(statuses)
 }
 
 func (o *Orchestrator) recordHistory(ctx context.Context, report *SyncReport, start time.Time) {

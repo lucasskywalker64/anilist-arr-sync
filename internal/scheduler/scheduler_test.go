@@ -101,6 +101,7 @@ func TestScheduledSyncCancellationAndStartStatus(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		cfg := config.NewDefault()
 		cfg.AniListUsername = "testuser"
+		cfg.SonarrURL, cfg.SonarrAPIKey = "http://sonarr.example", "key"
 		entered, cancelled := make(chan struct{}), make(chan struct{})
 		o := newOrchestrator(t, cfg, func(r *http.Request) (*http.Response, error) {
 			close(entered)
@@ -169,6 +170,7 @@ func TestBusySyncTicksAreSkippedAndContextCancellationStopsWork(t *testing.T) {
 		defer log.SetOutput(previous)
 		cfg := config.NewDefault()
 		cfg.AniListUsername = "testuser"
+		cfg.SonarrURL, cfg.SonarrAPIKey = "http://sonarr.example", "key"
 		entered := make(chan struct{}, 1)
 		o := newOrchestrator(t, cfg, func(r *http.Request) (*http.Response, error) {
 			select {
@@ -264,6 +266,7 @@ func TestRuntimeSyncIntervalUpdates(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		cfg := config.NewDefault()
 		cfg.AniListUsername = "testuser"
+		cfg.SonarrURL, cfg.SonarrAPIKey = "http://sonarr.example", "key"
 		o := newOrchestrator(t, cfg, nil)
 		s := scheduler.New(*cfg, o, nil, nil)
 		s.Start(t.Context())
@@ -298,6 +301,7 @@ func TestScheduledSyncCycles(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		cfg := config.NewDefault()
 		cfg.AniListUsername = "testuser"
+		cfg.SonarrURL, cfg.SonarrAPIKey = "http://sonarr.example", "key"
 		o := newOrchestrator(t, cfg, nil)
 		s := scheduler.New(*cfg, o, nil, nil)
 		start := time.Now()

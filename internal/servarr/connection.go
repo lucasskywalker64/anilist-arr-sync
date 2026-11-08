@@ -7,6 +7,26 @@ import (
 	"strings"
 )
 
+// NewClients creates clients for the configured Servarr URLs.
+func NewClients(sonarrURL, sonarrKey, radarrURL, radarrKey string, opts ...Option) (*SonarrClient, *RadarrClient, error) {
+	var sonarr *SonarrClient
+	var radarr *RadarrClient
+	var err error
+	if sonarrURL != "" {
+		sonarr, err = NewSonarrClient(sonarrURL, sonarrKey, opts...)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if radarrURL != "" {
+		radarr, err = NewRadarrClient(radarrURL, radarrKey, opts...)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return sonarr, radarr, nil
+}
+
 // QualityProfile is a selectable Servarr quality profile.
 type QualityProfile struct {
 	ID   int    `json:"id"`

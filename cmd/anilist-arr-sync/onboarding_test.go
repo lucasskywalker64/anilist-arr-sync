@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +18,7 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
 )
 
-func TestOnboardingActivatesSavedConnectionsAndScheduleAfterRestart(t *testing.T) {
+func TestOnboardingActivatesSavedSettingsWithoutRestart(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		dir := t.TempDir()
 		paths := runtimePaths{data: dir, config: filepath.Join(dir, "config.xml")}
@@ -26,15 +27,16 @@ func TestOnboardingActivatesSavedConnectionsAndScheduleAfterRestart(t *testing.T
 		if err := config.Save(paths.config, cfg); err != nil {
 			t.Fatal(err)
 		}
-		boot := func() *appRuntime {
-			t.Helper()
-			r, err := bootstrap(t.Context(), options{}, paths)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return r
+		r, err := bootstrap(t.Context(), options{}, paths)
+		if err != nil {
+			t.Fatal(err)
 		}
-		request := func(r *appRuntime, method, path, body string) *httptest.ResponseRecorder {
+		defer func() {
+			if err := r.close(); err != nil {
+				t.Error(err)
+			}
+		}()
+		request := func(method, path, body string) *httptest.ResponseRecorder {
 			req := httptest.NewRequest(method, path, strings.NewReader(body))
 			req.Header.Set("X-Api-Key", cfg.APIKey)
 			res := httptest.NewRecorder()
@@ -42,27 +44,7 @@ func TestOnboardingActivatesSavedConnectionsAndScheduleAfterRestart(t *testing.T
 			return res
 		}
 
-		first := boot()
-		saved := request(first, "PUT", "/api/v1/config", `{
-			"wizardCompleted":true,"aniListUsername":"viewer","sonarrUrl":"http://sonarr/arr",
-			"sonarrApiKey":"sonarr-secret","sonarrQualityProfileId":7,"sonarrRootFolderPath":"/anime",
-			"sonarrMonitorOnAdd":false,"firstRunDryRun":false,"syncIntervalHours":2
-		}`)
-		pending := request(first, "POST", "/api/v1/sync/start?dryRun=true", "")
-		if err := first.close(); err != nil {
-			t.Fatal(err)
-		}
-		if saved.Code != 200 || !strings.Contains(saved.Body.String(), `"restartRequired":true`) || pending.Code != 409 {
-			t.Fatalf("save: %d %s, dry run before restart: %d %s", saved.Code, saved.Body, pending.Code, pending.Body)
-		}
-
-		r := boot()
-		defer func() {
-			if err := r.close(); err != nil {
-				t.Error(err)
-			}
-		}()
-		var writes atomic.Int32
+		var mutations, seriesWrites, reloadedSeriesWrites atomic.Int32
 		r.client.Transport = runtimeTransportFunc(func(req *http.Request) (*http.Response, error) {
 			body := `[]`
 			switch req.URL.Host {
@@ -72,15 +54,26 @@ func TestOnboardingActivatesSavedConnectionsAndScheduleAfterRestart(t *testing.T
 					t.Errorf("saved AniList username missing from request: %v", err)
 				}
 				body = `{"data":{"MediaListCollection":{"lists":[{"status":"CURRENT","entries":[{"id":1,"mediaId":1,"status":"CURRENT","media":{"id":1,"format":"TV","status":"FINISHED","title":{"romaji":"Example Anime"}}}]}]}}}`
-			case "sonarr":
-				if req.Header.Get("X-Api-Key") != "sonarr-secret" || !strings.HasPrefix(req.URL.Path, "/arr/api/v3/") {
+			case "sonarr", "next-sonarr":
+				key := "sonarr-secret"
+				if req.URL.Host == "next-sonarr" {
+					key = "next-secret"
+				}
+				if req.Header.Get("X-Api-Key") != key || !strings.HasPrefix(req.URL.Path, "/arr/api/v3/") {
 					t.Error("Sonarr did not use the saved key and URL base")
 				}
-				if req.Method == "POST" && req.URL.Path == "/arr/api/v3/series" {
-					writes.Add(1)
+				if req.Method != http.MethodGet {
+					mutations.Add(1)
+				}
+				if req.Method == http.MethodPost && req.URL.Path == "/arr/api/v3/series" {
+					if req.URL.Host == "next-sonarr" {
+						reloadedSeriesWrites.Add(1)
+					} else {
+						seriesWrites.Add(1)
+					}
 					body = `{"id":10}`
-				} else if req.URL.Path == "/arr/api/v3/tag" {
-					body = `[{"id":1,"label":"anilist-sync"}]`
+				} else if req.Method == http.MethodPost && req.URL.Path == "/arr/api/v3/tag" {
+					body = `{"id":1,"label":"anilist-sync"}`
 				}
 			default:
 				time.Sleep(time.Second) // Allow the dry-run request to overlap the startup mapping refresh.
@@ -90,19 +83,30 @@ func TestOnboardingActivatesSavedConnectionsAndScheduleAfterRestart(t *testing.T
 		})
 		r.start()
 		synctest.Wait()
-		if got := time.Until(r.scheduler.Status().Sync.Next); got != 2*time.Hour {
-			t.Fatalf("scheduled interval after restart = %s, want 2h", got)
+		if !r.scheduler.Status().Sync.Next.IsZero() {
+			t.Fatal("sync was scheduled before setup")
 		}
-		if started := request(r, "POST", "/api/v1/sync/start?dryRun=true", ""); started.Code != 202 {
+		saved := request("PUT", "/api/v1/config", `{
+			"wizardCompleted":true,"aniListUsername":"viewer","sonarrUrl":"http://sonarr/arr",
+			"sonarrApiKey":"sonarr-secret","sonarrQualityProfileId":7,"sonarrRootFolderPath":"/anime",
+			"sonarrMonitorOnAdd":false,"firstRunDryRun":false,"syncIntervalHours":2
+		}`)
+		if saved.Code != 200 || !strings.Contains(saved.Body.String(), `"restartRequired":false`) {
+			t.Fatalf("save: %d %s", saved.Code, saved.Body)
+		}
+		if got := time.Until(r.scheduler.Status().Sync.Next); got != 2*time.Hour {
+			t.Fatalf("scheduled interval after save = %s, want 2h", got)
+		}
+		if started := request("POST", "/api/v1/sync/start?dryRun=true", ""); started.Code != 202 {
 			t.Fatalf("initial dry run: %d %s", started.Code, started.Body)
 		}
 		time.Sleep(3 * time.Second)
 		synctest.Wait()
-		staged := request(r, "GET", "/api/v1/staged", "")
+		staged := request("GET", "/api/v1/staged", "")
 		var actions []orchestrator.StagedAction
-		if err := json.Unmarshal(staged.Body.Bytes(), &actions); err != nil || len(actions) != 1 || writes.Load() != 0 {
-			status := request(r, "GET", "/api/v1/sync/status", "")
-			t.Fatalf("dry run did not stage exactly one action without a Sonarr write: %s, err=%v, writes=%d, sync=%s", staged.Body, err, writes.Load(), status.Body)
+		if err := json.Unmarshal(staged.Body.Bytes(), &actions); err != nil || len(actions) != 1 || mutations.Load() != 0 {
+			status := request("GET", "/api/v1/sync/status", "")
+			t.Fatalf("dry run did not stage exactly one action without a Sonarr write: %s, err=%v, writes=%d, sync=%s", staged.Body, err, mutations.Load(), status.Body)
 		}
 		var series servarr.AddSeriesRequest
 		if err := json.Unmarshal([]byte(actions[0].PayloadJSON), &series); err != nil || series.QualityProfileID != 7 || series.RootFolderPath != "/anime" || series.Monitored {
@@ -110,16 +114,24 @@ func TestOnboardingActivatesSavedConnectionsAndScheduleAfterRestart(t *testing.T
 		}
 		time.Sleep(time.Until(r.scheduler.Status().Sync.Next) + 3*time.Second)
 		synctest.Wait()
-		if writes.Load() != 1 {
+		if seriesWrites.Load() != 1 {
 			t.Fatal("scheduled sync did not use the saved non-dry-run preference")
 		}
-		if updated := request(r, "PUT", "/api/v1/config", `{"sonarrUrl":"http://next-sonarr/arr","firstRunDryRun":true}`); updated.Code != 200 {
+		updated := request("PUT", "/api/v1/config", `{"sonarrUrl":"http://next-sonarr/arr","sonarrApiKey":"next-secret"}`)
+		if updated.Code != 200 || !strings.Contains(updated.Body.String(), `"restartRequired":false`) {
 			t.Fatalf("save new connection: %d %s", updated.Code, updated.Body)
+		}
+		applied := request("POST", "/api/v1/staged/apply", fmt.Sprintf(`{"ids":[%d]}`, actions[0].ID))
+		if applied.Code != 200 || seriesWrites.Load() != 1 || reloadedSeriesWrites.Load() != 1 {
+			t.Fatalf("staged apply after save: %d %s, old writes=%d, new writes=%d", applied.Code, applied.Body, seriesWrites.Load(), reloadedSeriesWrites.Load())
 		}
 		time.Sleep(time.Until(r.scheduler.Status().Sync.Next) + 3*time.Second)
 		synctest.Wait()
-		if writes.Load() != 1 {
-			t.Fatal("scheduled sync wrote to the old Sonarr connection while restart was pending")
+		if seriesWrites.Load() != 1 || reloadedSeriesWrites.Load() != 2 {
+			t.Fatalf("scheduled sync after save: old writes=%d, new writes=%d", seriesWrites.Load(), reloadedSeriesWrites.Load())
+		}
+		if removed := request("PUT", "/api/v1/config", `{"sonarrUrl":""}`); removed.Code != 200 || !r.scheduler.Status().Sync.Next.IsZero() {
+			t.Fatalf("removing the last connection left sync scheduled: %d %s", removed.Code, removed.Body)
 		}
 	})
 }

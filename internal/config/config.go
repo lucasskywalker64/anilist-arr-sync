@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/anilist"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
 )
 
@@ -80,6 +81,7 @@ type Config struct {
 	RadarrAPIKey           string `xml:"RadarrApiKey"`
 	RadarrQualityProfileID int    `xml:"RadarrQualityProfileId"`
 	RadarrRootFolderPath   string `xml:"RadarrRootFolderPath"`
+	RadarrMonitorOnAdd     bool   `xml:"RadarrMonitorOnAdd"`
 	RadarrSearchOnAdd      bool   `xml:"RadarrSearchOnAdd"`
 
 	// Sonarr
@@ -151,6 +153,7 @@ func NewDefault() *Config {
 		RadarrAPIKey:               "",
 		RadarrQualityProfileID:     1,
 		RadarrRootFolderPath:       "",
+		RadarrMonitorOnAdd:         true,
 		RadarrSearchOnAdd:          false,
 		SonarrURL:                  "",
 		SonarrAPIKey:               "",
@@ -171,6 +174,12 @@ func NewDefault() *Config {
 		DeleteWatched:              false,
 		FirstRunDryRun:             true,
 	}
+}
+
+// SyncConfigured reports whether AniList and at least one Servarr connection are configured.
+func (c *Config) SyncConfigured() bool {
+	return strings.TrimSpace(c.AniListUsername) != "" &&
+		((c.SonarrURL != "" && c.SonarrAPIKey != "") || (c.RadarrURL != "" && c.RadarrAPIKey != ""))
 }
 
 // Validate verifies that all configuration values fall within allowable ranges and formats.
@@ -251,6 +260,20 @@ func (c *Config) Validate() error {
 	case "anime", "standard":
 	default:
 		check(false, "SonarrSeriesType must be anime or standard, got %q", c.SonarrSeriesType)
+	}
+
+	for _, selection := range []struct{ field, value string }{
+		{"AniListTvStatus", c.AniListTvStatus},
+		{"AniListMovieStatus", c.AniListMovieStatus},
+	} {
+		for _, status := range anilist.ParseListStatuses(selection.value) {
+			switch status {
+			case anilist.StatusCurrent, anilist.StatusPlanning, anilist.StatusCompleted,
+				anilist.StatusDropped, anilist.StatusPaused, anilist.StatusRepeating:
+			default:
+				check(false, "%s contains invalid AniList status %q", selection.field, status)
+			}
+		}
 	}
 
 	check(c.SyncIntervalHours > 0, "SyncIntervalHours must be greater than 0, got %d", c.SyncIntervalHours)

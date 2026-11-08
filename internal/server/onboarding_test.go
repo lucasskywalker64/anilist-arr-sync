@@ -26,7 +26,7 @@ func TestOnboardingConnectionTests(t *testing.T) {
 	cfg.SonarrURL, cfg.SonarrAPIKey = "http://sonarr/arr", "saved-key"
 	srv := NewServer(cfg, "", nil, nil, nil)
 	var requests []string
-	srv.SetConnectionTestClient(&http.Client{Transport: syncTransportFunc(func(req *http.Request) (*http.Response, error) {
+	srv.SetOutboundHTTPClient(&http.Client{Transport: syncTransportFunc(func(req *http.Request) (*http.Response, error) {
 		requests = append(requests, req.Method+" "+req.URL.Path)
 		status, body := http.StatusOK, ""
 		if req.URL.Host == "graphql.anilist.co" {
@@ -124,20 +124,28 @@ func TestOnboardingConfig(t *testing.T) {
 	if res := update(`{"wizardCompleted":true}`); res.Code != http.StatusBadRequest {
 		t.Fatalf("incomplete setup: %d %s", res.Code, res.Body)
 	}
-	if res := update(`{"wizardCompleted":true,"sonarrApiKey":"sonarr-secret","sonarrRootFolderPath":"/anime","syncIntervalHours":0}`); res.Code != http.StatusBadRequest {
-		t.Fatalf("invalid completion: %d %s", res.Code, res.Body)
+	for _, invalidHours := range []string{"0", "3.5"} {
+		if res := update(`{"wizardCompleted":true,"sonarrApiKey":"sonarr-secret","sonarrRootFolderPath":"/anime","syncIntervalHours":` + invalidHours + `}`); res.Code != http.StatusBadRequest {
+			t.Fatalf("invalid completion with interval %s: %d %s", invalidHours, res.Code, res.Body)
+		}
 	}
 	assertState(false, false)
-	const setup = `{"wizardCompleted":true,"sonarrApiKey":"sonarr-secret","sonarrQualityProfileId":7,"sonarrRootFolderPath":"/anime","sonarrMonitorOnAdd":false,"syncIntervalHours":8,"firstRunDryRun":true}`
-	t.Run("conflicting environment override", func(t *testing.T) {
-		t.Setenv("ANILIST_SYNC__SYNC__FIRSTRUNDRYRUN", "false")
-		if res := update(setup); res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "environment variables override") {
-			t.Fatalf("setup under a conflicting environment override: %d %s", res.Code, res.Body)
-		}
-	})
+	const setup = `{
+		"wizardCompleted":true,"sonarrApiKey":"sonarr-secret","sonarrQualityProfileId":7,"sonarrRootFolderPath":"/anime","sonarrMonitorOnAdd":false,
+		"radarrUrl":"http://radarr:7878","radarrApiKey":"radarr-secret","radarrQualityProfileId":11,"radarrRootFolderPath":"/movies","radarrMonitorOnAdd":false,
+		"sonarrSearchOnAdd":true,"radarrSearchOnAdd":true,"syncIntervalHours":8,"firstRunDryRun":true
+	}`
+	for _, key := range []string{"SYNC__FIRSTRUNDRYRUN", "SONARR__SEARCHONADD", "RADARR__SEARCHONADD"} {
+		t.Run("conflicting environment override/"+key, func(t *testing.T) {
+			t.Setenv("ANILIST_SYNC__"+key, "false")
+			if res := update(setup); res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "environment variables override") {
+				t.Fatalf("setup under a conflicting environment override: %d %s", res.Code, res.Body)
+			}
+		})
+	}
 	assertState(false, false)
 	res := update(setup)
-	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"restartRequired":true`) {
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"restartRequired":false`) {
 		t.Fatalf("finish setup: %d %s", res.Code, res.Body)
 	}
 	assertState(false, true)
@@ -145,10 +153,14 @@ func TestOnboardingConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !saved.WizardCompleted || saved.SonarrQualityProfileID != 7 || saved.SonarrRootFolderPath != "/anime" || saved.SonarrMonitorOnAdd || saved.SyncIntervalHours != 8 {
+	if !saved.WizardCompleted || saved.SonarrQualityProfileID != 7 || saved.SonarrRootFolderPath != "/anime" || saved.SonarrMonitorOnAdd ||
+		saved.RadarrMonitorOnAdd || !saved.SonarrSearchOnAdd || !saved.RadarrSearchOnAdd || saved.SyncIntervalHours != 8 {
 		t.Fatalf("onboarding fields did not persist")
 	}
 	loaded := onboardingRequest(srv, "GET", "/api/v1/config", "", cfg.APIKey)
+	if !strings.Contains(loaded.Body.String(), `"radarrMonitorOnAdd":false`) {
+		t.Fatalf("GET /config did not return the saved Radarr monitor preference: %s", loaded.Body)
+	}
 	if !strings.Contains(loaded.Body.String(), `"sonarrApiKey":"******"`) || strings.Contains(loaded.Body.String(), "sonarr-secret") {
 		t.Fatalf("GET /config did not mask the Sonarr key: %s", loaded.Body)
 	}

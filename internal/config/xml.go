@@ -62,6 +62,7 @@ type xmlConfig struct {
 	RadarrAPIKey           string `xml:"RadarrApiKey"`
 	RadarrQualityProfileID int    `xml:"RadarrQualityProfileId"`
 	RadarrRootFolderPath   string `xml:"RadarrRootFolderPath"`
+	RadarrMonitorOnAdd     string `xml:"RadarrMonitorOnAdd"`
 	RadarrSearchOnAdd      string `xml:"RadarrSearchOnAdd"`
 
 	SonarrURL              string `xml:"SonarrUrl"`
@@ -154,6 +155,7 @@ func (c *Config) ToXML() ([]byte, error) {
 		RadarrAPIKey:               c.RadarrAPIKey,
 		RadarrQualityProfileID:     c.RadarrQualityProfileID,
 		RadarrRootFolderPath:       c.RadarrRootFolderPath,
+		RadarrMonitorOnAdd:         formatBool(c.RadarrMonitorOnAdd),
 		RadarrSearchOnAdd:          formatBool(c.RadarrSearchOnAdd),
 		SonarrURL:                  c.SonarrURL,
 		SonarrAPIKey:               c.SonarrAPIKey,

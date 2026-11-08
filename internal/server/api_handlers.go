@@ -20,6 +20,7 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/backup"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/orchestrator"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 )
 
@@ -207,9 +208,30 @@ func (s *Server) handleDeleteOverride(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// requiresRestart compares saved settings with active settings. The caller holds cfgMu.
+func (s *Server) requiresRestart(next config.Config) bool {
+	listenerNext := s.listenerConfig(next)
+	running := s.runtimeCfg
+	return (s.boundPort != listenerNext.Port) ||
+		(s.boundBindAddress != listenerNext.BindAddress) ||
+		(s.boundURLBase != next.URLBase) ||
+		(s.boundEnableSsl != next.EnableSsl) ||
+		(s.boundSslPort != next.SslPort) ||
+		(running.SslCertPath != next.SslCertPath) || (running.SslKeyPath != next.SslKeyPath) ||
+		(running.DatabasePath != next.DatabasePath) ||
+		(running.UseProxy != next.UseProxy) || (running.ProxyType != next.ProxyType) ||
+		(running.ProxyHostname != next.ProxyHostname) || (running.ProxyPort != next.ProxyPort) ||
+		(running.ProxyUsername != next.ProxyUsername) || (running.ProxyPassword != next.ProxyPassword) ||
+		(running.ProxyIgnoredAddresses != next.ProxyIgnoredAddresses) ||
+		(running.ProxyBypassLocalAddresses != next.ProxyBypassLocalAddresses)
+}
+
 // handleGetConfig returns the sanitized runtime configuration.
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
-	sanitized := s.Config()
+	s.cfgMu.RLock()
+	sanitized := *s.cfg
+	restartRequired := s.requiresRestart(sanitized)
+	s.cfgMu.RUnlock()
 	if sanitized.RadarrAPIKey != "" {
 		sanitized.RadarrAPIKey = "******"
 	}
@@ -254,6 +276,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"logSizeLimit":              sanitized.LogSizeLimit,
 		"instanceName":              sanitized.InstanceName,
 		"wizardCompleted":           sanitized.WizardCompleted,
+		"restartRequired":           restartRequired,
 		"updateBranch":              sanitized.UpdateBranch,
 		"updateAutomatically":       sanitized.UpdateAutomatically,
 		"updateMechanism":           sanitized.UpdateMechanism,
@@ -262,15 +285,20 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"backupRetention":           sanitized.BackupRetention,
 		"databasePath":              sanitized.DatabasePath,
 		"aniListUsername":           sanitized.AniListUsername,
+		"aniListTvStatus":           sanitized.AniListTvStatus,
+		"aniListMovieStatus":        sanitized.AniListMovieStatus,
 		"radarrUrl":                 sanitized.RadarrURL,
 		"radarrApiKey":              sanitized.RadarrAPIKey,
 		"radarrQualityProfileId":    sanitized.RadarrQualityProfileID,
 		"radarrRootFolderPath":      sanitized.RadarrRootFolderPath,
+		"radarrMonitorOnAdd":        sanitized.RadarrMonitorOnAdd,
+		"radarrSearchOnAdd":         sanitized.RadarrSearchOnAdd,
 		"sonarrUrl":                 sanitized.SonarrURL,
 		"sonarrApiKey":              sanitized.SonarrAPIKey,
 		"sonarrQualityProfileId":    sanitized.SonarrQualityProfileID,
 		"sonarrRootFolderPath":      sanitized.SonarrRootFolderPath,
 		"sonarrMonitorOnAdd":        sanitized.SonarrMonitorOnAdd,
+		"sonarrSearchOnAdd":         sanitized.SonarrSearchOnAdd,
 		"tagName":                   sanitized.TagName,
 		"syncIntervalHours":         sanitized.SyncIntervalHours,
 		"dateToleranceDays":         sanitized.DateToleranceDays,
@@ -434,9 +462,12 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 				next.BackupRetention = int(num)
 			}
 		case "syncintervalhours":
-			if num, ok := v.(float64); ok {
-				next.SyncIntervalHours = int(num)
+			num, ok := v.(float64)
+			if !ok || float64(int(num)) != num {
+				s.writeJSONError(w, http.StatusBadRequest, "sync interval must be a whole number of hours")
+				return
 			}
+			next.SyncIntervalHours = int(num)
 		case "datetolerancedays":
 			if num, ok := v.(float64); ok {
 				next.DateToleranceDays = int(num)
@@ -482,6 +513,18 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			if b, ok := v.(bool); ok {
 				next.SonarrMonitorOnAdd = b
 			}
+		case "radarrmonitoronadd":
+			if b, ok := v.(bool); ok {
+				next.RadarrMonitorOnAdd = b
+			}
+		case "sonarrsearchonadd":
+			if b, ok := v.(bool); ok {
+				next.SonarrSearchOnAdd = b
+			}
+		case "radarrsearchonadd":
+			if b, ok := v.(bool); ok {
+				next.RadarrSearchOnAdd = b
+			}
 		case "sonarrqualityprofileid", "radarrqualityprofileid":
 			num, ok := v.(float64)
 			if !ok || num < 0 || float64(int(num)) != num {
@@ -508,6 +551,14 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		case "anilistusername":
 			if str, ok := v.(string); ok {
 				next.AniListUsername = str
+			}
+		case "anilisttvstatus":
+			if str, ok := v.(string); ok {
+				next.AniListTvStatus = str
+			}
+		case "anilistmoviestatus":
+			if str, ok := v.(string); ok {
+				next.AniListMovieStatus = str
 			}
 		case "radarrurl":
 			if str, ok := v.(string); ok {
@@ -540,10 +591,31 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	connectionsChanged := servarrConnectionsChanged(*s.cfg, next)
+	var sonarrClient *servarr.SonarrClient
+	var radarrClient *servarr.RadarrClient
+	if connectionsChanged && s.orch != nil {
+		var err error
+		sonarrClient, radarrClient, err = servarr.NewClients(next.SonarrURL, next.SonarrAPIKey, next.RadarrURL, next.RadarrAPIKey,
+			servarr.WithHTTPClient(s.outboundHTTPClient))
+		if err != nil {
+			s.writeJSONError(w, http.StatusBadRequest, "invalid service connection: "+err.Error())
+			return
+		}
+	}
+
 	newTrustedNets, err := ParseCIDRs(next.TrustedNetworks)
 	if err != nil {
 		s.writeJSONError(w, http.StatusBadRequest, "invalid trusted networks: "+err.Error())
 		return
+	}
+	var activateBackupSettings func()
+	if s.prepareBackupSettings != nil && (s.cfg.BackupFolder != next.BackupFolder || s.cfg.BackupRetention != next.BackupRetention) {
+		activateBackupSettings, err = s.prepareBackupSettings(*s.cfg, next)
+		if err != nil {
+			s.writeJSONError(w, http.StatusBadRequest, "invalid backup folder: "+err.Error())
+			return
+		}
 	}
 
 	// Update user credentials if requested
@@ -621,28 +693,17 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	listenerNext := s.listenerConfig(next)
-	running := s.runtimeCfg
-	connectionsChanged := servarrConnectionsChanged(running, next)
-	restartRequired := (s.boundPort != listenerNext.Port) ||
-		(s.boundBindAddress != listenerNext.BindAddress) ||
-		(s.boundURLBase != next.URLBase) ||
-		(s.boundEnableSsl != next.EnableSsl) ||
-		(s.boundSslPort != next.SslPort) ||
-		(running.SslCertPath != next.SslCertPath) || (running.SslKeyPath != next.SslKeyPath) ||
-		(running.AniListUsername != next.AniListUsername) || connectionsChanged ||
-		(running.DatabasePath != next.DatabasePath) ||
-		(running.BackupFolder != next.BackupFolder) || (running.BackupRetention != next.BackupRetention) ||
-		(running.UseProxy != next.UseProxy) || (running.ProxyType != next.ProxyType) ||
-		(running.ProxyHostname != next.ProxyHostname) || (running.ProxyPort != next.ProxyPort) ||
-		(running.ProxyUsername != next.ProxyUsername) || (running.ProxyPassword != next.ProxyPassword) ||
-		(running.ProxyIgnoredAddresses != next.ProxyIgnoredAddresses) ||
-		(running.ProxyBypassLocalAddresses != next.ProxyBypassLocalAddresses)
-
 	*s.cfg = next
 	s.trustedNets = newTrustedNets
-	if s.orch != nil && !connectionsChanged {
-		s.orch.UpdateConfig(next)
+	if activateBackupSettings != nil {
+		activateBackupSettings()
+	}
+	if s.orch != nil {
+		if connectionsChanged {
+			s.orch.UpdateServarrConfig(next, sonarrClient, radarrClient)
+		} else {
+			s.orch.UpdateConfig(next)
+		}
 	}
 	if s.scheduler != nil {
 		s.scheduler.UpdateConfig(next)
@@ -653,40 +714,29 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status":          "ok",
 		"message":         "configuration updated",
-		"restartRequired": restartRequired,
+		"restartRequired": s.requiresRestart(next),
 	})
 }
 
 // handleStartSync triggers a manual sync run in the background.
 func (s *Server) handleStartSync(w http.ResponseWriter, r *http.Request) {
 	dryRun := r.URL.Query().Get("dryRun") == "true"
-	if dryRun && s.prepareDryRun != nil {
-		if err := s.CheckSyncConnections(); err != nil {
-			s.writeJSONError(w, http.StatusConflict, err.Error())
-			return
-		}
-		if err := s.prepareDryRun(r.Context()); err != nil {
-			s.writeJSONError(w, http.StatusServiceUnavailable, "could not prepare mappings for the dry run: "+err.Error())
+	if s.orch == nil {
+		s.writeJSONError(w, http.StatusBadRequest, "orchestrator not configured")
+		return
+	}
+	if s.prepareSync != nil {
+		if err := s.prepareSync(r.Context()); err != nil {
+			s.writeJSONError(w, http.StatusServiceUnavailable, "could not prepare mappings for the sync: "+err.Error())
 			return
 		}
 	}
 	s.workMu.Lock()
 	defer s.workMu.Unlock()
-	s.cfgMu.RLock()
-	defer s.cfgMu.RUnlock()
-	if servarrConnectionsChanged(s.runtimeCfg, *s.cfg) {
-		s.writeJSONError(w, http.StatusConflict, "restart to activate the saved service connections")
-		return
-	}
 	if s.stopping {
 		s.writeJSONError(w, http.StatusServiceUnavailable, "server is stopping")
 		return
 	}
-	if s.orch == nil {
-		s.writeJSONError(w, http.StatusBadRequest, "orchestrator not configured")
-		return
-	}
-
 	start := s.orch.StartSync
 	if dryRun {
 		start = s.orch.StartDryRun

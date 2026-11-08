@@ -5,9 +5,10 @@
   import Alert from '../common/Alert.svelte';
   import Button from '../common/Button.svelte';
   import ServarrOnboardingStep from './ServarrOnboardingStep.svelte';
+  import AniListStatusPicker, { describeListStatuses } from './AniListStatusPicker.svelte';
 
   export let config: AppConfig;
-  export let activated = false;
+  export let resume = false;
 
   const dispatch = createEventDispatcher<{ dismiss: void; finish: void }>();
   const steps = ['Welcome', 'AniList', 'Sonarr', 'Radarr', 'Sync Preferences', 'Summary'];
@@ -21,24 +22,30 @@
 
   let step = 0;
   let username = config.aniListUsername;
+  let seriesStatuses = config.aniListTvStatus;
+  let movieStatuses = config.aniListMovieStatus;
   let profile: AniListProfile | null = null;
   let sonarr = connection(config.sonarrUrl, config.sonarrApiKey, config.sonarrQualityProfileId, config.sonarrRootFolderPath);
   let radarr = connection(config.radarrUrl, config.radarrApiKey, config.radarrQualityProfileId, config.radarrRootFolderPath);
-  let monitorOnAdd = config.sonarrMonitorOnAdd;
+  let sonarrMonitorOnAdd = config.sonarrMonitorOnAdd;
+  let sonarrSearchOnAdd = config.sonarrSearchOnAdd ?? false;
+  let radarrMonitorOnAdd = config.radarrMonitorOnAdd ?? true;
+  let radarrSearchOnAdd = config.radarrSearchOnAdd ?? false;
   let enableRadarr = Boolean(config.radarrUrl);
   let dryRun = config.firstRunDryRun;
-  let interval = config.syncIntervalHours;
-  $: intervals = [...new Set([1, 2, 4, 8, 12, 24, interval])].sort((a, b) => a - b);
+  let interval: number | undefined = config.syncIntervalHours ?? 4;
   let busy = false;
   let error = '';
-  let saved = activated;
-  let restartPending = false;
+  let saved = resume;
+  let restartPending = resume && Boolean(config.restartRequired);
   let reconnectUrl = '';
 
   $: activeStep = steps[step];
+  $: validInterval = typeof interval === 'number' && Number.isSafeInteger(interval) && interval > 0;
   $: canAdvance = activeStep === 'AniList' ? Boolean(profile)
     : activeStep === 'Sonarr' ? Boolean(sonarr.options)
     : activeStep === 'Radarr' ? !enableRadarr || Boolean(radarr.options)
+    : activeStep === 'Sync Preferences' ? validInterval
     : true;
 
   function move(offset: number) {
@@ -82,20 +89,28 @@
         const result = await api.updateConfig({
           wizardCompleted: true,
           aniListUsername: profile?.username ?? username.trim(),
+          aniListTvStatus: seriesStatuses,
           sonarrUrl: sonarr.baseUrl.trim(),
           ...(sonarr.apiKey.trim() ? { sonarrApiKey: sonarr.apiKey.trim() } : {}),
           sonarrQualityProfileId: sonarr.profileId,
           sonarrRootFolderPath: sonarr.rootFolder,
-          sonarrMonitorOnAdd: monitorOnAdd,
+          sonarrMonitorOnAdd,
+          sonarrSearchOnAdd,
           ...(enableRadarr ? {
             radarrUrl: radarr.baseUrl.trim(),
             ...(radarr.apiKey.trim() ? { radarrApiKey: radarr.apiKey.trim() } : {}),
             radarrQualityProfileId: radarr.profileId,
             radarrRootFolderPath: radarr.rootFolder,
+            radarrMonitorOnAdd,
+            radarrSearchOnAdd,
+            aniListMovieStatus: movieStatuses,
           } : { radarrUrl: '', radarrApiKey: '' }),
           firstRunDryRun: dryRun,
           syncIntervalHours: interval,
         });
+        const url = new URL(window.location.href);
+        url.searchParams.set('onboarding', 'complete');
+        window.history.replaceState(null, '', url);
         saved = true;
         restartPending = Boolean(result.restartRequired);
       }
@@ -149,30 +164,69 @@
       {/if}
     {:else if activeStep === 'Sonarr'}
       <ServarrOnboardingStep service="sonarr" bind:draft={sonarr} bind:busy />
-      <label class="checkbox"><input type="checkbox" bind:checked={monitorOnAdd} /> Monitor anime series on add</label>
+      <label class="checkbox"><input type="checkbox" bind:checked={sonarrMonitorOnAdd} /> Monitor anime series on add</label>
+      <label class="checkbox"><input type="checkbox" bind:checked={sonarrSearchOnAdd} /> Search for missing episodes on add</label>
     {:else if activeStep === 'Radarr'}
       <label class="checkbox"><input type="checkbox" bind:checked={enableRadarr} disabled={busy} /> Enable movie synchronization</label>
       {#if enableRadarr}
         <ServarrOnboardingStep service="radarr" bind:draft={radarr} bind:busy />
+        <label class="checkbox"><input type="checkbox" bind:checked={radarrMonitorOnAdd} /> Monitor movies on add</label>
+        <label class="checkbox"><input type="checkbox" bind:checked={radarrSearchOnAdd} /> Search for movies on add</label>
       {:else}
         <p>Continue to set up series synchronization only.</p>
       {/if}
     {:else if activeStep === 'Sync Preferences'}
+      <AniListStatusPicker label="Series lists" bind:value={seriesStatuses} />
+      {#if enableRadarr}
+        <AniListStatusPicker label="Movie lists" bind:value={movieStatuses} />
+      {/if}
+      <p>Dropped titles are eligible for cleanup only. Completed and dropped cleanup rules still apply.</p>
       <label class="checkbox"><input type="checkbox" bind:checked={dryRun} /> Dry run mode</label>
       <p>Stage proposed changes for review before applying them to Sonarr or Radarr.</p>
-      <label for="onboarding-interval">Sync Interval</label>
-      <select id="onboarding-interval" bind:value={interval}>
-        {#each intervals as hours}<option value={hours}>{hours} {hours === 1 ? 'hour' : 'hours'}</option>{/each}
-      </select>
+      <label for="onboarding-interval">Sync interval (hours)</label>
+      <input id="onboarding-interval" class="interval-input" type="number" min="1" step="1" required
+        bind:value={interval} aria-invalid={!validInterval} aria-describedby="onboarding-interval-help" />
+      <p id="onboarding-interval-help">Enter a positive whole number of hours.</p>
     {:else}
-      <dl>
-        <dt>AniList</dt><dd>{profile?.username}</dd>
-        <dt>Sonarr</dt><dd>{sonarr.baseUrl} · {sonarr.options?.qualityProfiles.find(p => p.id === sonarr.profileId)?.name} · {sonarr.rootFolder}</dd>
-        <dt>Monitor series on add</dt><dd>{monitorOnAdd ? 'On' : 'Off'}</dd>
-        <dt>Radarr</dt><dd>{enableRadarr ? `${radarr.baseUrl} · ${radarr.options?.qualityProfiles.find(p => p.id === radarr.profileId)?.name} · ${radarr.rootFolder}` : 'Skipped'}</dd>
-        <dt>Sync</dt><dd>Every {interval} h · Dry run {dryRun ? 'on' : 'off'}</dd>
-      </dl>
-      <p>Saving changes to service connections restarts the application.</p>
+      <div class="summary">
+        <div class="summary-group">
+          <h2>AniList</h2>
+          <dl>
+            <dt>Username</dt><dd>{profile?.username ?? username.trim()}</dd>
+            <dt>Series lists</dt><dd>{describeListStatuses(seriesStatuses)}</dd>
+            {#if enableRadarr}<dt>Movie lists</dt><dd>{describeListStatuses(movieStatuses)}</dd>{/if}
+          </dl>
+        </div>
+        {#each [
+          { name: 'Sonarr', draft: sonarr, monitor: sonarrMonitorOnAdd, search: sonarrSearchOnAdd, enabled: true },
+          { name: 'Radarr', draft: radarr, monitor: radarrMonitorOnAdd, search: radarrSearchOnAdd, enabled: enableRadarr },
+        ] as service}
+          <div class="summary-group">
+            <h2>{service.name}</h2>
+            {#if service.enabled}
+              <dl>
+                <dt>Server URL</dt><dd>{service.draft.baseUrl.trim()}</dd>
+                <dt>Quality profile</dt><dd>{service.draft.options?.qualityProfiles.find(p => p.id === service.draft.profileId)?.name}</dd>
+                <dt>Root folder</dt><dd>{service.draft.rootFolder}</dd>
+                <dt>Monitor on add</dt><dd>{service.monitor ? 'On' : 'Off'}</dd>
+                <dt>Search on add</dt><dd>{service.search ? 'On' : 'Off'}</dd>
+              </dl>
+            {:else}
+              <p>Skipped</p>
+            {/if}
+          </div>
+        {/each}
+        <div class="summary-group">
+          <h2>Sync preferences</h2>
+          <dl>
+            <dt>Interval</dt><dd>Every {interval} {interval === 1 ? 'hour' : 'hours'}</dd>
+            <dt>Dry run</dt><dd>{dryRun ? 'On' : 'Off'}</dd>
+          </dl>
+        </div>
+      </div>
+      {#if config.restartRequired}
+        <p>Previously saved settings require a restart. Finishing setup will restart the application.</p>
+      {/if}
     {/if}
 
     <footer>
@@ -203,7 +257,11 @@
   .checkbox { display: flex; align-items: center; gap: 8px; margin: 16px 0; }
   .profile { display: flex; align-items: center; gap: 10px; }
   .profile img { border-radius: 50%; object-fit: cover; }
-  dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; }
+  .interval-input { max-width: 12rem; }
+  .summary-group { padding: 14px 0; border-top: 1px solid var(--defaultBorderColor); }
+  .summary-group h2 { margin: 0 0 8px; font-size: 1.1rem; color: var(--white); }
+  .summary-group p { margin: 0; }
+  dl { display: grid; grid-template-columns: minmax(0, 8rem) minmax(0, 1fr); gap: 6px 16px; margin: 0; }
   dt { font-weight: 600; }
   dd { margin: 0; overflow-wrap: anywhere; }
   footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 24px; }

@@ -117,6 +117,7 @@ export interface AppConfig {
   logSizeLimit?: number;
   instanceName: string;
   wizardCompleted: boolean;
+  restartRequired?: boolean;
   updateBranch?: string;
   updateAutomatically?: boolean;
   updateMechanism?: string;
@@ -124,6 +125,8 @@ export interface AppConfig {
   backupInterval?: number;
   backupRetention?: number;
   aniListUsername: string;
+  aniListTvStatus: string;
+  aniListMovieStatus: string;
   syncIntervalHours: number;
   dateToleranceDays: number;
   confidenceThreshold: number;
@@ -139,10 +142,13 @@ export interface AppConfig {
   sonarrQualityProfileId: number;
   sonarrRootFolderPath: string;
   sonarrMonitorOnAdd: boolean;
+  sonarrSearchOnAdd: boolean;
   radarrUrl: string;
   radarrApiKey: string;
   radarrQualityProfileId: number;
   radarrRootFolderPath: string;
+  radarrMonitorOnAdd: boolean;
+  radarrSearchOnAdd: boolean;
   tagName: string;
 }
 

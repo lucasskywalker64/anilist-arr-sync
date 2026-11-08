@@ -24,6 +24,7 @@ func TestParseXML_DocumentedDefaults(t *testing.T) {
 	check("BindAddress", cfg.BindAddress, "0.0.0.0")
 	check("LogLevel", cfg.LogLevel, "Info")
 	check("SyncIntervalHours", cfg.SyncIntervalHours, 4)
+	check("RadarrMonitorOnAdd", cfg.RadarrMonitorOnAdd, true)
 	check("ConfidenceThreshold", cfg.ConfidenceThreshold, 0.60)
 }
 

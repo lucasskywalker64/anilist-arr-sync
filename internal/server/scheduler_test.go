@@ -165,6 +165,7 @@ func TestConfigEndpointResetsSchedulerIntervals(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		cfg := config.NewDefault()
 		cfg.APIKey = "test-key"
+		cfg.SonarrURL, cfg.SonarrAPIKey = "http://sonarr.example", "key"
 		db := newTestStorage(t)
 		var usernames []string
 		client := anilist.NewClient("", anilist.WithHTTPClient(&http.Client{Transport: syncTransportFunc(

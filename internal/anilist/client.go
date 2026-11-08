@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,19 @@ const (
 	// StatusRepeating represents media being rewatched.
 	StatusRepeating MediaListStatus = "REPEATING"
 )
+
+// ParseListStatuses reads comma-separated status names, defaulting an empty value to Watching.
+func ParseListStatuses(value string) []MediaListStatus {
+	if strings.TrimSpace(value) == "" {
+		return []MediaListStatus{StatusCurrent}
+	}
+	var statuses []MediaListStatus
+	for status := range strings.SplitSeq(value, ",") {
+		statuses = append(statuses, MediaListStatus(strings.ToUpper(strings.TrimSpace(status))))
+	}
+	slices.Sort(statuses)
+	return slices.Compact(statuses)
+}
 
 // MediaStatus represents the release status of a media item on AniList.
 type MediaStatus string

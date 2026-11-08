@@ -57,8 +57,9 @@ type Server struct {
 	bindOverride *string
 	handoff      *RestartHandoff
 
-	connectionTestClient *http.Client
-	prepareDryRun        func(context.Context) error
+	outboundHTTPClient    *http.Client
+	prepareSync           func(context.Context) error
+	prepareBackupSettings func(current, next config.Config) (func(), error)
 
 	httpServer  *http.Server
 	httpsServer *http.Server
@@ -87,6 +88,11 @@ func (s *Server) SetScheduler(scheduled *scheduler.Scheduler) {
 	if scheduled != nil {
 		scheduled.UpdateConfig(*s.cfg)
 	}
+}
+
+// SetBackupSettingsPreparation installs backup validation and activation before serving requests.
+func (s *Server) SetBackupSettingsPreparation(prepare func(current, next config.Config) (func(), error)) {
+	s.prepareBackupSettings = prepare
 }
 
 // NewServer creates a new Server instance.

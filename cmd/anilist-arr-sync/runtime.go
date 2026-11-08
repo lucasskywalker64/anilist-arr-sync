@@ -76,7 +76,7 @@ func bootstrap(ctx context.Context, o options, paths runtimePaths) (*appRuntime,
 		client.CloseIdleConnections()
 		return nil, errors.Join(err, db.Close())
 	}
-	sonarrClient, radarrClient, err := serviceClients(cfg, client)
+	sonarrClient, radarrClient, err := servarr.NewClients(cfg.SonarrURL, cfg.SonarrAPIKey, cfg.RadarrURL, cfg.RadarrAPIKey, servarr.WithHTTPClient(client))
 	if err != nil {
 		return fail(err)
 	}
@@ -84,52 +84,30 @@ func bootstrap(ctx context.Context, o options, paths runtimePaths) (*appRuntime,
 	orch := orchestrator.New(db, cfg, al, sonarrClient, radarrClient)
 	backups := backup.NewEngine(db, paths.config, backupDir, backup.WithRetention(cfg.BackupRetention))
 	srv := server.NewServer(cfg, paths.config, db, orch, backups)
-	srv.SetConnectionTestClient(client)
+	srv.SetBackupSettingsPreparation(func(current, next config.Config) (func(), error) {
+		dir := dataPath(paths.data, next.BackupFolder)
+		if next.BackupFolder != current.BackupFolder {
+			if err := writableDirectory(dir); err != nil {
+				return nil, err
+			}
+		}
+		return func() { backups.UpdateSettings(dir, next.BackupRetention) }, nil
+	})
+	srv.SetOutboundHTTPClient(client)
 	srv.SetListenerOverrides(portOverride, bindOverride)
 	srv.SetVersion(version)
 	srv.SetNotifier(notification.NewDispatcher(notification.NewStore(db), client))
-	scheduledOrch := orch
-	if !syncConfigured(cfg) {
-		log.Print("scheduled sync idle: configure AniList and a Servarr URL/API key, then restart")
-		scheduledOrch = nil
+	if !cfg.SyncConfigured() {
+		log.Print("scheduled sync idle: configure AniList and a Servarr URL/API key")
 	}
-	scheduled := scheduler.New(*cfg, scheduledOrch, backups, nil)
+	scheduled := scheduler.New(*cfg, orch, backups, nil)
 	srv.SetScheduler(scheduled)
 	ctx, cancel := context.WithCancel(ctx)
 	r := &appRuntime{cfg: cfg, listenerCfg: listenerCfg, db: db, server: srv, orch: orch, scheduler: scheduled,
 		loader: fribb.NewLoader(db, fribb.WithHTTPClient(client)), client: client, ctx: ctx, cancel: cancel}
-	scheduled.SetSyncPreparation(func(ctx context.Context) error {
-		if err := r.ensureSyncMappings(ctx); err != nil {
-			return err
-		}
-		return srv.CheckSyncConnections()
-	})
-	srv.SetDryRunPreparation(r.ensureSyncMappings)
+	scheduled.SetSyncPreparation(r.ensureSyncMappings)
+	srv.SetSyncPreparation(r.ensureSyncMappings)
 	return r, nil
-}
-
-func serviceClients(cfg *config.Config, client *http.Client) (*servarr.SonarrClient, *servarr.RadarrClient, error) {
-	var sonarr *servarr.SonarrClient
-	var radarr *servarr.RadarrClient
-	var err error
-	if cfg.SonarrURL != "" {
-		sonarr, err = servarr.NewSonarrClient(cfg.SonarrURL, cfg.SonarrAPIKey, servarr.WithHTTPClient(client))
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	if cfg.RadarrURL != "" {
-		radarr, err = servarr.NewRadarrClient(cfg.RadarrURL, cfg.RadarrAPIKey, servarr.WithHTTPClient(client))
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	return sonarr, radarr, nil
-}
-
-func syncConfigured(cfg *config.Config) bool {
-	return strings.TrimSpace(cfg.AniListUsername) != "" &&
-		((cfg.SonarrURL != "" && cfg.SonarrAPIKey != "") || (cfg.RadarrURL != "" && cfg.RadarrAPIKey != ""))
 }
 
 func (r *appRuntime) refreshMappings(ctx context.Context) error {
@@ -164,7 +142,7 @@ func (r *appRuntime) ensureSyncMappings(ctx context.Context) error {
 }
 
 func (r *appRuntime) syncOnce(ctx context.Context, out io.Writer) error {
-	if !syncConfigured(r.cfg) {
+	if !r.cfg.SyncConfigured() {
 		return errors.New("sync requires an AniList username and a Servarr URL/API key")
 	}
 	if err := r.refreshMappings(ctx); err != nil {

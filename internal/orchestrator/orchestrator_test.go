@@ -305,6 +305,47 @@ func TestSync_DivertsUnmappedEntriesToReviewQueueAndRecordsMetrics(t *testing.T)
 	}
 }
 
+func TestSync_UsesSelectedAniListStatusesByMediaType(t *testing.T) {
+	db := setupTestDB(t)
+	var entries []anilist.MediaListEntry
+	for _, format := range []string{"TV", "MOVIE"} {
+		for _, status := range []anilist.MediaListStatus{anilist.StatusCurrent, anilist.StatusPlanning, anilist.StatusRepeating} {
+			id := len(entries) + 1
+			entries = append(entries, anilist.MediaListEntry{ID: id, Status: status, Media: anilist.Media{ID: id, Format: format}})
+		}
+	}
+	ana := setupMockAniList(t, entries)
+	cfg := config.NewDefault()
+	cfg.AniListUsername = "viewer"
+	cfg.AniListTvStatus = "CURRENT, planning"
+	cfg.AniListMovieStatus = "REPEATING"
+	orch := orchestrator.New(db, cfg, anilist.NewClient(ana.URL), nil, nil)
+	if _, err := orch.Sync(t.Context(), orchestrator.TriggerManualWeb); err != nil {
+		t.Fatal(err)
+	}
+	var ids []int
+	if err := db.Read(t.Context(), func(ctx context.Context, q storage.Querier) error {
+		rows, err := q.QueryContext(ctx, "SELECT anilist_id FROM review_queue ORDER BY anilist_id")
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var id int
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(ids, []int{1, 2, 6}) {
+		t.Fatalf("expected Watching and Planning series and Rewatching movies, got AniList IDs %v", ids)
+	}
+}
+
 func TestSync_DryRunStagesActionsAndAppliesOnConfirmation(t *testing.T) {
 	db := setupTestDB(t)
 
@@ -1081,7 +1122,7 @@ func TestSync_ActiveMode_UnmonitorDroppedOnlyWhenEnabledAndTagged(t *testing.T) 
 	}
 }
 
-func TestSync_ActiveModeRadarr_AdditiveAdditionAndSearchDispatch(t *testing.T) {
+func TestSync_RadarrMonitorOnAdd(t *testing.T) {
 	db := setupTestDB(t)
 
 	err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
@@ -1109,7 +1150,7 @@ func TestSync_ActiveModeRadarr_AdditiveAdditionAndSearchDispatch(t *testing.T) {
 
 	alSrv := setupMockAniList(t, entries)
 
-	addedMovie := false
+	addedMovies := make(chan servarr.AddMovieRequest, 3)
 
 	radarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1119,15 +1160,11 @@ func TestSync_ActiveModeRadarr_AdditiveAdditionAndSearchDispatch(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
 			_ = json.NewEncoder(w).Encode([]servarr.Movie{})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/movie":
-			addedMovie = true
 			var body servarr.AddMovieRequest
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			if len(body.Tags) == 0 || body.Tags[0] != 42 {
-				t.Errorf("expected tag 42, got %v", body.Tags)
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode movie request: %v", err)
 			}
-			if body.AddOptions == nil || !body.AddOptions.SearchForMovie {
-				t.Errorf("expected SearchForMovie in AddOptions to be true")
-			}
+			addedMovies <- body
 			_ = json.NewEncoder(w).Encode(servarr.Movie{
 				ID:     777,
 				TMDBID: 55555,
@@ -1149,18 +1186,62 @@ func TestSync_ActiveModeRadarr_AdditiveAdditionAndSearchDispatch(t *testing.T) {
 	radarrClient, _ := servarr.NewRadarrClient(radarrSrv.URL, "key")
 
 	orc := orchestrator.New(db, cfg, alClient, sonarrClient, radarrClient)
+	assertMovieAdded := func(monitored bool) {
+		t.Helper()
+		select {
+		case body := <-addedMovies:
+			if len(body.Tags) == 0 || body.Tags[0] != 42 || body.Monitored != monitored ||
+				body.AddOptions == nil || body.AddOptions.SearchForMovie != monitored {
+				t.Fatalf("unexpected Radarr add request for monitored=%v: %+v, options=%+v", monitored, body, body.AddOptions)
+			}
+		default:
+			t.Fatal("expected Radarr AddMovie to be called")
+		}
+		var status string
+		err := db.Read(t.Context(), func(ctx context.Context, q storage.Querier) error {
+			return q.QueryRowContext(ctx, "SELECT monitored_status FROM synced_media WHERE anilist_id = 901").Scan(&status)
+		})
+		wantStatus := "UNMONITORED"
+		if monitored {
+			wantStatus = "MONITORED"
+		}
+		if err != nil || status != wantStatus {
+			t.Fatalf("unexpected library status for monitored=%v: %q, err=%v", monitored, status, err)
+		}
+	}
 
 	report, err := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
 	if err != nil {
 		t.Fatalf("Sync failed: %v", err)
 	}
 
-	if !addedMovie {
-		t.Fatal("expected Radarr AddMovie to be called")
-	}
+	assertMovieAdded(true)
 	if report.AddedRadarr != 1 {
 		t.Fatalf("expected AddedRadarr=1, got %d", report.AddedRadarr)
 	}
+
+	cfg.RadarrMonitorOnAdd = false
+	orc.UpdateConfig(*cfg)
+	if _, err := orc.Sync(t.Context(), orchestrator.TriggerManualWeb); err != nil {
+		t.Fatal(err)
+	}
+	assertMovieAdded(false)
+
+	cfg.FirstRunDryRun = true
+	orc.UpdateConfig(*cfg)
+	if _, err := orc.Sync(t.Context(), orchestrator.TriggerManualWeb); err != nil {
+		t.Fatal(err)
+	}
+	actions, err := orc.GetStagedActions(t.Context(), orchestrator.StagedStatusPending)
+	if err != nil || len(actions) != 1 || len(addedMovies) != 0 {
+		t.Fatalf("dry run did not stage exactly one movie without adding it: %v, err=%v", actions, err)
+	}
+	cfg.RadarrMonitorOnAdd = true
+	orc.UpdateConfig(*cfg)
+	if err := orc.ApplyStagedAction(t.Context(), actions[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	assertMovieAdded(false)
 }
 
 func TestGetSyncHistory(t *testing.T) {
@@ -1714,6 +1795,7 @@ func TestSync_SyncedMedia_StatusDropped_UnmonitorDroppedFalse(t *testing.T) {
 
 	cfg := config.NewDefault()
 	cfg.AniListUsername = "testuser"
+	cfg.AniListMovieStatus = "DROPPED"
 	cfg.FirstRunDryRun = false
 	cfg.UnmonitorDropped = false // explicitly false
 
