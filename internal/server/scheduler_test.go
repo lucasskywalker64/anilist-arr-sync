@@ -58,6 +58,13 @@ func TestSyncEndpointsRecognizeOtherTriggers(t *testing.T) {
 		if rec.Code != http.StatusConflict {
 			t.Errorf("manual request during CLI sync: %d, %s", rec.Code, rec.Body.String())
 		}
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/staged/apply", strings.NewReader(`{"ids":[1,2]}`))
+		req.Header.Set("X-Api-Key", cfg.APIKey)
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusConflict {
+			t.Errorf("staged apply during CLI sync: %d, %s", rec.Code, rec.Body.String())
+		}
 		req = httptest.NewRequest(http.MethodGet, "/api/v1/sync/status", nil)
 		req.Header.Set("X-Api-Key", cfg.APIKey)
 		rec = httptest.NewRecorder()

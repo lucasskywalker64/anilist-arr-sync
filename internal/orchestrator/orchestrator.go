@@ -78,6 +78,7 @@ type Notifier interface {
 // Orchestrator coordinates the end-to-end synchronization workflow.
 type Orchestrator struct {
 	stateMu  sync.RWMutex
+	workMu   sync.Mutex
 	running  atomic.Bool
 	db       *storage.DB
 	cfg      *config.Config
@@ -88,8 +89,8 @@ type Orchestrator struct {
 	notifier Notifier
 }
 
-// ErrSyncInProgress indicates another trigger already owns synchronization.
-var ErrSyncInProgress = errors.New("sync is already in progress")
+// ErrSyncInProgress indicates that a sync or staged apply already owns Servarr work.
+var ErrSyncInProgress = errors.New("a sync or staged apply is already in progress")
 
 // SetNotifier sets a notification dispatcher on the Orchestrator.
 func (o *Orchestrator) SetNotifier(n Notifier) {
@@ -142,9 +143,10 @@ func New(
 
 // Sync executes the core synchronization loop following the four-step sequence.
 func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncReport, error) {
-	if !o.running.CompareAndSwap(false, true) {
+	if !o.workMu.TryLock() {
 		return nil, ErrSyncInProgress
 	}
+	o.running.Store(true)
 	return o.runSync(ctx, trigger, false)
 }
 
@@ -166,9 +168,10 @@ func (o *Orchestrator) StartDryRun(ctx context.Context, trigger TriggerType) (<-
 }
 
 func (o *Orchestrator) startSync(ctx context.Context, trigger TriggerType, dryRun bool) (<-chan SyncResult, error) {
-	if !o.running.CompareAndSwap(false, true) {
+	if !o.workMu.TryLock() {
 		return nil, ErrSyncInProgress
 	}
+	o.running.Store(true)
 	result := make(chan SyncResult, 1)
 	go func() {
 		defer close(result)
@@ -184,6 +187,7 @@ func (o *Orchestrator) IsSyncing() bool {
 }
 
 func (o *Orchestrator) runSync(ctx context.Context, trigger TriggerType, dryRun bool) (*SyncReport, error) {
+	defer o.workMu.Unlock()
 	defer o.running.Store(false)
 	run := o.snapshot()
 	if dryRun {

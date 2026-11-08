@@ -106,7 +106,7 @@ func (l *Loader) Sync(ctx context.Context) (*Result, error) {
 		return nil, fmt.Errorf("fribb: failed to create request: %w", err)
 	}
 
-	if existingMeta != nil && existingMeta.ETag != "" {
+	if existingMeta != nil && existingMeta.EntryCount > 0 && existingMeta.ETag != "" {
 		req.Header.Set("If-None-Match", existingMeta.ETag)
 	}
 
@@ -117,6 +117,9 @@ func (l *Loader) Sync(ctx context.Context) (*Result, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotModified {
+		if existingMeta == nil || existingMeta.EntryCount == 0 {
+			return nil, errors.New("fribb: received HTTP 304 without cached mappings")
+		}
 		err = l.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 			_, err := tx.ExecContext(ctx, `UPDATE fribb_meta SET last_checked_at = CURRENT_TIMESTAMP WHERE key = ?;`, l.metaKey)
 			return err
@@ -125,16 +128,10 @@ func (l *Loader) Sync(ctx context.Context) (*Result, error) {
 			return nil, fmt.Errorf("fribb: failed to update last_checked_at on 304: %w", err)
 		}
 
-		entryCount := 0
-		etag := ""
-		if existingMeta != nil {
-			entryCount = existingMeta.EntryCount
-			etag = existingMeta.ETag
-		}
 		return &Result{
 			NotModified: true,
-			ETag:        etag,
-			EntryCount:  entryCount,
+			ETag:        existingMeta.ETag,
+			EntryCount:  existingMeta.EntryCount,
 		}, nil
 	}
 
@@ -153,6 +150,9 @@ func (l *Loader) Sync(ctx context.Context) (*Result, error) {
 	if err != nil {
 		_ = l.clearStaging(ctx)
 		return nil, err
+	}
+	if count == 0 {
+		return nil, errors.New("fribb: mapping download contained no entries")
 	}
 
 	if err := l.commitStagedDataset(ctx, etag, lastModified, count); err != nil {

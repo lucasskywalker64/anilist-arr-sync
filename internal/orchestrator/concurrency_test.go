@@ -2,9 +2,11 @@ package orchestrator_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/anilist"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/orchestrator"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
 )
 
 func TestSyncRejectsConcurrentTriggers(t *testing.T) {
@@ -65,5 +68,71 @@ func TestSyncRejectsConcurrentTriggers(t *testing.T) {
 				t.Fatal("cancelled run did not release the sync guard")
 			}
 		})
+	}
+}
+
+func TestApplyBatchReservesSyncUntilAllActionsFinish(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	db := setupTestDB(t)
+	if err := db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO staged_sync_actions (id, action_type, media_type, title, target_service, payload_json, status)
+			VALUES (1, 'ADD_MOVIE', 'MOVIE', 'First', 'RADARR', '{"tmdbId":11}', 'PENDING'),
+			       (2, 'ADD_MOVIE', 'MOVIE', 'Second', 'RADARR', '{"tmdbId":22}', 'PENDING');
+		`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}, 1), make(chan struct{}, 1)
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entered <- struct{}{}
+		select {
+		case <-release:
+			_, _ = w.Write([]byte(`{"id":1}`))
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(remote.Close)
+	radarr, err := servarr.NewRadarrClient(remote.URL, "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.NewDefault()
+	cfg.TagName = ""
+	o := orchestrator.New(db, cfg, nil, nil, radarr)
+	type applyResult struct {
+		ids []int
+		err error
+	}
+	done := make(chan applyResult, 1)
+	go func() {
+		applied, err := o.ApplyStagedActions(ctx, []int{1, 2})
+		done <- applyResult{ids: applied, err: err}
+	}()
+	for i := range 2 {
+		select {
+		case <-entered:
+		case result := <-done:
+			t.Fatalf("apply ended before action %d: %+v", i+1, result)
+		case <-ctx.Done():
+			t.Fatalf("apply never reached action %d", i+1)
+		}
+		if o.IsSyncing() {
+			t.Error("staged apply was reported as a sync")
+		}
+		cancelled, stop := context.WithCancel(ctx)
+		stop()
+		if _, err := o.StartSync(cancelled, orchestrator.TriggerScheduled); !errors.Is(err, orchestrator.ErrSyncInProgress) {
+			t.Errorf("scheduled sync during action %d: %v", i+1, err)
+		}
+		if ids, err := o.ApplyStagedActions(cancelled, []int{1, 2}); !errors.Is(err, orchestrator.ErrSyncInProgress) || len(ids) != 0 {
+			t.Errorf("concurrent batch during action %d: applied=%v err=%v", i+1, ids, err)
+		}
+		release <- struct{}{}
+	}
+	if result := <-done; result.err != nil || !slices.Equal(result.ids, []int{1, 2}) {
+		t.Fatalf("expected both IDs applied in order: %+v", result)
 	}
 }

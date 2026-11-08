@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -155,6 +156,50 @@ func newCleanupTest(t *testing.T) (*Orchestrator, *cleanupLibrary) {
 
 func cleanupEntry(status anilist.MediaListStatus) anilist.MediaListEntry {
 	return anilist.MediaListEntry{Status: status, Progress: 1, Media: anilist.Media{ID: 100, Format: "TV", Title: anilist.MediaTitle{Romaji: "Anime"}}}
+}
+
+func TestApplyStagedActionRequiresOriginalEndpoint(t *testing.T) {
+	o, library := newCleanupTest(t)
+	ctx := t.Context()
+	stage := func() {
+		t.Helper()
+		payload := UnmonitorMoviePayload{MovieID: 2, TMDBID: 20}
+		if err := o.stageAction(ctx, ActionUnmonitorMovie, "MOVIE", "Movie", "RADARR", payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stage()
+	original := o.radarr.BaseURL()
+	replacement, err := servarr.NewRadarrClient(original+"/different-library", "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.UpdateServarrConfig(*o.cfg, o.sonarr, replacement)
+	stage()
+	actions, err := o.GetStagedActions(ctx, StagedStatusPending)
+	if err != nil || len(actions) != 2 {
+		t.Fatalf("expected independent pending actions for both endpoints: %v, %v", actions, err)
+	}
+	if err := o.ApplyStagedAction(ctx, actions[0].ID); !errors.Is(err, ErrStagedEndpointChanged) || len(library.calls) != 0 {
+		t.Fatalf("apply with a different endpoint: calls=%v err=%v", library.calls, err)
+	}
+	if err := o.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "UPDATE staged_sync_actions SET target_endpoint = '' WHERE id = ?", actions[1].ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.ApplyStagedAction(ctx, actions[1].ID); !errors.Is(err, ErrStagedEndpointChanged) || len(library.calls) != 0 {
+		t.Fatalf("apply legacy action without an endpoint: calls=%v err=%v", library.calls, err)
+	}
+	rotated, err := servarr.NewRadarrClient(original+"/", "rotated-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.UpdateServarrConfig(*o.cfg, o.sonarr, rotated)
+	if err := o.ApplyStagedAction(ctx, actions[0].ID); err != nil || library.movie.Monitored {
+		t.Fatalf("apply after key rotation: monitored=%v err=%v", library.movie.Monitored, err)
+	}
 }
 
 func TestCleanup_UnresolvedCour(t *testing.T) {

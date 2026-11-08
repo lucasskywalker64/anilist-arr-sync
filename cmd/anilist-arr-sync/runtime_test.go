@@ -55,7 +55,7 @@ func TestRuntimeScheduledSyncWaitsForMappings(t *testing.T) {
 				syncs.Add(1)
 				body = `{"data":{"MediaListCollection":{"lists":[],"hasNextChunk":false}}}`
 			} else if !available.Load() {
-				return nil, errors.New("mapping source unavailable")
+				body = `[]`
 			}
 			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 		})
@@ -310,7 +310,7 @@ func TestOneShotSyncSummaryAndErrors(t *testing.T) {
 	fixture := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == "GET" {
-			_, _ = io.WriteString(w, `[]`)
+			_, _ = io.WriteString(w, `[{"anilist_id":1,"tvdb_id":2,"type":"TV"}]`)
 			return
 		}
 		if fail.Load() {

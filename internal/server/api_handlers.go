@@ -982,14 +982,15 @@ func (s *Server) handleApplyStaged(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	applied := []int{}
-	for _, id := range req.IDs {
-		if err := s.orch.ApplyStagedAction(r.Context(), id); err != nil {
-			log.Printf("apply staged action %d failed: %v", id, err)
-			s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("apply staged action %d failed", id))
-			return
+	applied, err := s.orch.ApplyStagedActions(r.Context(), req.IDs)
+	if err != nil {
+		if errors.Is(err, orchestrator.ErrSyncInProgress) || errors.Is(err, orchestrator.ErrStagedEndpointChanged) {
+			s.writeJSONError(w, http.StatusConflict, err.Error())
+		} else {
+			log.Printf("apply staged actions failed: %v", err)
+			s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("apply staged action %d failed", req.IDs[len(applied)]))
 		}
-		applied = append(applied, id)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
