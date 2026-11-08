@@ -63,6 +63,7 @@ type Server struct {
 
 	httpServer  *http.Server
 	httpsServer *http.Server
+	serving     sync.WaitGroup
 
 	boundBindAddress string
 	boundPort        int
@@ -362,20 +363,21 @@ func (s *Server) Start() error {
 		return fmt.Errorf("server: failed to bind HTTP listener on %s: %w", httpAddr, err)
 	}
 
-	go func() {
+	s.serving.Go(func() {
 		if serveErr := s.httpServer.Serve(httpListener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			select {
 			case s.errChan <- fmt.Errorf("http serve error: %w", serveErr):
 			default:
 			}
 		}
-	}()
+	})
 
 	if cfg.EnableSsl {
 		httpsAddr := net.JoinHostPort(cfg.BindAddress, fmt.Sprint(cfg.SslPort))
 		cert, certErr := tls.LoadX509KeyPair(cfg.SslCertPath, cfg.SslKeyPath)
 		if certErr != nil {
 			_ = s.httpServer.Close()
+			s.serving.Wait()
 			return fmt.Errorf("server: failed to load SSL certificates: %w", certErr)
 		}
 
@@ -396,17 +398,18 @@ func (s *Server) Start() error {
 		httpsListener, listenErr := tls.Listen("tcp", httpsAddr, tlsConfig)
 		if listenErr != nil {
 			_ = s.httpServer.Close()
+			s.serving.Wait()
 			return fmt.Errorf("server: failed to bind HTTPS listener on %s: %w", httpsAddr, listenErr)
 		}
 
-		go func() {
+		s.serving.Go(func() {
 			if serveErr := s.httpsServer.Serve(httpsListener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 				select {
 				case s.errChan <- fmt.Errorf("https serve error: %w", serveErr):
 				default:
 				}
 			}
-		}()
+		})
 	}
 
 	return nil
@@ -431,6 +434,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("https shutdown: %w", err))
 		}
 	}
+	// Serve closes its listener even if shutdown starts before Serve registers it.
+	s.serving.Wait()
 	done := make(chan struct{})
 	go func() { s.work.Wait(); close(done) }()
 	select {
