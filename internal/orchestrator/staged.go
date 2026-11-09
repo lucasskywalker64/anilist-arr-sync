@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -39,6 +40,21 @@ const (
 	// ActionDeleteEpisodeFile represents a planned deletion of episode file(s) for watched episodes in Sonarr.
 	ActionDeleteEpisodeFile StagedActionType = "DELETE_EPISODE_FILE"
 )
+
+func (t StagedActionType) usesLocalIDs() bool {
+	switch t {
+	case ActionMonitorSeason, ActionUnmonitorSeason, ActionUnmonitorMovie, ActionDeleteFile, ActionUnmonitorEpisode, ActionDeleteEpisodeFile:
+		return true
+	default:
+		return false
+	}
+}
+
+// ErrStagedEndpointChanged indicates that an action's original endpoint cannot be verified.
+var ErrStagedEndpointChanged = errors.New("staged action endpoint changed or is unknown. Reject it and run a new dry run")
+
+// ErrDuplicateStagedAction indicates that a batch repeats an action ID.
+var ErrDuplicateStagedAction = errors.New("duplicate staged action ID")
 
 // StagedActionStatus represents the execution lifecycle of a staged action.
 type StagedActionStatus string
@@ -117,8 +133,35 @@ type DeleteEpisodeFilePayload struct {
 	RequireUnmonitored *bool  `json:"requireUnmonitored,omitempty"`
 }
 
-// stageAction persists a planned Servarr action into staged_sync_actions.
-// It skips duplicate pending actions with identical type, target service, and payload.
+func (o *Orchestrator) servarrEndpoint(service string) string {
+	switch service {
+	case "SONARR":
+		if o.sonarr != nil {
+			return o.sonarr.BaseURL()
+		}
+	case "RADARR":
+		if o.radarr != nil {
+			return o.radarr.BaseURL()
+		}
+	}
+	return ""
+}
+
+func stagedEndpointKey(endpoint string) string {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint
+	}
+	// An IPv6 zone names an interface, so preserve its case.
+	host, zone, hasZone := strings.Cut(parsed.Host, "%")
+	parsed.Host = strings.ToLower(host)
+	if hasZone {
+		parsed.Host += "%" + zone
+	}
+	return parsed.String()
+}
+
+// stageAction persists a planned Servarr action and skips identical pending actions at the same endpoint.
 func (o *Orchestrator) stageAction(
 	ctx context.Context,
 	actionType StagedActionType,
@@ -131,26 +174,39 @@ func (o *Orchestrator) stageAction(
 	if err != nil {
 		return fmt.Errorf("marshal staged action payload: %w", err)
 	}
+	var endpoint string
+	if actionType.usesLocalIDs() {
+		endpoint = stagedEndpointKey(o.servarrEndpoint(targetService))
+	}
 
 	return o.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		var exists int
-		checkErr := tx.QueryRowContext(ctx, `
-			SELECT 1 FROM staged_sync_actions
-			WHERE action_type = ? AND target_service = ? AND payload_json = ? AND status = 'PENDING'
-			LIMIT 1;
-		`, string(actionType), targetService, string(payloadBytes)).Scan(&exists)
-		if checkErr == nil {
-			return nil
-		} else if !errors.Is(checkErr, sql.ErrNoRows) {
-			return checkErr
+		rows, err := tx.QueryContext(ctx, `
+			SELECT target_endpoint FROM staged_sync_actions
+			WHERE action_type = ? AND target_service = ? AND payload_json = ? AND status = 'PENDING';
+		`, string(actionType), targetService, string(payloadBytes))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var storedEndpoint string
+			if err := rows.Scan(&storedEndpoint); err != nil {
+				return err
+			}
+			if stagedEndpointKey(storedEndpoint) == endpoint {
+				return nil
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return err
 		}
 
 		_, execErr := tx.ExecContext(ctx, `
 			INSERT INTO staged_sync_actions (
-				action_type, media_type, title, target_service, payload_json, status
+				action_type, media_type, title, target_service, target_endpoint, payload_json, status
 			)
-			VALUES (?, ?, ?, ?, ?, 'PENDING');
-		`, string(actionType), mediaType, title, targetService, string(payloadBytes))
+			VALUES (?, ?, ?, ?, ?, ?, 'PENDING');
+		`, string(actionType), mediaType, title, targetService, endpoint, string(payloadBytes))
 		return execErr
 	})
 }
@@ -195,21 +251,49 @@ func (o *Orchestrator) GetStagedActions(ctx context.Context, status StagedAction
 
 // ApplyStagedAction executes a single pending staged action against Sonarr or Radarr.
 func (o *Orchestrator) ApplyStagedAction(ctx context.Context, id int) error {
-	return o.snapshot().applyStagedAction(ctx, id)
+	_, err := o.ApplyStagedActions(ctx, []int{id})
+	return err
+}
+
+// ApplyStagedActions executes a batch in order, returning any IDs applied before an error.
+func (o *Orchestrator) ApplyStagedActions(ctx context.Context, ids []int) ([]int, error) {
+	applied := make([]int, 0, len(ids))
+	if len(ids) == 0 {
+		return applied, nil
+	}
+	seen := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		if _, exists := seen[id]; exists {
+			return applied, fmt.Errorf("%w %d", ErrDuplicateStagedAction, id)
+		}
+		seen[id] = struct{}{}
+	}
+	if !o.workMu.TryLock() {
+		return applied, ErrSyncInProgress
+	}
+	defer o.workMu.Unlock()
+	run := o.snapshot()
+	for _, id := range ids {
+		if err := run.applyStagedAction(ctx, id); err != nil {
+			return applied, fmt.Errorf("apply staged action %d: %w", id, err)
+		}
+		applied = append(applied, id)
+	}
+	return applied, nil
 }
 
 func (o *Orchestrator) applyStagedAction(ctx context.Context, id int) error {
 	var action StagedAction
-	var executedAt sql.NullTime
+	var endpoint string
 	err := o.db.Read(ctx, func(ctx context.Context, q storage.Querier) error {
 		row := q.QueryRowContext(ctx, `
-			SELECT id, run_id, action_type, media_type, title, target_service, payload_json, status, executed_at, created_at
+			SELECT id, run_id, action_type, media_type, title, target_service, payload_json, status, target_endpoint, created_at
 			FROM staged_sync_actions
 			WHERE id = ? AND status = 'PENDING';
 		`, id)
 		return row.Scan(
 			&action.ID, &action.RunID, &action.ActionType, &action.MediaType, &action.Title,
-			&action.TargetService, &action.PayloadJSON, &action.Status, &executedAt, &action.CreatedAt,
+			&action.TargetService, &action.PayloadJSON, &action.Status, &endpoint, &action.CreatedAt,
 		)
 	})
 	if err != nil {
@@ -217,6 +301,9 @@ func (o *Orchestrator) applyStagedAction(ctx context.Context, id int) error {
 			return fmt.Errorf("staged action %d not found or not pending", id)
 		}
 		return fmt.Errorf("query staged action %d: %w", id, err)
+	}
+	if action.ActionType.usesLocalIDs() && (endpoint == "" || stagedEndpointKey(endpoint) != stagedEndpointKey(o.servarrEndpoint(action.TargetService))) {
+		return ErrStagedEndpointChanged
 	}
 
 	var syncUpdateFn func(ctx context.Context, tx *sql.Tx) error
@@ -239,12 +326,16 @@ func (o *Orchestrator) applyStagedAction(ctx context.Context, id int) error {
 		if addErr != nil {
 			return fmt.Errorf("execute add movie: %w", addErr)
 		}
+		monitoredStatus := "UNMONITORED"
+		if req.Monitored {
+			monitoredStatus = "MONITORED"
+		}
 		syncUpdateFn = func(ctx context.Context, tx *sql.Tx) error {
 			_, err := tx.ExecContext(ctx, `
 				UPDATE synced_media
-				SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
+				SET monitored_status = ?, updated_at = CURRENT_TIMESTAMP
 				WHERE tmdb_id = ? AND monitored_status != 'IGNORED';
-			`, req.TMDBID)
+			`, monitoredStatus, req.TMDBID)
 			return err
 		}
 
@@ -303,11 +394,15 @@ func (o *Orchestrator) applyStagedAction(ctx context.Context, id int) error {
 				`, req.TVDBID, targetSeasonStr, targetSeasonStr)
 				return err
 			}
+			monitoredStatus := "UNMONITORED"
+			if req.Monitored {
+				monitoredStatus = "MONITORED"
+			}
 			_, err := tx.ExecContext(ctx, `
 				UPDATE synced_media
-				SET monitored_status = 'MONITORED', updated_at = CURRENT_TIMESTAMP
+				SET monitored_status = ?, updated_at = CURRENT_TIMESTAMP
 				WHERE tvdb_id = ? AND monitored_status != 'IGNORED';
-			`, req.TVDBID)
+			`, monitoredStatus, req.TVDBID)
 			return err
 		}
 
@@ -614,22 +709,45 @@ func (o *Orchestrator) validateEpisodeDeletion(ctx context.Context, seriesID int
 
 // RejectStagedAction marks a pending staged action as rejected.
 func (o *Orchestrator) RejectStagedAction(ctx context.Context, id int) error {
-	return o.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		res, execErr := tx.ExecContext(ctx, `
+	_, err := o.RejectStagedActions(ctx, []int{id})
+	return err
+}
+
+// RejectStagedActions rejects a batch atomically while reserving Servarr work.
+func (o *Orchestrator) RejectStagedActions(ctx context.Context, ids []int) ([]int, error) {
+	if !o.workMu.TryLock() {
+		return nil, ErrSyncInProgress
+	}
+	defer o.workMu.Unlock()
+	err := o.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		for _, id := range ids {
+			if err := rejectStagedAction(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append([]int{}, ids...), nil
+}
+
+func rejectStagedAction(ctx context.Context, tx *sql.Tx, id int) error {
+	res, execErr := tx.ExecContext(ctx, `
 			UPDATE staged_sync_actions
 			SET status = 'REJECTED'
 			WHERE id = ? AND status = 'PENDING';
 		`, id)
-		if execErr != nil {
-			return execErr
-		}
-		rows, rowsErr := res.RowsAffected()
-		if rowsErr != nil {
-			return rowsErr
-		}
-		if rows == 0 {
-			return fmt.Errorf("staged action %d not found or not pending", id)
-		}
-		return nil
-	})
+	if execErr != nil {
+		return execErr
+	}
+	rows, rowsErr := res.RowsAffected()
+	if rowsErr != nil {
+		return rowsErr
+	}
+	if rows == 0 {
+		return fmt.Errorf("staged action %d not found or not pending", id)
+	}
+	return nil
 }

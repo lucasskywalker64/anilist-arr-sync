@@ -32,9 +32,23 @@ func setupTestDB(t *testing.T) *storage.DB {
 	return db
 }
 
-func setupMockAniList(t *testing.T, entries []anilist.MediaListEntry) *httptest.Server {
+func setupMockAniList(t *testing.T, entries []anilist.MediaListEntry, expectedStatuses ...anilist.MediaListStatus) *httptest.Server {
 	t.Helper()
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(expectedStatuses) > 0 {
+			var request struct {
+				Query     string
+				Variables struct{ StatusIn []anilist.MediaListStatus }
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Errorf("decode AniList request: %v", err)
+			} else if strings.Contains(request.Query, "title {") {
+				slices.Sort(request.Variables.StatusIn)
+				if !strings.Contains(request.Query, "status_in:") || !slices.Equal(request.Variables.StatusIn, expectedStatuses) {
+					t.Errorf("requested AniList statuses %v, want %v", request.Variables.StatusIn, expectedStatuses)
+				}
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		resp := map[string]any{
 			"data": map[string]any{
@@ -305,6 +319,47 @@ func TestSync_DivertsUnmappedEntriesToReviewQueueAndRecordsMetrics(t *testing.T)
 	}
 }
 
+func TestSync_UsesSelectedAniListStatusesByMediaType(t *testing.T) {
+	db := setupTestDB(t)
+	var entries []anilist.MediaListEntry
+	for _, format := range []string{"TV", "MOVIE"} {
+		for _, status := range []anilist.MediaListStatus{anilist.StatusCurrent, anilist.StatusPlanning, anilist.StatusRepeating} {
+			id := len(entries) + 1
+			entries = append(entries, anilist.MediaListEntry{ID: id, Status: status, Media: anilist.Media{ID: id, Format: format}})
+		}
+	}
+	ana := setupMockAniList(t, entries, anilist.StatusCurrent, anilist.StatusPlanning, anilist.StatusRepeating)
+	cfg := config.NewDefault()
+	cfg.AniListUsername = "viewer"
+	cfg.AniListTvStatus = "CURRENT, planning"
+	cfg.AniListMovieStatus = "REPEATING"
+	orch := orchestrator.New(db, cfg, anilist.NewClient(ana.URL), nil, nil)
+	if _, err := orch.Sync(t.Context(), orchestrator.TriggerManualWeb); err != nil {
+		t.Fatal(err)
+	}
+	var ids []int
+	if err := db.Read(t.Context(), func(ctx context.Context, q storage.Querier) error {
+		rows, err := q.QueryContext(ctx, "SELECT anilist_id FROM review_queue ORDER BY anilist_id")
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var id int
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(ids, []int{1, 2, 6}) {
+		t.Fatalf("expected Watching and Planning series and Rewatching movies, got AniList IDs %v", ids)
+	}
+}
+
 func TestSync_DryRunStagesActionsAndAppliesOnConfirmation(t *testing.T) {
 	db := setupTestDB(t)
 
@@ -508,17 +563,6 @@ func TestPurgeExpiredStagedActions(t *testing.T) {
 func TestApplyStagedAction_MonitorSeason_ParentSeriesError(t *testing.T) {
 	db := setupTestDB(t)
 
-	err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
-		_, writeErr := tx.ExecContext(ctx, `
-			INSERT INTO staged_sync_actions (id, action_type, media_type, title, target_service, payload_json, status, created_at)
-			VALUES (901, 'MONITOR_SEASON', 'SERIES', 'Test Series', 'SONARR', '{"seriesId":99,"tvdbId":111,"seasonNumber":1,"episodeIds":[1,2],"anilistId":801}', 'PENDING', datetime('now'));
-		`)
-		return writeErr
-	})
-	if err != nil {
-		t.Fatalf("insert staged action failed: %v", err)
-	}
-
 	sonarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v3/series/99" {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -527,14 +571,23 @@ func TestApplyStagedAction_MonitorSeason_ParentSeriesError(t *testing.T) {
 		http.NotFound(w, r)
 	}))
 	defer sonarrSrv.Close()
+	if err := db.Write(t.Context(), func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO staged_sync_actions (id, action_type, media_type, title, target_service, payload_json, status, target_endpoint)
+			VALUES (901, 'MONITOR_SEASON', 'SERIES', 'Test Series', 'SONARR', '{"seriesId":99,"tvdbId":111,"seasonNumber":1,"episodeIds":[1,2],"anilistId":801}', 'PENDING', ?);
+		`, sonarrSrv.URL)
+		return err
+	}); err != nil {
+		t.Fatalf("insert staged action failed: %v", err)
+	}
 
 	cfg := config.NewDefault()
 	sonarrClient, _ := servarr.NewSonarrClient(sonarrSrv.URL, "key")
 	orc := orchestrator.New(db, cfg, nil, sonarrClient, nil)
 
 	applyErr := orc.ApplyStagedAction(context.Background(), 901)
-	if applyErr == nil {
-		t.Fatalf("expected ApplyStagedAction to fail when parent series cannot be fetched, got nil")
+	if applyErr == nil || !strings.Contains(applyErr.Error(), "get series 99") {
+		t.Fatalf("expected ApplyStagedAction to fail when parent series cannot be fetched, got %v", applyErr)
 	}
 
 	staged, getErr := orc.GetStagedActions(context.Background(), orchestrator.StagedStatusPending)
@@ -548,21 +601,6 @@ func TestApplyStagedAction_MonitorSeason_ParentSeriesError(t *testing.T) {
 
 func TestApplyStagedAction_MonitorSeason_ScopedByAnilistID(t *testing.T) {
 	db := setupTestDB(t)
-
-	err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
-		_, writeErr := tx.ExecContext(ctx, `
-			INSERT INTO synced_media (anilist_id, media_type, format, title_romaji, anilist_status, target_service, tvdb_id, seasons, monitored_status)
-			VALUES (1001, 'SERIES', 'TV', 'Cour 1', 'CURRENT', 'SONARR', 8888, '1', 'UNMONITORED'),
-			       (1002, 'SERIES', 'TV', 'Cour 2', 'PLANNING', 'SONARR', 8888, '1', 'UNMONITORED');
-
-			INSERT INTO staged_sync_actions (id, action_type, media_type, title, target_service, payload_json, status, created_at)
-			VALUES (902, 'MONITOR_SEASON', 'SERIES', 'Cour 1', 'SONARR', '{"seriesId":88,"tvdbId":8888,"seasonNumber":1,"episodeIds":[1,2],"anilistId":1001}', 'PENDING', datetime('now'));
-		`)
-		return writeErr
-	})
-	if err != nil {
-		t.Fatalf("seed database failed: %v", err)
-	}
 
 	updatedSeriesMonitored := false
 	monitoredEpisodesCalled := false
@@ -584,6 +622,19 @@ func TestApplyStagedAction_MonitorSeason_ScopedByAnilistID(t *testing.T) {
 		}
 	}))
 	defer sonarrSrv.Close()
+	if err := db.Write(t.Context(), func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO synced_media (anilist_id, media_type, format, title_romaji, anilist_status, target_service, tvdb_id, seasons, monitored_status)
+			VALUES (1001, 'SERIES', 'TV', 'Cour 1', 'CURRENT', 'SONARR', 8888, '1', 'UNMONITORED'),
+			       (1002, 'SERIES', 'TV', 'Cour 2', 'PLANNING', 'SONARR', 8888, '1', 'UNMONITORED');
+
+			INSERT INTO staged_sync_actions (id, action_type, media_type, title, target_service, payload_json, status, target_endpoint)
+			VALUES (902, 'MONITOR_SEASON', 'SERIES', 'Cour 1', 'SONARR', '{"seriesId":88,"tvdbId":8888,"seasonNumber":1,"episodeIds":[1,2],"anilistId":1001}', 'PENDING', ?);
+		`, sonarrSrv.URL)
+		return err
+	}); err != nil {
+		t.Fatalf("seed database failed: %v", err)
+	}
 
 	cfg := config.NewDefault()
 	sonarrClient, _ := servarr.NewSonarrClient(sonarrSrv.URL, "key")
@@ -1081,7 +1132,7 @@ func TestSync_ActiveMode_UnmonitorDroppedOnlyWhenEnabledAndTagged(t *testing.T) 
 	}
 }
 
-func TestSync_ActiveModeRadarr_AdditiveAdditionAndSearchDispatch(t *testing.T) {
+func TestSync_RadarrMonitorOnAdd(t *testing.T) {
 	db := setupTestDB(t)
 
 	err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
@@ -1109,7 +1160,7 @@ func TestSync_ActiveModeRadarr_AdditiveAdditionAndSearchDispatch(t *testing.T) {
 
 	alSrv := setupMockAniList(t, entries)
 
-	addedMovie := false
+	addedMovies := make(chan servarr.AddMovieRequest, 3)
 
 	radarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1119,15 +1170,11 @@ func TestSync_ActiveModeRadarr_AdditiveAdditionAndSearchDispatch(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
 			_ = json.NewEncoder(w).Encode([]servarr.Movie{})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/movie":
-			addedMovie = true
 			var body servarr.AddMovieRequest
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			if len(body.Tags) == 0 || body.Tags[0] != 42 {
-				t.Errorf("expected tag 42, got %v", body.Tags)
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode movie request: %v", err)
 			}
-			if body.AddOptions == nil || !body.AddOptions.SearchForMovie {
-				t.Errorf("expected SearchForMovie in AddOptions to be true")
-			}
+			addedMovies <- body
 			_ = json.NewEncoder(w).Encode(servarr.Movie{
 				ID:     777,
 				TMDBID: 55555,
@@ -1149,18 +1196,62 @@ func TestSync_ActiveModeRadarr_AdditiveAdditionAndSearchDispatch(t *testing.T) {
 	radarrClient, _ := servarr.NewRadarrClient(radarrSrv.URL, "key")
 
 	orc := orchestrator.New(db, cfg, alClient, sonarrClient, radarrClient)
+	assertMovieAdded := func(monitored bool) {
+		t.Helper()
+		select {
+		case body := <-addedMovies:
+			if len(body.Tags) == 0 || body.Tags[0] != 42 || body.Monitored != monitored ||
+				body.AddOptions == nil || body.AddOptions.SearchForMovie != monitored {
+				t.Fatalf("unexpected Radarr add request for monitored=%v: %+v, options=%+v", monitored, body, body.AddOptions)
+			}
+		default:
+			t.Fatal("expected Radarr AddMovie to be called")
+		}
+		var status string
+		err := db.Read(t.Context(), func(ctx context.Context, q storage.Querier) error {
+			return q.QueryRowContext(ctx, "SELECT monitored_status FROM synced_media WHERE anilist_id = 901").Scan(&status)
+		})
+		wantStatus := "UNMONITORED"
+		if monitored {
+			wantStatus = "MONITORED"
+		}
+		if err != nil || status != wantStatus {
+			t.Fatalf("unexpected library status for monitored=%v: %q, err=%v", monitored, status, err)
+		}
+	}
 
 	report, err := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
 	if err != nil {
 		t.Fatalf("Sync failed: %v", err)
 	}
 
-	if !addedMovie {
-		t.Fatal("expected Radarr AddMovie to be called")
-	}
+	assertMovieAdded(true)
 	if report.AddedRadarr != 1 {
 		t.Fatalf("expected AddedRadarr=1, got %d", report.AddedRadarr)
 	}
+
+	cfg.RadarrMonitorOnAdd = false
+	orc.UpdateConfig(*cfg)
+	if _, err := orc.Sync(t.Context(), orchestrator.TriggerManualWeb); err != nil {
+		t.Fatal(err)
+	}
+	assertMovieAdded(false)
+
+	cfg.FirstRunDryRun = true
+	orc.UpdateConfig(*cfg)
+	if _, err := orc.Sync(t.Context(), orchestrator.TriggerManualWeb); err != nil {
+		t.Fatal(err)
+	}
+	actions, err := orc.GetStagedActions(t.Context(), orchestrator.StagedStatusPending)
+	if err != nil || len(actions) != 1 || len(addedMovies) != 0 {
+		t.Fatalf("dry run did not stage exactly one movie without adding it: %v, err=%v", actions, err)
+	}
+	cfg.RadarrMonitorOnAdd = true
+	orc.UpdateConfig(*cfg)
+	if err := orc.ApplyStagedAction(t.Context(), actions[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	assertMovieAdded(false)
 }
 
 func TestGetSyncHistory(t *testing.T) {
@@ -1714,6 +1805,7 @@ func TestSync_SyncedMedia_StatusDropped_UnmonitorDroppedFalse(t *testing.T) {
 
 	cfg := config.NewDefault()
 	cfg.AniListUsername = "testuser"
+	cfg.AniListMovieStatus = "DROPPED"
 	cfg.FirstRunDryRun = false
 	cfg.UnmonitorDropped = false // explicitly false
 
@@ -2676,6 +2768,8 @@ func TestSync_WatchedEpisodeUnmonitoringAndPruning(t *testing.T) {
 		})
 
 		var mutatingCalls []string
+		var appliedUnmonitor bool
+		var appliedDeleteFiles []int
 
 		alSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -2713,6 +2807,9 @@ func TestSync_WatchedEpisodeUnmonitoringAndPruning(t *testing.T) {
 
 		sonarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
+			if r.Method != http.MethodGet {
+				mutatingCalls = append(mutatingCalls, r.Method+" "+r.URL.Path)
+			}
 			switch {
 			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
 				_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 15, Label: "anilist-sync"}})
@@ -2729,16 +2826,35 @@ func TestSync_WatchedEpisodeUnmonitoringAndPruning(t *testing.T) {
 						},
 					},
 				})
+			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/series/2":
+				_ = json.NewEncoder(w).Encode(servarr.Series{ID: 2, TVDBID: 60002, Tags: []int{15}})
 			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
 				eps := []servarr.Episode{
-					{ID: 1, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 1, Monitored: true, HasFile: true, EpisodeFileID: 501},
-					{ID: 2, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 2, Monitored: true, HasFile: true, EpisodeFileID: 502},
-					{ID: 3, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 3, Monitored: true, HasFile: true, EpisodeFileID: 503},
+					{ID: 1, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 1, Monitored: !appliedUnmonitor, HasFile: true, EpisodeFileID: 501},
+					{ID: 2, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 2, Monitored: !appliedUnmonitor, HasFile: true, EpisodeFileID: 502},
+					{ID: 3, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 3, Monitored: !appliedUnmonitor, HasFile: true, EpisodeFileID: 503},
 					{ID: 4, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 4, Monitored: true, HasFile: false, EpisodeFileID: 0},
 				}
 				_ = json.NewEncoder(w).Encode(eps)
+			case r.Method == http.MethodPut && r.URL.Path == "/api/v3/episode/monitor":
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decode unmonitor request: %v", err)
+				}
+				if body["monitored"] != false {
+					t.Errorf("expected monitored=false, got %v", body["monitored"])
+				}
+				appliedUnmonitor = true
+				_ = json.NewEncoder(w).Encode([]any{})
+			case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v3/episodefile/"):
+				idStr := strings.TrimPrefix(r.URL.Path, "/api/v3/episodefile/")
+				var id int
+				for _, c := range idStr {
+					id = id*10 + int(c-'0')
+				}
+				appliedDeleteFiles = append(appliedDeleteFiles, id)
+				w.WriteHeader(http.StatusOK)
 			default:
-				mutatingCalls = append(mutatingCalls, r.Method+" "+r.URL.Path)
 				http.NotFound(w, r)
 			}
 		}))
@@ -2784,51 +2900,8 @@ func TestSync_WatchedEpisodeUnmonitoringAndPruning(t *testing.T) {
 			t.Errorf("expected ActionDeleteEpisodeFile staged, got actions %v", staged)
 		}
 
-		// Now test ApplyStagedAction executes them cleanly against Sonarr
-		var appliedUnmonitor bool
-		var appliedDeleteFiles []int
-		applySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			switch {
-			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
-				_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 15, Label: "anilist-sync"}})
-			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/series/2":
-				_ = json.NewEncoder(w).Encode(servarr.Series{ID: 2, TVDBID: 60002, Tags: []int{15}})
-			case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
-				_ = json.NewEncoder(w).Encode([]servarr.Episode{
-					{ID: 1, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 1, Monitored: !appliedUnmonitor, HasFile: true, EpisodeFileID: 501},
-					{ID: 2, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 2, Monitored: !appliedUnmonitor, HasFile: true, EpisodeFileID: 502},
-					{ID: 3, SeriesID: 2, SeasonNumber: 1, EpisodeNumber: 3, Monitored: !appliedUnmonitor, HasFile: true, EpisodeFileID: 503},
-				})
-			case r.Method == http.MethodPut && r.URL.Path == "/api/v3/episode/monitor":
-				var body map[string]any
-				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-					t.Errorf("decode unmonitor request: %v", err)
-				}
-				if body["monitored"] != false {
-					t.Errorf("expected monitored=false, got %v", body["monitored"])
-				}
-				appliedUnmonitor = true
-				_ = json.NewEncoder(w).Encode([]any{})
-			case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v3/episodefile/"):
-				idStr := strings.TrimPrefix(r.URL.Path, "/api/v3/episodefile/")
-				var id int
-				for _, c := range idStr {
-					id = id*10 + int(c-'0')
-				}
-				appliedDeleteFiles = append(appliedDeleteFiles, id)
-				w.WriteHeader(http.StatusOK)
-			default:
-				http.NotFound(w, r)
-			}
-		}))
-		defer applySrv.Close()
-
-		applySonarr, _ := servarr.NewSonarrClient(applySrv.URL, "key")
-		applyOrc := orchestrator.New(db, cfg, alClient, applySonarr, nil)
-
 		unmonAction := actionMap[orchestrator.ActionUnmonitorEpisode]
-		if err := applyOrc.ApplyStagedAction(context.Background(), unmonAction.ID); err != nil {
+		if err := orc.ApplyStagedAction(context.Background(), unmonAction.ID); err != nil {
 			t.Fatalf("ApplyStagedAction for unmonitor failed: %v", err)
 		}
 		if !appliedUnmonitor {
@@ -2836,7 +2909,7 @@ func TestSync_WatchedEpisodeUnmonitoringAndPruning(t *testing.T) {
 		}
 
 		delAction := actionMap[orchestrator.ActionDeleteEpisodeFile]
-		if err := applyOrc.ApplyStagedAction(context.Background(), delAction.ID); err != nil {
+		if err := orc.ApplyStagedAction(context.Background(), delAction.ID); err != nil {
 			t.Fatalf("ApplyStagedAction for delete file failed: %v", err)
 		}
 		slices.Sort(appliedDeleteFiles)

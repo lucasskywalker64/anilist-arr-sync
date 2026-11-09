@@ -2,6 +2,7 @@ package fribb
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -543,7 +544,7 @@ func TestLoader_Sync_DeletesRemovedUpstreamEntries(t *testing.T) {
 	}
 }
 
-func TestLoader_Sync_PartialFailureLeavesLiveTableIntact(t *testing.T) {
+func TestLoader_Sync_InvalidRefreshLeavesLiveTableIntact(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "test_partial.db")
 	db, err := storage.Open(dbPath)
@@ -554,6 +555,7 @@ func TestLoader_Sync_PartialFailureLeavesLiveTableIntact(t *testing.T) {
 
 	currentPayload := atomic.Pointer[string]{}
 	currentETag := atomic.Pointer[string]{}
+	var forceNotModified atomic.Bool
 
 	v1Payload := `[
 		{"anilist_id": 1, "tvdb_id": 101, "type": "TV"},
@@ -566,7 +568,7 @@ func TestLoader_Sync_PartialFailureLeavesLiveTableIntact(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		etag := *currentETag.Load()
-		if r.Header.Get("If-None-Match") == etag {
+		if forceNotModified.Load() || r.Header.Get("If-None-Match") == etag {
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
@@ -578,11 +580,22 @@ func TestLoader_Sync_PartialFailureLeavesLiveTableIntact(t *testing.T) {
 	defer server.Close()
 
 	loader := NewLoader(db, WithURL(server.URL), WithBatchSize(1))
+	forceNotModified.Store(true)
+	if _, err := loader.Sync(ctx); err == nil || !strings.Contains(err.Error(), "without cached mappings") {
+		t.Fatalf("HTTP 304 without a cache: %v", err)
+	}
+	forceNotModified.Store(false)
 
-	// Initial sync
-	_, err = loader.Sync(ctx)
-	if err != nil {
-		t.Fatalf("initial sync failed: %v", err)
+	// Old loaders could save an ETag even when no entries were published.
+	if err := db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "INSERT INTO fribb_meta (key, etag, entry_count) VALUES (?, ?, 0)", DefaultMetaKey, v1ETag)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := loader.Sync(ctx)
+	if err != nil || result.NotModified || result.EntryCount != 3 {
+		t.Fatalf("refresh must download mappings despite the legacy ETag: result=%+v err=%v", result, err)
 	}
 
 	// Update upstream to return corrupt/truncated payload midway through
@@ -598,6 +611,11 @@ func TestLoader_Sync_PartialFailureLeavesLiveTableIntact(t *testing.T) {
 	_, err = loader.Sync(ctx)
 	if err == nil {
 		t.Fatalf("expected sync to fail on corrupt payload, got nil")
+	}
+	emptyPayload := `[]`
+	currentPayload.Store(&emptyPayload)
+	if _, err := loader.Sync(ctx); err == nil || !strings.Contains(err.Error(), "no entries") {
+		t.Fatalf("empty mapping refresh: %v", err)
 	}
 
 	// Verify live table was not modified or corrupted: old entries 1, 2, 3 still intact
@@ -618,8 +636,8 @@ func TestLoader_Sync_PartialFailureLeavesLiveTableIntact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMeta failed: %v", err)
 	}
-	if meta.ETag != `"v1"` {
-		t.Fatalf("expected meta ETag to remain '\"v1\"', got %q", meta.ETag)
+	if meta.ETag != `"v1"` || meta.EntryCount != 3 {
+		t.Fatalf("cache metadata changed after invalid refreshes: %+v", meta)
 	}
 }
 

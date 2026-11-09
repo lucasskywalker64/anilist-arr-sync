@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -77,6 +78,7 @@ type Notifier interface {
 // Orchestrator coordinates the end-to-end synchronization workflow.
 type Orchestrator struct {
 	stateMu  sync.RWMutex
+	workMu   sync.Mutex
 	running  atomic.Bool
 	db       *storage.DB
 	cfg      *config.Config
@@ -87,8 +89,8 @@ type Orchestrator struct {
 	notifier Notifier
 }
 
-// ErrSyncInProgress indicates another trigger already owns synchronization.
-var ErrSyncInProgress = errors.New("sync is already in progress")
+// ErrSyncInProgress indicates that a sync or staged apply already owns Servarr work.
+var ErrSyncInProgress = errors.New("a sync or staged apply is already in progress")
 
 // SetNotifier sets a notification dispatcher on the Orchestrator.
 func (o *Orchestrator) SetNotifier(n Notifier) {
@@ -102,6 +104,13 @@ func (o *Orchestrator) UpdateConfig(cfg config.Config) {
 	o.stateMu.Lock()
 	defer o.stateMu.Unlock()
 	o.cfg = &cfg
+}
+
+// UpdateServarrConfig installs the configuration and its clients together for future work.
+func (o *Orchestrator) UpdateServarrConfig(cfg config.Config, sonarr *servarr.SonarrClient, radarr *servarr.RadarrClient) {
+	o.stateMu.Lock()
+	defer o.stateMu.Unlock()
+	o.cfg, o.sonarr, o.radarr = &cfg, sonarr, radarr
 }
 
 func (o *Orchestrator) snapshot() *Orchestrator {
@@ -134,10 +143,11 @@ func New(
 
 // Sync executes the core synchronization loop following the four-step sequence.
 func (o *Orchestrator) Sync(ctx context.Context, trigger TriggerType) (*SyncReport, error) {
-	if !o.running.CompareAndSwap(false, true) {
+	if !o.workMu.TryLock() {
 		return nil, ErrSyncInProgress
 	}
-	return o.runSync(ctx, trigger)
+	o.running.Store(true)
+	return o.runSync(ctx, trigger, false)
 }
 
 // SyncResult contains the outcome of an asynchronous synchronization run.
@@ -149,14 +159,24 @@ type SyncResult struct {
 // StartSync reserves execution before returning, then runs asynchronously.
 // The buffered result channel never blocks completion if the caller goes away.
 func (o *Orchestrator) StartSync(ctx context.Context, trigger TriggerType) (<-chan SyncResult, error) {
-	if !o.running.CompareAndSwap(false, true) {
+	return o.startSync(ctx, trigger, false)
+}
+
+// StartDryRun starts a sync that stages changes regardless of the saved preference.
+func (o *Orchestrator) StartDryRun(ctx context.Context, trigger TriggerType) (<-chan SyncResult, error) {
+	return o.startSync(ctx, trigger, true)
+}
+
+func (o *Orchestrator) startSync(ctx context.Context, trigger TriggerType, dryRun bool) (<-chan SyncResult, error) {
+	if !o.workMu.TryLock() {
 		return nil, ErrSyncInProgress
 	}
+	o.running.Store(true)
 	result := make(chan SyncResult, 1)
 	go func() {
-		report, err := o.runSync(ctx, trigger)
+		defer close(result)
+		report, err := o.runSync(ctx, trigger, dryRun)
 		result <- SyncResult{Report: report, Err: err}
-		close(result)
 	}()
 	return result, nil
 }
@@ -166,9 +186,16 @@ func (o *Orchestrator) IsSyncing() bool {
 	return o.running.Load()
 }
 
-func (o *Orchestrator) runSync(ctx context.Context, trigger TriggerType) (*SyncReport, error) {
+func (o *Orchestrator) runSync(ctx context.Context, trigger TriggerType, dryRun bool) (*SyncReport, error) {
+	defer o.workMu.Unlock()
 	defer o.running.Store(false)
-	return o.snapshot().sync(ctx, trigger)
+	run := o.snapshot()
+	if dryRun {
+		cfg := *run.cfg
+		cfg.FirstRunDryRun = true
+		run.cfg = &cfg
+	}
+	return run.sync(ctx, trigger)
 }
 
 func (o *Orchestrator) sync(ctx context.Context, trigger TriggerType) (*SyncReport, error) {
@@ -213,10 +240,11 @@ func (o *Orchestrator) sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 	}
 
 	// Fetch AniList watchlist
-	statuses := o.configuredStatuses()
+	seriesStatuses := anilist.ParseListStatuses(o.cfg.AniListTvStatus)
+	movieStatuses := anilist.ParseListStatuses(o.cfg.AniListMovieStatus)
 	filter := anilist.WatchlistFilter{
 		Username:          o.cfg.AniListUsername,
-		Statuses:          statuses,
+		Statuses:          o.configuredStatuses(seriesStatuses, movieStatuses),
 		IncludeUnreleased: o.cfg.AniListIncludeUnreleased,
 	}
 
@@ -239,8 +267,18 @@ func (o *Orchestrator) sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 		}
 
 		mediaType := "SERIES"
+		allowedStatuses := seriesStatuses
 		if decision == router.RouteRadarr {
 			mediaType = "MOVIE"
+			allowedStatuses = movieStatuses
+		}
+		status := entry.Status
+		if status == "" {
+			status = anilist.StatusCurrent
+		}
+		selected := slices.Contains(allowedStatuses, status)
+		if !selected && !o.isCleanupStatus(status) {
+			continue
 		}
 
 		// Step 2: Skip titles present in ignored_titles table before resolution
@@ -254,7 +292,7 @@ func (o *Orchestrator) sync(ctx context.Context, trigger TriggerType) (*SyncRepo
 		// Step 3 & 4: Check established database mappings and divert unmapped entries
 		var res *resolver.Result
 		var resErr error
-		if o.cleanupOnly(entry) {
+		if !selected || status == anilist.StatusDropped {
 			res, resErr = o.resolver.ResolveForCleanup(ctx, entry.Media)
 		} else {
 			res, resErr = o.resolver.Resolve(ctx, entry.Media)
@@ -485,11 +523,11 @@ func (o *Orchestrator) dispatchRadarr(ctx context.Context, entry anilist.MediaLi
 		Year:                year,
 		QualityProfileID:    o.cfg.RadarrQualityProfileID,
 		RootFolderPath:      o.cfg.RadarrRootFolderPath,
-		Monitored:           true,
+		Monitored:           o.cfg.RadarrMonitorOnAdd,
 		MinimumAvailability: "announced",
 		Tags:                tags,
 		AddOptions: &servarr.AddMovieOptions{
-			SearchForMovie: o.cfg.RadarrSearchOnAdd,
+			SearchForMovie: o.cfg.RadarrMonitorOnAdd && o.cfg.RadarrSearchOnAdd,
 		},
 	}
 
@@ -519,7 +557,11 @@ func (o *Orchestrator) dispatchRadarr(ctx context.Context, entry anilist.MediaLi
 			PosterURL:     entry.Media.CoverImageURL(),
 		})
 	}
-	return dispatchOutcome{monitoredStatus: "MONITORED", shouldUpsert: true}
+	monitoredStatus := "UNMONITORED"
+	if addReq.Monitored {
+		monitoredStatus = "MONITORED"
+	}
+	return dispatchOutcome{monitoredStatus: monitoredStatus, shouldUpsert: true}
 }
 
 func (o *Orchestrator) dispatchSonarr(ctx context.Context, entry anilist.MediaListEntry, res *resolver.Result, report *SyncReport) dispatchOutcome {
@@ -574,7 +616,8 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 			(o.cleanupOnly(entry) || o.cfg.UnmonitorCompleted || o.cfg.DeleteCompleted)) {
 			return dispatchOutcome{shouldUpsert: false}
 		}
-		pruneOnAdd := o.cfg.UnmonitorWatched && entry.Progress > 0 &&
+		monitorOnAdd := o.cfg.SonarrMonitorOnAdd
+		pruneOnAdd := monitorOnAdd && o.cfg.UnmonitorWatched && entry.Progress > 0 &&
 			(entry.Status == "" || entry.Status == anilist.StatusCurrent) && o.cfg.TagName != ""
 
 		var seasons []servarr.Season
@@ -587,17 +630,17 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 				}
 				seasons = append(seasons, servarr.Season{
 					SeasonNumber: s.SeasonNumber,
-					Monitored:    isTarget,
+					Monitored:    monitorOnAdd && isTarget,
 				})
 			}
 			if !targetFound {
 				seasons = append(seasons, servarr.Season{
 					SeasonNumber: targetSeason,
-					Monitored:    true,
+					Monitored:    monitorOnAdd,
 				})
 			}
 		} else {
-			seasons = []servarr.Season{{SeasonNumber: targetSeason, Monitored: true}}
+			seasons = []servarr.Season{{SeasonNumber: targetSeason, Monitored: monitorOnAdd}}
 		}
 
 		var tags []int
@@ -616,13 +659,16 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 			QualityProfileID: o.cfg.SonarrQualityProfileID,
 			RootFolderPath:   o.cfg.SonarrRootFolderPath,
 			SeriesType:       o.cfg.SonarrSeriesType,
-			Monitored:        true,
+			Monitored:        monitorOnAdd,
 			SeasonFolder:     true,
 			Seasons:          seasons,
 			Tags:             tags,
 			AddOptions: &servarr.AddSeriesOptions{
-				SearchForMissingEpisodes: o.cfg.SonarrSearchOnAdd && !pruneOnAdd,
+				SearchForMissingEpisodes: monitorOnAdd && o.cfg.SonarrSearchOnAdd && !pruneOnAdd,
 			},
+		}
+		if !monitorOnAdd {
+			addReq.AddOptions.Monitor = "none"
 		}
 
 		if dryRun {
@@ -645,7 +691,11 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 			return dispatchOutcome{shouldUpsert: false}
 		}
 
-		report.MonitoredSonarr++
+		monitoredStatus := "UNMONITORED"
+		if monitorOnAdd {
+			report.MonitoredSonarr++
+			monitoredStatus = "MONITORED"
+		}
 		if o.notifier != nil {
 			o.notifier.Dispatch(notification.SyncEvent{
 				Type:          notification.EventMediaAdded,
@@ -659,7 +709,7 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 			})
 		}
 		if !pruneOnAdd {
-			return dispatchOutcome{monitoredStatus: "MONITORED", season: targetSeason, shouldUpsert: true}
+			return dispatchOutcome{monitoredStatus: monitoredStatus, season: targetSeason, shouldUpsert: true}
 		}
 		searchAfterPruning = true
 	}
@@ -1183,7 +1233,7 @@ func (o *Orchestrator) cleanupOnly(entry anilist.MediaListEntry) bool {
 	if router.Route(router.MediaFormat(strings.ToUpper(strings.TrimSpace(entry.Media.Format)))) == router.RouteRadarr {
 		configured = o.cfg.AniListMovieStatus
 	}
-	return !strings.EqualFold(strings.TrimSpace(configured), string(entry.Status))
+	return !slices.Contains(anilist.ParseListStatuses(configured), entry.Status)
 }
 
 var subSeasonPattern = regexp.MustCompile(`(?i)\b(?:part|cour)\s+(\d+)\b`)
@@ -1283,29 +1333,20 @@ func (o *Orchestrator) reconcileWatchlistStatus(ctx context.Context) error {
 	})
 }
 
-func (o *Orchestrator) configuredStatuses() []anilist.MediaListStatus {
-	statusMap := make(map[anilist.MediaListStatus]bool)
-	if o.cfg.AniListTvStatus != "" {
-		statusMap[anilist.MediaListStatus(strings.ToUpper(strings.TrimSpace(o.cfg.AniListTvStatus)))] = true
-	}
-	if o.cfg.AniListMovieStatus != "" {
-		statusMap[anilist.MediaListStatus(strings.ToUpper(strings.TrimSpace(o.cfg.AniListMovieStatus)))] = true
-	}
-	if o.cfg.UnmonitorDropped || o.cfg.DeleteDropped {
-		statusMap[anilist.StatusDropped] = true
-	}
-	if o.cfg.UnmonitorCompleted || o.cfg.DeleteCompleted {
-		statusMap[anilist.StatusCompleted] = true
-	}
-	if len(statusMap) == 0 {
-		statusMap[anilist.StatusCurrent] = true
-	}
+func (o *Orchestrator) isCleanupStatus(status anilist.MediaListStatus) bool {
+	return (status == anilist.StatusDropped && (o.cfg.UnmonitorDropped || o.cfg.DeleteDropped)) ||
+		(status == anilist.StatusCompleted && (o.cfg.UnmonitorCompleted || o.cfg.DeleteCompleted))
+}
 
-	var list []anilist.MediaListStatus
-	for s := range statusMap {
-		list = append(list, s)
+func (o *Orchestrator) configuredStatuses(series, movies []anilist.MediaListStatus) []anilist.MediaListStatus {
+	statuses := slices.Concat(series, movies)
+	for _, status := range []anilist.MediaListStatus{anilist.StatusDropped, anilist.StatusCompleted} {
+		if o.isCleanupStatus(status) {
+			statuses = append(statuses, status)
+		}
 	}
-	return list
+	slices.Sort(statuses)
+	return slices.Compact(statuses)
 }
 
 func (o *Orchestrator) recordHistory(ctx context.Context, report *SyncReport, start time.Time) {

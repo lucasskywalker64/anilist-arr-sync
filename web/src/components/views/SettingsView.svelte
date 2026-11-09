@@ -24,10 +24,22 @@
   import FolderBrowserModal from "../common/FolderBrowserModal.svelte";
   import Alert from "../common/Alert.svelte";
   import Label from "../common/Label.svelte";
+  import AniListStatusPicker from "./AniListStatusPicker.svelte";
   import { api } from "../../lib/api";
-  import type { AppConfig, NotificationItem } from "../../lib/types";
+  import type { AppConfig, NotificationItem, ServarrConnectionOptions } from "../../lib/types";
 
   export let subTab: "general" | "sync" | "servarr" | "connect" = "general";
+  export let openOnboarding: ((config: AppConfig) => void) | undefined = undefined;
+
+  const servarrServices = [
+    { kind: "sonarr", name: "Sonarr", versions: "v3/v4", port: 8989, url: "sonarrUrl", key: "sonarrApiKey",
+      profile: "sonarrQualityProfileId", folder: "sonarrRootFolderPath", monitor: "sonarrMonitorOnAdd", search: "sonarrSearchOnAdd" },
+    { kind: "radarr", name: "Radarr", versions: "v3/v4/v5", port: 7878, url: "radarrUrl", key: "radarrApiKey",
+      profile: "radarrQualityProfileId", folder: "radarrRootFolderPath", monitor: "radarrMonitorOnAdd", search: "radarrSearchOnAdd" },
+  ] as const;
+  type ServarrService = (typeof servarrServices)[number];
+  let servarrOptions: Partial<Record<ServarrService["kind"], ServarrConnectionOptions>> = {};
+  let testingServarr: ServarrService["kind"] | null = null;
 
   let savedConfig: AppConfig | null = null;
   let formConfig: Partial<AppConfig> = {};
@@ -115,6 +127,23 @@
     }
   }
 
+  async function loadServarrOptions(service: ServarrService) {
+    const url = formConfig[service.url]?.trim() ?? "";
+    const key = formConfig[service.key]?.trim() ?? "";
+    testingServarr = service.kind;
+    errorMsg = "";
+    try {
+      const options = await api.testServarr(service.kind, url, key === "******" ? "" : key);
+      if (formConfig[service.url]?.trim() === url && (formConfig[service.key]?.trim() ?? "") === key) {
+        servarrOptions[service.kind] = options;
+      }
+    } catch (err) {
+      errorMsg = err instanceof Error ? err.message : `Could not load ${service.name} options.`;
+    } finally {
+      testingServarr = null;
+    }
+  }
+
   async function saveConfig() {
     if (!hasPendingChanges || saving) return;
     if (formPassword || formPasswordConfirm) {
@@ -128,6 +157,7 @@
     successMsg = "";
     try {
       const payload: Partial<AppConfig> = { ...formConfig };
+      delete payload.wizardCompleted;
       if (formPassword) {
         payload.password = formPassword;
       }
@@ -151,6 +181,7 @@
   function resetConfig() {
     if (savedConfig) {
       formConfig = JSON.parse(JSON.stringify(savedConfig));
+      servarrOptions = {};
       formPassword = "";
       formPasswordConfirm = "";
     }
@@ -382,6 +413,14 @@
       {/if}
 
       {#if subTab === "general"}
+        {#if openOnboarding && savedConfig && !savedConfig.wizardCompleted}
+          <FieldSet legend="Service Setup">
+            <Button disabled={hasPendingChanges || saving}
+              on:click={() => { if (savedConfig) openOnboarding?.(savedConfig); }}>
+              Open Setup Wizard
+            </Button>
+          </FieldSet>
+        {/if}
         <!-- Host -->
         <FieldSet legend="Host">
           <FormGroup
@@ -857,6 +896,19 @@
             />
           </FormGroup>
 
+          <div class="aniListLists">
+            <FormGroup label="Series lists" isDirty={isFieldDirty("aniListTvStatus")}>
+              <AniListStatusPicker label="Series lists" showLegend={false} bind:value={formConfig.aniListTvStatus} />
+            </FormGroup>
+            <FormGroup
+              label="Movie lists"
+              helpText="For both lists, dropped titles are eligible for cleanup only. Completed and dropped cleanup rules still apply."
+              isDirty={isFieldDirty("aniListMovieStatus")}
+            >
+              <AniListStatusPicker label="Movie lists" showLegend={false} bind:value={formConfig.aniListMovieStatus} />
+            </FormGroup>
+          </div>
+
           <FormGroup
             label="Sync Interval (Hours)"
             helpText="Interval in hours between automated background synchronization cycles"
@@ -984,60 +1036,62 @@
           </FormGroup>
         </FieldSet>
       {:else if subTab === "servarr"}
-        <!-- Servarr -->
-        <FieldSet legend="Sonarr">
-          <FormGroup
-            label="Sonarr URL"
-            helpText="Full base URL to your Sonarr v3/v4 server (e.g. http://localhost:8989)"
-            isDirty={isFieldDirty("sonarrUrl")}
-          >
-            <input
-              type="text"
-              class="formInput"
-              placeholder="http://localhost:8989"
-              bind:value={formConfig.sonarrUrl}
-            />
-          </FormGroup>
-
-          <FormGroup
-            label="Sonarr API Key"
-            helpText="API key from Sonarr -> Settings -> General -> Security"
-            isDirty={isFieldDirty("sonarrApiKey")}
-          >
-            <input
-              type="text"
-              class="formInput"
-              bind:value={formConfig.sonarrApiKey}
-            />
-          </FormGroup>
-        </FieldSet>
-
-        <FieldSet legend="Radarr">
-          <FormGroup
-            label="Radarr URL"
-            helpText="Full base URL to your Radarr v3/v4/v5 server (e.g. http://localhost:7878)"
-            isDirty={isFieldDirty("radarrUrl")}
-          >
-            <input
-              type="text"
-              class="formInput"
-              placeholder="http://localhost:7878"
-              bind:value={formConfig.radarrUrl}
-            />
-          </FormGroup>
-
-          <FormGroup
-            label="Radarr API Key"
-            helpText="API key from Radarr -> Settings -> General -> Security"
-            isDirty={isFieldDirty("radarrApiKey")}
-          >
-            <input
-              type="text"
-              class="formInput"
-              bind:value={formConfig.radarrApiKey}
-            />
-          </FormGroup>
-        </FieldSet>
+        {#each servarrServices as service}
+          {@const options = servarrOptions[service.kind]}
+          <FieldSet legend={service.name}>
+            <FormGroup label={`${service.name} URL`} forId={`${service.kind}-settings-url`}
+              helpText={`Full base URL to your ${service.name} ${service.versions} server (e.g. http://localhost:${service.port})`} isDirty={isFieldDirty(service.url)}>
+              <input id={`${service.kind}-settings-url`} type="text" class="formInput" placeholder={`http://localhost:${service.port}`}
+                bind:value={formConfig[service.url]} on:input={() => (servarrOptions[service.kind] = undefined)} />
+            </FormGroup>
+            <FormGroup label={`${service.name} API Key`} forId={`${service.kind}-settings-key`}
+              helpText={`API key from ${service.name} -> Settings -> General -> Security`} isDirty={isFieldDirty(service.key)}>
+              <input id={`${service.kind}-settings-key`} type="text" class="formInput"
+                bind:value={formConfig[service.key]} on:input={() => (servarrOptions[service.kind] = undefined)} />
+            </FormGroup>
+            <FormGroup label="Connection options">
+              <Button disabled={testingServarr !== null || !formConfig[service.url]?.trim()} on:click={() => loadServarrOptions(service)}>
+                {testingServarr === service.kind ? 'Loading...' : `Load ${service.name} profiles and folders`}
+              </Button>
+            </FormGroup>
+            <FormGroup label="Quality Profile" forId={`${service.kind}-settings-profile`} isDirty={isFieldDirty(service.profile)}>
+              {#if options?.qualityProfiles?.length}
+                <select id={`${service.kind}-settings-profile`} class="formInput" bind:value={formConfig[service.profile]}>
+                  {#if !options.qualityProfiles.some(profile => profile.id === formConfig[service.profile])}
+                    <option value={formConfig[service.profile]}>Current ID ({formConfig[service.profile] ?? 'unset'})</option>
+                  {/if}
+                  {#each options.qualityProfiles as profile}<option value={profile.id}>{profile.name}</option>{/each}
+                </select>
+              {:else}
+                <input id={`${service.kind}-settings-profile`} type="number" min="0" step="1" class="formInput"
+                  bind:value={formConfig[service.profile]} />
+              {/if}
+            </FormGroup>
+            <FormGroup label="Root Folder" forId={`${service.kind}-settings-folder`} isDirty={isFieldDirty(service.folder)}>
+              {#if options?.rootFolders?.length}
+                <select id={`${service.kind}-settings-folder`} class="formInput" bind:value={formConfig[service.folder]}>
+                  {#if !options.rootFolders.some(folder => folder.path === formConfig[service.folder])}
+                    <option value={formConfig[service.folder]}>{formConfig[service.folder] || 'Current folder (unset)'}</option>
+                  {/if}
+                  {#each options.rootFolders as folder}<option value={folder.path}>{folder.path}</option>{/each}
+                </select>
+              {:else}
+                <input id={`${service.kind}-settings-folder`} type="text" class="formInput" bind:value={formConfig[service.folder]} />
+              {/if}
+            </FormGroup>
+            <FormGroup label="Monitor on Add" isDirty={isFieldDirty(service.monitor)}>
+              <CheckInput ariaLabel={`${service.name} monitor on add`} checked={!!formConfig[service.monitor]}
+                on:change={(e) => (formConfig[service.monitor] = e.detail)} />
+            </FormGroup>
+            <FormGroup label="Search on Add" isDirty={isFieldDirty(service.search)}
+              helpText={service.kind === 'sonarr'
+                ? 'Search for missing episodes when adding a monitored series or newly monitoring a season.'
+                : 'Search immediately when adding a monitored movie.'}>
+              <CheckInput ariaLabel={`${service.name} search on add`} checked={!!formConfig[service.search]}
+                on:change={(e) => (formConfig[service.search] = e.detail)} />
+            </FormGroup>
+          </FieldSet>
+        {/each}
 
         <FieldSet legend="Tagging">
           <FormGroup
@@ -1416,6 +1470,10 @@
 
   .innerContentBody {
     padding: var(--pageContentBodyPadding);
+  }
+
+  .aniListLists {
+    padding-block: 8px 12px;
   }
 
   .stickySaveText {

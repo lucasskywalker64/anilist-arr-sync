@@ -58,6 +58,20 @@ func TestSyncEndpointsRecognizeOtherTriggers(t *testing.T) {
 		if rec.Code != http.StatusConflict {
 			t.Errorf("manual request during CLI sync: %d, %s", rec.Code, rec.Body.String())
 		}
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/staged/apply", strings.NewReader(`{"ids":[1,2]}`))
+		req.Header.Set("X-Api-Key", cfg.APIKey)
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusConflict {
+			t.Errorf("staged apply during CLI sync: %d, %s", rec.Code, rec.Body.String())
+		}
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/staged/reject", strings.NewReader(`{"ids":[1,2]}`))
+		req.Header.Set("X-Api-Key", cfg.APIKey)
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusConflict {
+			t.Errorf("staged rejection during CLI sync: %d, %s", rec.Code, rec.Body.String())
+		}
 		req = httptest.NewRequest(http.MethodGet, "/api/v1/sync/status", nil)
 		req.Header.Set("X-Api-Key", cfg.APIKey)
 		rec = httptest.NewRecorder()
@@ -165,6 +179,7 @@ func TestConfigEndpointResetsSchedulerIntervals(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		cfg := config.NewDefault()
 		cfg.APIKey = "test-key"
+		cfg.SonarrURL, cfg.SonarrAPIKey = "http://sonarr.example", "key"
 		db := newTestStorage(t)
 		var usernames []string
 		client := anilist.NewClient("", anilist.WithHTTPClient(&http.Client{Transport: syncTransportFunc(

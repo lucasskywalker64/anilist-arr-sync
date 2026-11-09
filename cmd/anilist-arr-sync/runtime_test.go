@@ -21,6 +21,8 @@ import (
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/backup"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/fribb"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 )
 
 type runtimeTransportFunc func(*http.Request) (*http.Response, error)
@@ -55,11 +57,18 @@ func TestRuntimeScheduledSyncWaitsForMappings(t *testing.T) {
 				syncs.Add(1)
 				body = `{"data":{"MediaListCollection":{"lists":[],"hasNextChunk":false}}}`
 			} else if !available.Load() {
-				return nil, errors.New("mapping source unavailable")
+				body = `[]`
 			}
 			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 		})
 		r.start()
+		req := httptest.NewRequest("POST", "/api/v1/sync/start", nil)
+		req.Header.Set("X-Api-Key", cfg.APIKey)
+		rec := httptest.NewRecorder()
+		r.server.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "could not prepare mappings") || syncs.Load() != 0 {
+			t.Fatalf("manual sync without mappings: %d %s, syncs=%d", rec.Code, rec.Body, syncs.Load())
+		}
 		time.Sleep(time.Hour)
 		synctest.Wait()
 		if syncs.Load() != 0 || !r.scheduler.Status().Sync.Last.IsZero() {
@@ -100,6 +109,9 @@ func TestRuntimeShutdownDeadlineStillClosesStorage(t *testing.T) {
 	reader, writer := r.db.Reader(), r.db.Writer()
 	entered, release := make(chan struct{}), make(chan struct{})
 	r.client.Transport = runtimeTransportFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method == http.MethodGet {
+			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`[{"anilist_id":1,"tvdb_id":2,"type":"TV"}]`))}, nil
+		}
 		close(entered)
 		<-release
 		return nil, req.Context().Err()
@@ -297,10 +309,15 @@ func TestRuntimeRepeatedRestartReloadsConfig(t *testing.T) {
 
 func TestOneShotSyncSummaryAndErrors(t *testing.T) {
 	var fail atomic.Bool
+	var emptyMappings atomic.Bool
 	fixture := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == "GET" {
-			_, _ = io.WriteString(w, `[]`)
+			if emptyMappings.Load() {
+				_, _ = io.WriteString(w, `[]`)
+				return
+			}
+			_, _ = io.WriteString(w, `[{"anilist_id":1,"tvdb_id":2,"type":"TV"}]`)
 			return
 		}
 		if fail.Load() {
@@ -334,6 +351,30 @@ func TestOneShotSyncSummaryAndErrors(t *testing.T) {
 	if !strings.Contains(out.String(), "SUCCESS: scanned=0") {
 		t.Fatalf("missing summary: %s", out.String())
 	}
+	db, err := storage.Open(filepath.Join(dir, cfg.DatabasePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping, mappingErr := fribb.NewLoader(db).GetEntry(t.Context(), 1)
+	closeErr := db.Close()
+	if mappingErr != nil || mapping.TVDBID == nil || *mapping.TVDBID != 2 || closeErr != nil {
+		t.Fatalf("persisted mapping: %+v, read error=%v, close error=%v", mapping, mappingErr, closeErr)
+	}
+
+	emptyDir := t.TempDir()
+	if err := config.Save(filepath.Join(emptyDir, "config.xml"), cfg); err != nil {
+		t.Fatal(err)
+	}
+	emptyMappings.Store(true)
+	out.Reset()
+	if err := run(t.Context(), []string{"--data-dir", emptyDir, "--sync"}, &out); err == nil || !strings.Contains(err.Error(), "mapping download contained no entries") {
+		t.Fatalf("CLI sync without cached or downloaded mappings: %v", err)
+	}
+	if !strings.Contains(out.String(), "FAILED:") || strings.Contains(out.String(), "SUCCESS:") {
+		t.Fatalf("empty download must print a failure summary: %s", out.String())
+	}
+	emptyMappings.Store(false)
+
 	fail.Store(true)
 	out.Reset()
 	if err := run(t.Context(), []string{"--data-dir", dir, "--sync"}, &out); err == nil {
@@ -347,13 +388,12 @@ func TestOneShotSyncSummaryAndErrors(t *testing.T) {
 	}
 }
 
-func TestRuntimeBackupRetentionUsesDays(t *testing.T) {
+func TestRuntimeBackupSettingsTakeEffectOnSave(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.NewDefault()
 	cfg.APIKey = "runtime-key"
 	cfg.BackupFolder = "backups"
-	cfg.BackupRetention = 2
-	configPath := filepath.Join(dir, "config.xml")
+	configPath := filepath.Join(t.TempDir(), "config.xml")
 	if err := config.Save(configPath, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -366,29 +406,68 @@ func TestRuntimeBackupRetentionUsesDays(t *testing.T) {
 			t.Error(err)
 		}
 	}()
+	request := func(method, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("X-Api-Key", cfg.APIKey)
+		rec := httptest.NewRecorder()
+		r.server.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+	if err := os.WriteFile(filepath.Join(dir, "blocked"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if rec := request("PUT", "/api/v1/config", `{"backupFolder":"blocked"}`); rec.Code != http.StatusBadRequest || r.server.Config().BackupFolder != "backups" {
+		t.Fatalf("invalid folder save: %d %s", rec.Code, rec.Body)
+	}
+	newDir := filepath.Join(dir, "new-backups")
+	if err := os.Mkdir(newDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
 	for _, age := range []time.Duration{72 * time.Hour, time.Hour, 2 * time.Hour, 3 * time.Hour} {
-		name := backup.FormatBackupFilename(backup.TypeManual, time.Now().Add(-age))
-		if err := os.WriteFile(filepath.Join(dir, "backups", name), nil, 0600); err != nil {
+		name := backup.FormatBackupFilename(backup.TypeManual, now.Add(-age))
+		if err := os.WriteFile(filepath.Join(newDir, name), nil, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	req := httptest.NewRequest("POST", "/api/v1/backups", nil)
-	req.Header.Set("X-Api-Key", "runtime-key")
-	rec := httptest.NewRecorder()
-	r.server.Handler().ServeHTTP(rec, req)
-	if rec.Code != 201 {
+	expired := backup.FormatBackupFilename(backup.TypeManual, now.Add(-72*time.Hour))
+	previousArchive := filepath.Join(dir, "backups", expired)
+	if err := os.WriteFile(previousArchive, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, payload := range []string{`{"backupFolder":"new-backups"}`, `{"backupRetention":2}`} {
+		if rec := request("PUT", "/api/v1/config", payload); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"restartRequired":false`) {
+			t.Fatalf("save %s: %d %s", payload, rec.Code, rec.Body)
+		}
+	}
+	listed := request("GET", "/api/v1/backups", "")
+	var backups []backup.Info
+	if err := json.Unmarshal(listed.Body.Bytes(), &backups); err != nil || len(backups) != 4 {
+		t.Fatalf("backups after saving: %d %s, err=%v", listed.Code, listed.Body, err)
+	}
+	if rec := request("POST", "/api/v1/backups", ""); rec.Code != http.StatusCreated {
 		t.Fatalf("backup: %d %s", rec.Code, rec.Body.String())
 	}
-	archives, err := filepath.Glob(filepath.Join(dir, "backups", "*.zip"))
+	archives, err := filepath.Glob(filepath.Join(newDir, "*.zip"))
 	if err != nil || len(archives) != 4 {
 		t.Fatalf("retention must keep all four recent archives and remove the old archive: %v, %v", archives, err)
+	}
+	if _, err := os.Stat(filepath.Join(newDir, expired)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expired archive still exists in the active folder: %v", err)
+	}
+	if _, err := os.Stat(previousArchive); err != nil {
+		t.Fatalf("archive in previous folder: %v", err)
 	}
 }
 
 func TestRuntimeStopsActiveWebSyncBeforeClosingStorage(t *testing.T) {
 	started := make(chan struct{}, 1)
 	cancelled := make(chan struct{}, 1)
-	fixture := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	fixture := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = io.WriteString(w, `[{"anilist_id":1,"tvdb_id":2,"type":"TV"}]`)
+			return
+		}
 		_, _ = io.Copy(io.Discard, r.Body)
 		started <- struct{}{}
 		select {

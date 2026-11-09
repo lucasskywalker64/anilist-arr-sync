@@ -72,6 +72,21 @@ describe('API Client', () => {
     expect(options.headers['X-CSRF-Token']).toBeUndefined();
   });
 
+  it('preserves IDs applied before a staged batch fails', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'Endpoint changed', applied: [1], failedId: 2 }),
+    });
+
+    await expect(api.applyStaged([1, 2])).rejects.toMatchObject({
+      message: 'Endpoint changed',
+      status: 409,
+      applied: [1],
+      failedId: 2,
+    });
+  });
+
   it('does not require mutating headers for GET requests', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

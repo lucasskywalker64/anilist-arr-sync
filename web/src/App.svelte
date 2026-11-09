@@ -11,13 +11,18 @@
   import SettingsView from './components/views/SettingsView.svelte';
   import SystemView from './components/views/SystemView.svelte';
   import LoginModal from './components/views/LoginModal.svelte';
+  import OnboardingWizard from './components/views/OnboardingWizard.svelte';
   import { api, getBaseUrl, setApiKey } from './lib/api';
-  import type { ReviewItem, StagedAction, OverrideItem, CurrentUser, LibraryStats } from './lib/types';
+  import type { AppConfig, ReviewItem, StagedAction, OverrideItem, CurrentUser, LibraryStats } from './lib/types';
 
   let currentRoute = '/';
   let currentUser: CurrentUser | null = null;
   let needsLogin = false;
   let isSetupMode = false;
+  let booting = true;
+  let onboardingConfig: AppConfig | null = null;
+  let resumeOnboarding = false;
+  let onboardingError = '';
   let isSyncing = false;
   let completedSyncRunId = 0;
   let libraryStats: LibraryStats | null = null;
@@ -63,14 +68,12 @@
   }
 
   async function checkAuthAndBoot() {
+    booting = true;
+    onboardingError = '';
     try {
       currentUser = await api.getUser();
-      if (currentUser.setupRequired) {
-        isSetupMode = true;
-        needsLogin = true;
-      } else {
-        needsLogin = !currentUser.authenticated;
-      }
+      isSetupMode = Boolean(currentUser.setupRequired);
+      needsLogin = isSetupMode || !currentUser.authenticated;
     } catch (e: any) {
       if (e?.setupRequired) {
         isSetupMode = true;
@@ -80,9 +83,33 @@
       }
     }
 
-    if (!needsLogin) {
-      await loadGlobalData();
+    resumeOnboarding = Boolean(currentUser?.wizardCompleted && new URLSearchParams(window.location.search).get('onboarding') === 'complete');
+    const showOnboarding = currentUser?.onboardingRequired && !sessionStorage.getItem(`${getBaseUrl()}:onboarding-dismissed`);
+    if (!needsLogin && (resumeOnboarding || showOnboarding)) {
+      try {
+        onboardingConfig = await api.getConfig();
+      } catch (err) {
+        onboardingError = err instanceof Error ? err.message : 'Could not load setup.';
+      }
     }
+    booting = false;
+    if (!needsLogin && !onboardingConfig && !onboardingError) void loadGlobalData();
+  }
+
+  function closeOnboarding(finished: boolean) {
+    onboardingConfig = null;
+    if (finished) {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('onboarding') === 'complete') {
+        url.searchParams.delete('onboarding');
+        window.history.replaceState(null, '', url);
+      }
+      resumeOnboarding = false;
+      navigate('/');
+    } else {
+      sessionStorage.setItem(`${getBaseUrl()}:onboarding-dismissed`, 'true');
+    }
+    void loadGlobalData();
   }
 
   async function loadGlobalData() {
@@ -143,12 +170,6 @@
     needsLogin = true;
   }
 
-  function handleLoginSuccess(e: CustomEvent<{ username: string }>) {
-    needsLogin = false;
-    currentUser = { username: e.detail.username, authenticated: true, authMethod: 'Forms' };
-    loadGlobalData();
-  }
-
   onMount(() => {
     currentRoute = getRouteFromLocation();
     window.addEventListener('popstate', handlePopState);
@@ -156,7 +177,7 @@
     checkAuthAndBoot();
 
     const interval = setInterval(() => {
-      if (!needsLogin) {
+      if (!booting && !needsLogin && !onboardingConfig && !onboardingError) {
         loadGlobalData();
       }
     }, 10000);
@@ -169,8 +190,15 @@
   });
 </script>
 
-{#if needsLogin}
-  <LoginModal isSetup={isSetupMode} on:success={handleLoginSuccess} />
+{#if booting}
+  <p role="status">Loading application...</p>
+{:else if needsLogin}
+  <LoginModal isSetup={isSetupMode} on:success={checkAuthAndBoot} />
+{:else if onboardingError}
+  <p role="alert">{onboardingError}</p>
+  <button on:click={checkAuthAndBoot}>Retry Setup</button>
+{:else if onboardingConfig}
+  <OnboardingWizard config={onboardingConfig} resume={resumeOnboarding} on:dismiss={() => closeOnboarding(false)} on:finish={() => closeOnboarding(true)} />
 {:else}
   <Page
     {currentRoute}
@@ -212,6 +240,7 @@
       <BlocklistView />
     {:else if currentRoute.startsWith('/settings')}
       <SettingsView
+        openOnboarding={currentUser?.onboardingRequired ? (config) => onboardingConfig = config : undefined}
         subTab={currentRoute === '/settings/sync'
           ? 'sync'
           : currentRoute === '/settings/servarr'

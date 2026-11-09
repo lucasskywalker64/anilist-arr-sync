@@ -116,6 +116,8 @@ export interface AppConfig {
   consoleLogLevel?: string;
   logSizeLimit?: number;
   instanceName: string;
+  wizardCompleted: boolean;
+  restartRequired?: boolean;
   updateBranch?: string;
   updateAutomatically?: boolean;
   updateMechanism?: string;
@@ -123,6 +125,8 @@ export interface AppConfig {
   backupInterval?: number;
   backupRetention?: number;
   aniListUsername: string;
+  aniListTvStatus: string;
+  aniListMovieStatus: string;
   syncIntervalHours: number;
   dateToleranceDays: number;
   confidenceThreshold: number;
@@ -135,8 +139,16 @@ export interface AppConfig {
   firstRunDryRun: boolean;
   sonarrUrl: string;
   sonarrApiKey: string;
+  sonarrQualityProfileId: number;
+  sonarrRootFolderPath: string;
+  sonarrMonitorOnAdd: boolean;
+  sonarrSearchOnAdd: boolean;
   radarrUrl: string;
   radarrApiKey: string;
+  radarrQualityProfileId: number;
+  radarrRootFolderPath: string;
+  radarrMonitorOnAdd: boolean;
+  radarrSearchOnAdd: boolean;
   tagName: string;
 }
 
@@ -181,7 +193,21 @@ export interface CurrentUser {
   authenticated: boolean;
   csrfToken?: string;
   setupRequired?: boolean;
+  wizardCompleted?: boolean;
+  onboardingRequired?: boolean;
   authMethod?: 'Forms' | 'Basic' | string;
+}
+
+export interface AniListProfile {
+  username: string;
+  avatarUrl: string;
+  animeCount: number;
+  mangaCount: number;
+}
+
+export interface ServarrConnectionOptions {
+  qualityProfiles: { id: number; name: string }[];
+  rootFolders: { id: number; path: string }[];
 }
 
 export interface MappingResolution {

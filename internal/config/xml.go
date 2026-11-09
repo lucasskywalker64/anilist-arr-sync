@@ -39,6 +39,7 @@ type xmlConfig struct {
 	LogRotate       int    `xml:"LogRotate"`
 
 	InstanceName               string `xml:"InstanceName"`
+	WizardCompleted            bool   `xml:"WizardCompleted"` // Onboarding uses lowercase XML booleans.
 	LaunchBrowser              string `xml:"LaunchBrowser"`
 	EnableDesktopNotifications string `xml:"EnableDesktopNotifications"`
 
@@ -61,6 +62,7 @@ type xmlConfig struct {
 	RadarrAPIKey           string `xml:"RadarrApiKey"`
 	RadarrQualityProfileID int    `xml:"RadarrQualityProfileId"`
 	RadarrRootFolderPath   string `xml:"RadarrRootFolderPath"`
+	RadarrMonitorOnAdd     string `xml:"RadarrMonitorOnAdd"`
 	RadarrSearchOnAdd      string `xml:"RadarrSearchOnAdd"`
 
 	SonarrURL              string `xml:"SonarrUrl"`
@@ -68,6 +70,7 @@ type xmlConfig struct {
 	SonarrQualityProfileID int    `xml:"SonarrQualityProfileId"`
 	SonarrRootFolderPath   string `xml:"SonarrRootFolderPath"`
 	SonarrSeriesType       string `xml:"SonarrSeriesType"`
+	SonarrMonitorOnAdd     string `xml:"SonarrMonitorOnAdd"`
 	SonarrSearchOnAdd      string `xml:"SonarrSearchOnAdd"`
 
 	TagName             string  `xml:"TagName"`
@@ -134,6 +137,7 @@ func (c *Config) ToXML() ([]byte, error) {
 		LogSizeLimit:               c.LogSizeLimit,
 		LogRotate:                  c.LogRotate,
 		InstanceName:               c.InstanceName,
+		WizardCompleted:            c.WizardCompleted,
 		LaunchBrowser:              formatBool(c.LaunchBrowser),
 		EnableDesktopNotifications: formatBool(c.EnableDesktopNotifications),
 		UpdateBranch:               c.UpdateBranch,
@@ -151,12 +155,14 @@ func (c *Config) ToXML() ([]byte, error) {
 		RadarrAPIKey:               c.RadarrAPIKey,
 		RadarrQualityProfileID:     c.RadarrQualityProfileID,
 		RadarrRootFolderPath:       c.RadarrRootFolderPath,
+		RadarrMonitorOnAdd:         formatBool(c.RadarrMonitorOnAdd),
 		RadarrSearchOnAdd:          formatBool(c.RadarrSearchOnAdd),
 		SonarrURL:                  c.SonarrURL,
 		SonarrAPIKey:               c.SonarrAPIKey,
 		SonarrQualityProfileID:     c.SonarrQualityProfileID,
 		SonarrRootFolderPath:       c.SonarrRootFolderPath,
 		SonarrSeriesType:           c.SonarrSeriesType,
+		SonarrMonitorOnAdd:         formatBool(c.SonarrMonitorOnAdd),
 		SonarrSearchOnAdd:          formatBool(c.SonarrSearchOnAdd),
 		TagName:                    c.TagName,
 		SyncIntervalHours:          c.SyncIntervalHours,

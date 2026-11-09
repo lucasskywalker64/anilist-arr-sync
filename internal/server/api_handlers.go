@@ -20,6 +20,7 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/backup"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/orchestrator"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 )
 
@@ -207,9 +208,30 @@ func (s *Server) handleDeleteOverride(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// requiresRestart compares saved settings with active settings. The caller holds cfgMu.
+func (s *Server) requiresRestart(next config.Config) bool {
+	listenerNext := s.listenerConfig(next)
+	running := s.runtimeCfg
+	return (s.boundPort != listenerNext.Port) ||
+		(s.boundBindAddress != listenerNext.BindAddress) ||
+		(s.boundURLBase != next.URLBase) ||
+		(s.boundEnableSsl != next.EnableSsl) ||
+		(s.boundSslPort != next.SslPort) ||
+		(running.SslCertPath != next.SslCertPath) || (running.SslKeyPath != next.SslKeyPath) ||
+		(running.DatabasePath != next.DatabasePath) ||
+		(running.UseProxy != next.UseProxy) || (running.ProxyType != next.ProxyType) ||
+		(running.ProxyHostname != next.ProxyHostname) || (running.ProxyPort != next.ProxyPort) ||
+		(running.ProxyUsername != next.ProxyUsername) || (running.ProxyPassword != next.ProxyPassword) ||
+		(running.ProxyIgnoredAddresses != next.ProxyIgnoredAddresses) ||
+		(running.ProxyBypassLocalAddresses != next.ProxyBypassLocalAddresses)
+}
+
 // handleGetConfig returns the sanitized runtime configuration.
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
-	sanitized := s.Config()
+	s.cfgMu.RLock()
+	sanitized := *s.cfg
+	restartRequired := s.requiresRestart(sanitized)
+	s.cfgMu.RUnlock()
 	if sanitized.RadarrAPIKey != "" {
 		sanitized.RadarrAPIKey = "******"
 	}
@@ -253,6 +275,8 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"consoleLogLevel":           sanitized.ConsoleLogLevel,
 		"logSizeLimit":              sanitized.LogSizeLimit,
 		"instanceName":              sanitized.InstanceName,
+		"wizardCompleted":           sanitized.WizardCompleted,
+		"restartRequired":           restartRequired,
 		"updateBranch":              sanitized.UpdateBranch,
 		"updateAutomatically":       sanitized.UpdateAutomatically,
 		"updateMechanism":           sanitized.UpdateMechanism,
@@ -261,8 +285,20 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"backupRetention":           sanitized.BackupRetention,
 		"databasePath":              sanitized.DatabasePath,
 		"aniListUsername":           sanitized.AniListUsername,
+		"aniListTvStatus":           sanitized.AniListTvStatus,
+		"aniListMovieStatus":        sanitized.AniListMovieStatus,
 		"radarrUrl":                 sanitized.RadarrURL,
+		"radarrApiKey":              sanitized.RadarrAPIKey,
+		"radarrQualityProfileId":    sanitized.RadarrQualityProfileID,
+		"radarrRootFolderPath":      sanitized.RadarrRootFolderPath,
+		"radarrMonitorOnAdd":        sanitized.RadarrMonitorOnAdd,
+		"radarrSearchOnAdd":         sanitized.RadarrSearchOnAdd,
 		"sonarrUrl":                 sanitized.SonarrURL,
+		"sonarrApiKey":              sanitized.SonarrAPIKey,
+		"sonarrQualityProfileId":    sanitized.SonarrQualityProfileID,
+		"sonarrRootFolderPath":      sanitized.SonarrRootFolderPath,
+		"sonarrMonitorOnAdd":        sanitized.SonarrMonitorOnAdd,
+		"sonarrSearchOnAdd":         sanitized.SonarrSearchOnAdd,
 		"tagName":                   sanitized.TagName,
 		"syncIntervalHours":         sanitized.SyncIntervalHours,
 		"dateToleranceDays":         sanitized.DateToleranceDays,
@@ -297,10 +333,12 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	defer s.cfgMu.Unlock()
 
 	next := *s.cfg
+	completingSetup := false
 
 	// Apply known fields to copy
-	for k, v := range updates {
-		switch strings.ToLower(k) {
+	for key, v := range updates {
+		k := strings.ToLower(key)
+		switch k {
 		case "bindaddress":
 			if str, ok := v.(string); ok {
 				next.BindAddress = str
@@ -424,9 +462,12 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 				next.BackupRetention = int(num)
 			}
 		case "syncintervalhours":
-			if num, ok := v.(float64); ok {
-				next.SyncIntervalHours = int(num)
+			num, ok := v.(float64)
+			if !ok || float64(int(num)) != num {
+				s.writeJSONError(w, http.StatusBadRequest, "sync interval must be a whole number of hours")
+				return
 			}
+			next.SyncIntervalHours = int(num)
 		case "datetolerancedays":
 			if num, ok := v.(float64); ok {
 				next.DateToleranceDays = int(num)
@@ -463,6 +504,46 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			if b, ok := v.(bool); ok {
 				next.FirstRunDryRun = b
 			}
+		case "wizardcompleted":
+			if b, ok := v.(bool); ok && b {
+				next.WizardCompleted = true
+				completingSetup = true
+			}
+		case "sonarrmonitoronadd":
+			if b, ok := v.(bool); ok {
+				next.SonarrMonitorOnAdd = b
+			}
+		case "radarrmonitoronadd":
+			if b, ok := v.(bool); ok {
+				next.RadarrMonitorOnAdd = b
+			}
+		case "sonarrsearchonadd":
+			if b, ok := v.(bool); ok {
+				next.SonarrSearchOnAdd = b
+			}
+		case "radarrsearchonadd":
+			if b, ok := v.(bool); ok {
+				next.RadarrSearchOnAdd = b
+			}
+		case "sonarrqualityprofileid", "radarrqualityprofileid":
+			num, ok := v.(float64)
+			if !ok || num < 0 || float64(int(num)) != num {
+				s.writeJSONError(w, http.StatusBadRequest, "quality profile ID must be a non-negative integer")
+				return
+			}
+			if k == "sonarrqualityprofileid" {
+				next.SonarrQualityProfileID = int(num)
+			} else {
+				next.RadarrQualityProfileID = int(num)
+			}
+		case "sonarrrootfolderpath":
+			if str, ok := v.(string); ok {
+				next.SonarrRootFolderPath = str
+			}
+		case "radarrrootfolderpath":
+			if str, ok := v.(string); ok {
+				next.RadarrRootFolderPath = str
+			}
 		case "tagname":
 			if str, ok := v.(string); ok {
 				next.TagName = str
@@ -470,6 +551,14 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		case "anilistusername":
 			if str, ok := v.(string); ok {
 				next.AniListUsername = str
+			}
+		case "anilisttvstatus":
+			if str, ok := v.(string); ok {
+				next.AniListTvStatus = str
+			}
+		case "anilistmoviestatus":
+			if str, ok := v.(string); ok {
+				next.AniListMovieStatus = str
 			}
 		case "radarrurl":
 			if str, ok := v.(string); ok {
@@ -490,15 +579,43 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if completingSetup {
+		if err := validateOnboardingConfig(next); err != nil {
+			s.writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
 	if err := next.Validate(); err != nil {
 		s.writeJSONError(w, http.StatusBadRequest, "invalid configuration: "+err.Error())
 		return
+	}
+
+	connectionsChanged := servarrConnectionsChanged(*s.cfg, next)
+	var sonarrClient *servarr.SonarrClient
+	var radarrClient *servarr.RadarrClient
+	if connectionsChanged && s.orch != nil {
+		var err error
+		sonarrClient, radarrClient, err = servarr.NewClients(next.SonarrURL, next.SonarrAPIKey, next.RadarrURL, next.RadarrAPIKey,
+			servarr.WithHTTPClient(s.outboundHTTPClient))
+		if err != nil {
+			s.writeJSONError(w, http.StatusBadRequest, "invalid service connection: "+err.Error())
+			return
+		}
 	}
 
 	newTrustedNets, err := ParseCIDRs(next.TrustedNetworks)
 	if err != nil {
 		s.writeJSONError(w, http.StatusBadRequest, "invalid trusted networks: "+err.Error())
 		return
+	}
+	var activateBackupSettings func()
+	if s.prepareBackupSettings != nil && (s.cfg.BackupFolder != next.BackupFolder || s.cfg.BackupRetention != next.BackupRetention) {
+		activateBackupSettings, err = s.prepareBackupSettings(*s.cfg, next)
+		if err != nil {
+			s.writeJSONError(w, http.StatusBadRequest, "invalid backup folder: "+err.Error())
+			return
+		}
 	}
 
 	// Update user credentials if requested
@@ -576,29 +693,17 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	listenerNext := s.listenerConfig(next)
-	running := s.runtimeCfg
-	restartRequired := (s.boundPort != listenerNext.Port) ||
-		(s.boundBindAddress != listenerNext.BindAddress) ||
-		(s.boundURLBase != next.URLBase) ||
-		(s.boundEnableSsl != next.EnableSsl) ||
-		(s.boundSslPort != next.SslPort) ||
-		(running.SslCertPath != next.SslCertPath) || (running.SslKeyPath != next.SslKeyPath) ||
-		(running.AniListUsername != next.AniListUsername) ||
-		(running.SonarrURL != next.SonarrURL) || (running.SonarrAPIKey != next.SonarrAPIKey) ||
-		(running.RadarrURL != next.RadarrURL) || (running.RadarrAPIKey != next.RadarrAPIKey) ||
-		(running.DatabasePath != next.DatabasePath) ||
-		(running.BackupFolder != next.BackupFolder) || (running.BackupRetention != next.BackupRetention) ||
-		(running.UseProxy != next.UseProxy) || (running.ProxyType != next.ProxyType) ||
-		(running.ProxyHostname != next.ProxyHostname) || (running.ProxyPort != next.ProxyPort) ||
-		(running.ProxyUsername != next.ProxyUsername) || (running.ProxyPassword != next.ProxyPassword) ||
-		(running.ProxyIgnoredAddresses != next.ProxyIgnoredAddresses) ||
-		(running.ProxyBypassLocalAddresses != next.ProxyBypassLocalAddresses)
-
 	*s.cfg = next
 	s.trustedNets = newTrustedNets
+	if activateBackupSettings != nil {
+		activateBackupSettings()
+	}
 	if s.orch != nil {
-		s.orch.UpdateConfig(next)
+		if connectionsChanged {
+			s.orch.UpdateServarrConfig(next, sonarrClient, radarrClient)
+		} else {
+			s.orch.UpdateConfig(next)
+		}
 	}
 	if s.scheduler != nil {
 		s.scheduler.UpdateConfig(next)
@@ -609,24 +714,34 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status":          "ok",
 		"message":         "configuration updated",
-		"restartRequired": restartRequired,
+		"restartRequired": s.requiresRestart(next),
 	})
 }
 
 // handleStartSync triggers a manual sync run in the background.
-func (s *Server) handleStartSync(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleStartSync(w http.ResponseWriter, r *http.Request) {
+	dryRun := r.URL.Query().Get("dryRun") == "true"
+	if s.orch == nil {
+		s.writeJSONError(w, http.StatusBadRequest, "orchestrator not configured")
+		return
+	}
+	if s.prepareSync != nil {
+		if err := s.prepareSync(r.Context()); err != nil {
+			s.writeJSONError(w, http.StatusServiceUnavailable, "could not prepare mappings for the sync: "+err.Error())
+			return
+		}
+	}
 	s.workMu.Lock()
 	defer s.workMu.Unlock()
 	if s.stopping {
 		s.writeJSONError(w, http.StatusServiceUnavailable, "server is stopping")
 		return
 	}
-	if s.orch == nil {
-		s.writeJSONError(w, http.StatusBadRequest, "orchestrator not configured")
-		return
+	start := s.orch.StartSync
+	if dryRun {
+		start = s.orch.StartDryRun
 	}
-
-	result, err := s.orch.StartSync(s.workCtx, orchestrator.TriggerManualWeb)
+	result, err := start(s.workCtx, orchestrator.TriggerManualWeb)
 	if err != nil {
 		s.writeJSONError(w, http.StatusConflict, err.Error())
 		return
@@ -867,14 +982,34 @@ func (s *Server) handleApplyStaged(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	applied := []int{}
-	for _, id := range req.IDs {
-		if err := s.orch.ApplyStagedAction(r.Context(), id); err != nil {
-			log.Printf("apply staged action %d failed: %v", id, err)
-			s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("apply staged action %d failed", id))
+	applied, err := s.orch.ApplyStagedActions(r.Context(), req.IDs)
+	if err != nil {
+		if errors.Is(err, orchestrator.ErrDuplicateStagedAction) {
+			s.writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		applied = append(applied, id)
+		if errors.Is(err, orchestrator.ErrSyncInProgress) {
+			s.writeJSONError(w, http.StatusConflict, err.Error())
+			return
+		}
+
+		failedID := req.IDs[len(applied)]
+		status := http.StatusInternalServerError
+		message := fmt.Sprintf("apply staged action %d failed", failedID)
+		if errors.Is(err, orchestrator.ErrStagedEndpointChanged) {
+			status = http.StatusConflict
+			message = err.Error()
+		} else {
+			log.Printf("apply staged actions failed: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error":    message,
+			"applied":  applied,
+			"failedId": failedID,
+		})
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -894,15 +1029,20 @@ func (s *Server) handleRejectStaged(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rejected := []int{}
-	for _, id := range req.IDs {
-		if s.orch != nil {
-			if err := s.orch.RejectStagedAction(r.Context(), id); err != nil {
-				log.Printf("reject staged action %d failed: %v", id, err)
-				s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("reject staged action %d failed", id))
-				return
+	if s.orch != nil {
+		var err error
+		rejected, err = s.orch.RejectStagedActions(r.Context(), req.IDs)
+		if err != nil {
+			if errors.Is(err, orchestrator.ErrSyncInProgress) {
+				s.writeJSONError(w, http.StatusConflict, err.Error())
+			} else {
+				log.Printf("reject staged actions failed: %v", err)
+				s.writeJSONError(w, http.StatusInternalServerError, "reject staged actions failed")
 			}
-			rejected = append(rejected, id)
-		} else if s.db != nil {
+			return
+		}
+	} else if s.db != nil {
+		for _, id := range req.IDs {
 			err := s.db.Write(r.Context(), func(ctx context.Context, tx *sql.Tx) error {
 				res, execErr := tx.ExecContext(ctx, "UPDATE staged_sync_actions SET status = 'REJECTED' WHERE id = ? AND status = 'PENDING';", id)
 				if execErr != nil {

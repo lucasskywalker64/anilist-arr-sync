@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
@@ -22,9 +23,14 @@ import (
 type Engine struct {
 	db         *storage.DB
 	configPath string
-	backupDir  string
-	retention  int
 	nowFn      func() time.Time
+	settingsMu sync.RWMutex
+	settings   backupSettings
+}
+
+type backupSettings struct {
+	dir       string
+	retention int
 }
 
 type contextWriter struct {
@@ -45,7 +51,7 @@ type Option func(*Engine)
 // WithRetention sets the rolling retention window in days.
 func WithRetention(retention int) Option {
 	return func(e *Engine) {
-		e.retention = retention
+		e.settings.retention = retention
 	}
 }
 
@@ -61,9 +67,8 @@ func NewEngine(db *storage.DB, configPath, backupDir string, opts ...Option) *En
 	e := &Engine{
 		db:         db,
 		configPath: configPath,
-		backupDir:  backupDir,
-		retention:  DefaultRetention,
 		nowFn:      time.Now,
+		settings:   backupSettings{dir: backupDir, retention: DefaultRetention},
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -71,20 +76,34 @@ func NewEngine(db *storage.DB, configPath, backupDir string, opts ...Option) *En
 	return e
 }
 
+// UpdateSettings changes the directory and retention for future backup operations.
+func (e *Engine) UpdateSettings(backupDir string, retention int) {
+	e.settingsMu.Lock()
+	defer e.settingsMu.Unlock()
+	e.settings = backupSettings{dir: backupDir, retention: retention}
+}
+
+func (e *Engine) currentSettings() backupSettings {
+	e.settingsMu.RLock()
+	defer e.settingsMu.RUnlock()
+	return e.settings
+}
+
 // Create generates a timestamped zip archive containing an online SQLite snapshot
 // and config.xml, then automatically prunes older backups according to the retention window.
 func (e *Engine) Create(ctx context.Context, backupType Type) (*Info, error) {
+	settings := e.currentSettings()
 	if backupType == "" {
 		backupType = TypeManual
 	}
 
-	if err := os.MkdirAll(e.backupDir, 0755); err != nil {
+	if err := os.MkdirAll(settings.dir, 0755); err != nil {
 		return nil, fmt.Errorf("backup: failed to create backup directory: %w", err)
 	}
 
 	now := e.nowFn()
 	archiveName := FormatBackupFilename(backupType, now)
-	archivePath := filepath.Join(e.backupDir, archiveName)
+	archivePath := filepath.Join(settings.dir, archiveName)
 
 	stagingDir, err := os.MkdirTemp("", "anilist-backup-snapshot-*")
 	if err != nil {
@@ -99,7 +118,7 @@ func (e *Engine) Create(ctx context.Context, backupType Type) (*Info, error) {
 		return nil, fmt.Errorf("backup: failed to snapshot database via VACUUM INTO: %w", err)
 	}
 
-	tempZipPath := filepath.Join(e.backupDir, fmt.Sprintf(".%s.tmp", archiveName))
+	tempZipPath := filepath.Join(settings.dir, fmt.Sprintf(".%s.tmp", archiveName))
 	zipFile, err := os.OpenFile(tempZipPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("backup: failed to create temporary zip archive: %w", err)
@@ -192,7 +211,7 @@ func (e *Engine) Create(ctx context.Context, backupType Type) (*Info, error) {
 	}
 
 	// Automatically prune old archives according to rolling retention window
-	_, _ = e.prune(now)
+	_, _ = settings.prune(now)
 
 	return &Info{
 		Filename:  archiveName,
@@ -206,11 +225,15 @@ func (e *Engine) Create(ctx context.Context, backupType Type) (*Info, error) {
 // List returns all valid backup archives currently stored in the backup directory,
 // sorted chronologically with newest first.
 func (e *Engine) List() ([]Info, error) {
-	if _, err := os.Stat(e.backupDir); os.IsNotExist(err) {
+	return e.currentSettings().list()
+}
+
+func (s backupSettings) list() ([]Info, error) {
+	if _, err := os.Stat(s.dir); os.IsNotExist(err) {
 		return []Info{}, nil
 	}
 
-	entries, err := os.ReadDir(e.backupDir)
+	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return nil, fmt.Errorf("backup: failed to read backup directory: %w", err)
 	}
@@ -225,7 +248,7 @@ func (e *Engine) List() ([]Info, error) {
 			continue
 		}
 
-		fullPath := filepath.Join(e.backupDir, name)
+		fullPath := filepath.Join(s.dir, name)
 		info, err := ParseBackupFilename(fullPath)
 		if err != nil {
 			continue
@@ -250,16 +273,16 @@ func (e *Engine) List() ([]Info, error) {
 // Prune deletes backup archives that exceed the rolling retention limit,
 // returning the list of deleted archive file paths.
 func (e *Engine) Prune(_ context.Context) ([]string, error) {
-	return e.prune(e.nowFn())
+	return e.currentSettings().prune(e.nowFn())
 }
 
-func (e *Engine) prune(now time.Time) ([]string, error) {
-	backups, err := e.List()
+func (s backupSettings) prune(now time.Time) ([]string, error) {
+	backups, err := s.list()
 	if err != nil {
 		return nil, err
 	}
 
-	toPrune := SelectBackupsToPrune(backups, e.retention, now)
+	toPrune := SelectBackupsToPrune(backups, s.retention, now)
 	var purged []string
 	for _, item := range toPrune {
 		if err := os.Remove(item.Path); err == nil {

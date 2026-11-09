@@ -9,12 +9,16 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/backup"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/orchestrator"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 )
 
@@ -156,6 +160,78 @@ func TestStagedActions_Validation(t *testing.T) {
 	rejected := resp["rejected"].([]any)
 	if len(rejected) != 0 {
 		t.Errorf("expected 0 rejected for nonexistent ID, got %d", len(rejected))
+	}
+}
+
+func TestApplyStagedReportsPartialProgressAndRejectsDuplicates(t *testing.T) {
+	var calls atomic.Int32
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_ = json.NewEncoder(w).Encode(servarr.Movie{ID: 1})
+	}))
+	t.Cleanup(remote.Close)
+	radarr, err := servarr.NewRadarrClient(remote.URL, "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := newTestStorage(t)
+	if err := db.Write(t.Context(), func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO staged_sync_actions (id, action_type, media_type, title, target_service, payload_json, target_endpoint)
+			VALUES (1, 'ADD_MOVIE', 'MOVIE', 'First', 'RADARR', '{"tmdbId":10}', ''),
+			       (2, 'UNMONITOR_MOVIE', 'MOVIE', 'Second', 'RADARR', '{"movieId":2}', 'http://old.example');
+		`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.NewDefault()
+	cfg.APIKey = "test-key"
+	cfg.TagName = ""
+	orch := orchestrator.New(db, cfg, nil, nil, radarr)
+	handler := NewServer(cfg, "", db, orch, nil).Handler()
+	apply := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/staged/apply", strings.NewReader(body))
+		req.Header.Set("X-Api-Key", cfg.APIKey)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := apply(`{"ids":[1,1]}`); rec.Code != http.StatusBadRequest || calls.Load() != 0 {
+		t.Fatalf("duplicate IDs must fail before sending a request: status=%d body=%s calls=%d", rec.Code, rec.Body, calls.Load())
+	}
+	rec := apply(`{"ids":[1,2]}`)
+	var result struct {
+		Error    string
+		Applied  []int
+		FailedID int `json:"failedId"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusConflict || result.Error == "" || len(result.Applied) != 1 || result.Applied[0] != 1 || result.FailedID != 2 || calls.Load() != 1 {
+		t.Fatalf("expected one applied action and a conflict for the second: status=%d body=%s calls=%d", rec.Code, rec.Body, calls.Load())
+	}
+	if err := db.Read(t.Context(), func(ctx context.Context, q storage.Querier) error {
+		for id, expected := range map[int]string{1: "APPLIED", 2: "PENDING"} {
+			var status string
+			if err := q.QueryRowContext(ctx, "SELECT status FROM staged_sync_actions WHERE id = ?", id).Scan(&status); err != nil {
+				return err
+			}
+			if status != expected {
+				t.Errorf("action %d status = %s, want %s", id, status, expected)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := orch.RejectStagedActions(t.Context(), []int{2, 999}); err == nil {
+		t.Fatal("rejecting a missing action must fail the batch")
+	}
+	// This succeeds only if the failed batch rolled back the rejection of action 2.
+	if err := orch.RejectStagedAction(t.Context(), 2); err != nil {
+		t.Fatalf("reject pending action after rollback: %v", err)
 	}
 }
 

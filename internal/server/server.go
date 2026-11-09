@@ -57,8 +57,13 @@ type Server struct {
 	bindOverride *string
 	handoff      *RestartHandoff
 
+	outboundHTTPClient    *http.Client
+	prepareSync           func(context.Context) error
+	prepareBackupSettings func(current, next config.Config) (func(), error)
+
 	httpServer  *http.Server
 	httpsServer *http.Server
+	serving     sync.WaitGroup
 
 	boundBindAddress string
 	boundPort        int
@@ -84,6 +89,11 @@ func (s *Server) SetScheduler(scheduled *scheduler.Scheduler) {
 	if scheduled != nil {
 		scheduled.UpdateConfig(*s.cfg)
 	}
+}
+
+// SetBackupSettingsPreparation installs backup validation and activation before serving requests.
+func (s *Server) SetBackupSettingsPreparation(prepare func(current, next config.Config) (func(), error)) {
+	s.prepareBackupSettings = prepare
 }
 
 // NewServer creates a new Server instance.
@@ -353,20 +363,21 @@ func (s *Server) Start() error {
 		return fmt.Errorf("server: failed to bind HTTP listener on %s: %w", httpAddr, err)
 	}
 
-	go func() {
+	s.serving.Go(func() {
 		if serveErr := s.httpServer.Serve(httpListener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			select {
 			case s.errChan <- fmt.Errorf("http serve error: %w", serveErr):
 			default:
 			}
 		}
-	}()
+	})
 
 	if cfg.EnableSsl {
 		httpsAddr := net.JoinHostPort(cfg.BindAddress, fmt.Sprint(cfg.SslPort))
 		cert, certErr := tls.LoadX509KeyPair(cfg.SslCertPath, cfg.SslKeyPath)
 		if certErr != nil {
 			_ = s.httpServer.Close()
+			s.serving.Wait()
 			return fmt.Errorf("server: failed to load SSL certificates: %w", certErr)
 		}
 
@@ -387,17 +398,18 @@ func (s *Server) Start() error {
 		httpsListener, listenErr := tls.Listen("tcp", httpsAddr, tlsConfig)
 		if listenErr != nil {
 			_ = s.httpServer.Close()
+			s.serving.Wait()
 			return fmt.Errorf("server: failed to bind HTTPS listener on %s: %w", httpsAddr, listenErr)
 		}
 
-		go func() {
+		s.serving.Go(func() {
 			if serveErr := s.httpsServer.Serve(httpsListener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 				select {
 				case s.errChan <- fmt.Errorf("https serve error: %w", serveErr):
 				default:
 				}
 			}
-		}()
+		})
 	}
 
 	return nil
@@ -422,6 +434,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("https shutdown: %w", err))
 		}
 	}
+	// Serve closes its listener even if shutdown starts before Serve registers it.
+	s.serving.Wait()
 	done := make(chan struct{})
 	go func() { s.work.Wait(); close(done) }()
 	select {
@@ -459,6 +473,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/v1/config", s.handleGetConfig)
 	mux.HandleFunc("PUT /api/v1/config", s.handleUpdateConfig)
+	mux.HandleFunc("POST /api/v1/anilist/test", s.handleTestAniList)
+	mux.HandleFunc("POST /api/v1/servarr/test", s.handleTestServarr)
 
 	mux.HandleFunc("POST /api/v1/sync/start", s.handleStartSync)
 	mux.HandleFunc("GET /api/v1/sync/status", s.handleGetSyncStatus)

@@ -17,6 +17,8 @@ import type {
   LibraryItem,
   LibraryStats,
   FilesystemResponse,
+  AniListProfile,
+  ServarrConnectionOptions,
 } from './types';
 
 import { writable } from 'svelte/store';
@@ -115,6 +117,8 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   if (!res.ok) {
     let errorMessage = `Request failed with status ${res.status}`;
     let setupRequired: boolean | undefined = undefined;
+    let applied: number[] | undefined;
+    let failedId: number | undefined;
     try {
       const errData = await res.json();
       if (errData && errData.error) {
@@ -123,13 +127,25 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
       if (errData && typeof errData.setupRequired === 'boolean') {
         setupRequired = errData.setupRequired;
       }
+      if (Array.isArray(errData?.applied)) {
+        applied = errData.applied;
+      }
+      if (typeof errData?.failedId === 'number') {
+        failedId = errData.failedId;
+      }
     } catch {
       // not JSON
     }
-    const error = new Error(errorMessage) as Error & { status: number; setupRequired?: boolean };
+    const error = new Error(errorMessage) as Error & { status: number; setupRequired?: boolean; applied?: number[]; failedId?: number };
     error.status = res.status;
     if (setupRequired !== undefined) {
       error.setupRequired = setupRequired;
+    }
+    if (applied !== undefined) {
+      error.applied = applied;
+    }
+    if (failedId !== undefined) {
+      error.failedId = failedId;
     }
     throw error;
   }
@@ -225,8 +241,8 @@ export const api = {
     };
   },
 
-  async startSync(): Promise<{ status: string }> {
-    return request('/api/v1/sync/start', { method: 'POST' });
+  async startSync(dryRun = false): Promise<{ status: string }> {
+    return request(`/api/v1/sync/start${dryRun ? '?dryRun=true' : ''}`, { method: 'POST' });
   },
 
   async getSyncHistory(): Promise<SyncHistoryItem[]> {
@@ -357,6 +373,14 @@ export const api = {
   // Config
   async getConfig(): Promise<AppConfig> {
     return request('/api/v1/config');
+  },
+
+  async testAniList(username: string): Promise<AniListProfile> {
+    return request('/api/v1/anilist/test', { method: 'POST', body: JSON.stringify({ username }) });
+  },
+
+  async testServarr(type: 'sonarr' | 'radarr', baseUrl: string, apiKey: string): Promise<ServarrConnectionOptions> {
+    return request('/api/v1/servarr/test', { method: 'POST', body: JSON.stringify({ type, baseUrl, apiKey }) });
   },
 
   async updateConfig(config: Partial<AppConfig>): Promise<UpdateConfigResponse> {
