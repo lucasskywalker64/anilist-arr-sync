@@ -212,6 +212,27 @@ func TestApplyStagedReportsPartialProgressAndRejectsDuplicates(t *testing.T) {
 	if rec.Code != http.StatusConflict || result.Error == "" || len(result.Applied) != 1 || result.Applied[0] != 1 || result.FailedID != 2 || calls.Load() != 1 {
 		t.Fatalf("expected one applied action and a conflict for the second: status=%d body=%s calls=%d", rec.Code, rec.Body, calls.Load())
 	}
+	if err := db.Read(t.Context(), func(ctx context.Context, q storage.Querier) error {
+		for id, expected := range map[int]string{1: "APPLIED", 2: "PENDING"} {
+			var status string
+			if err := q.QueryRowContext(ctx, "SELECT status FROM staged_sync_actions WHERE id = ?", id).Scan(&status); err != nil {
+				return err
+			}
+			if status != expected {
+				t.Errorf("action %d status = %s, want %s", id, status, expected)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := orch.RejectStagedActions(t.Context(), []int{2, 999}); err == nil {
+		t.Fatal("rejecting a missing action must fail the batch")
+	}
+	// This succeeds only if the failed batch rolled back the rejection of action 2.
+	if err := orch.RejectStagedAction(t.Context(), 2); err != nil {
+		t.Fatalf("reject pending action after rollback: %v", err)
+	}
 }
 
 func TestConcurrentSetup_SingleAdmin(t *testing.T) {

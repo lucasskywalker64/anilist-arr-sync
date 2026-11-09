@@ -21,6 +21,8 @@ import (
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/backup"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/fribb"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 )
 
 type runtimeTransportFunc func(*http.Request) (*http.Response, error)
@@ -349,6 +351,15 @@ func TestOneShotSyncSummaryAndErrors(t *testing.T) {
 	if !strings.Contains(out.String(), "SUCCESS: scanned=0") {
 		t.Fatalf("missing summary: %s", out.String())
 	}
+	db, err := storage.Open(filepath.Join(dir, cfg.DatabasePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping, mappingErr := fribb.NewLoader(db).GetEntry(t.Context(), 1)
+	closeErr := db.Close()
+	if mappingErr != nil || mapping.TVDBID == nil || *mapping.TVDBID != 2 || closeErr != nil {
+		t.Fatalf("persisted mapping: %+v, read error=%v, close error=%v", mapping, mappingErr, closeErr)
+	}
 
 	emptyDir := t.TempDir()
 	if err := config.Save(filepath.Join(emptyDir, "config.xml"), cfg); err != nil {
@@ -358,6 +369,9 @@ func TestOneShotSyncSummaryAndErrors(t *testing.T) {
 	out.Reset()
 	if err := run(t.Context(), []string{"--data-dir", emptyDir, "--sync"}, &out); err == nil || !strings.Contains(err.Error(), "mapping download contained no entries") {
 		t.Fatalf("CLI sync without cached or downloaded mappings: %v", err)
+	}
+	if !strings.Contains(out.String(), "FAILED:") || strings.Contains(out.String(), "SUCCESS:") {
+		t.Fatalf("empty download must print a failure summary: %s", out.String())
 	}
 	emptyMappings.Store(false)
 

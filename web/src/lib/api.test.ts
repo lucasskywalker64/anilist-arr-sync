@@ -83,6 +83,7 @@ describe('API Client', () => {
       message: 'Endpoint changed',
       status: 409,
       applied: [1],
+      failedId: 2,
     });
   });
 

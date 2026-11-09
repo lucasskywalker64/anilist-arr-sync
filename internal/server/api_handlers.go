@@ -1029,15 +1029,20 @@ func (s *Server) handleRejectStaged(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rejected := []int{}
-	for _, id := range req.IDs {
-		if s.orch != nil {
-			if err := s.orch.RejectStagedAction(r.Context(), id); err != nil {
-				log.Printf("reject staged action %d failed: %v", id, err)
-				s.writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("reject staged action %d failed", id))
-				return
+	if s.orch != nil {
+		var err error
+		rejected, err = s.orch.RejectStagedActions(r.Context(), req.IDs)
+		if err != nil {
+			if errors.Is(err, orchestrator.ErrSyncInProgress) {
+				s.writeJSONError(w, http.StatusConflict, err.Error())
+			} else {
+				log.Printf("reject staged actions failed: %v", err)
+				s.writeJSONError(w, http.StatusInternalServerError, "reject staged actions failed")
 			}
-			rejected = append(rejected, id)
-		} else if s.db != nil {
+			return
+		}
+	} else if s.db != nil {
+		for _, id := range req.IDs {
 			err := s.db.Write(r.Context(), func(ctx context.Context, tx *sql.Tx) error {
 				res, execErr := tx.ExecContext(ctx, "UPDATE staged_sync_actions SET status = 'REJECTED' WHERE id = ? AND status = 'PENDING';", id)
 				if execErr != nil {

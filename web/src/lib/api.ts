@@ -118,6 +118,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     let errorMessage = `Request failed with status ${res.status}`;
     let setupRequired: boolean | undefined = undefined;
     let applied: number[] | undefined;
+    let failedId: number | undefined;
     try {
       const errData = await res.json();
       if (errData && errData.error) {
@@ -129,16 +130,22 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
       if (Array.isArray(errData?.applied)) {
         applied = errData.applied;
       }
+      if (typeof errData?.failedId === 'number') {
+        failedId = errData.failedId;
+      }
     } catch {
       // not JSON
     }
-    const error = new Error(errorMessage) as Error & { status: number; setupRequired?: boolean; applied?: number[] };
+    const error = new Error(errorMessage) as Error & { status: number; setupRequired?: boolean; applied?: number[]; failedId?: number };
     error.status = res.status;
     if (setupRequired !== undefined) {
       error.setupRequired = setupRequired;
     }
     if (applied !== undefined) {
       error.applied = applied;
+    }
+    if (failedId !== undefined) {
+      error.failedId = failedId;
     }
     throw error;
   }

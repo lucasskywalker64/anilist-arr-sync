@@ -21,6 +21,7 @@
   let actionLoading = false;
   let errorMsg = '';
   let successMsg = '';
+  let failedId: number | undefined;
 
   $: if (stagedActions) {
     const validIds = new Set(stagedActions.map((a) => a.id));
@@ -80,6 +81,7 @@
     actionLoading = true;
     errorMsg = '';
     successMsg = '';
+    failedId = undefined;
     let applied: number[];
     let failure = '';
     try {
@@ -88,6 +90,7 @@
       successMsg = `Applied ${res.appliedCount} staged action(s).`;
     } catch (e: any) {
       applied = e.applied ?? [];
+      failedId = e.failedId;
       failure = e.message || 'Failed to apply staged actions';
       if (applied.length > 0) {
         successMsg = `Applied ${applied.length} staged action(s) before the error.`;
@@ -215,7 +218,7 @@
           </thead>
           <tbody>
             {#each stagedActions as action (action.id)}
-              <tr class={selectedIds.has(action.id) ? 'selectedRow' : ''}>
+              <tr class={selectedIds.has(action.id) ? 'selectedRow' : ''} class:failedRow={action.id === failedId}>
                 <td style="text-align: center;">
                   <CheckInput
                     checked={selectedIds.has(action.id)}
@@ -236,7 +239,10 @@
                     {action.mediaType}
                   </Label>
                 </td>
-                <td class="boldTitle">{action.title}</td>
+                <td class="boldTitle">
+                  {action.title}
+                  {#if action.id === failedId}<Label kind="danger" size="small">Apply failed</Label>{/if}
+                </td>
                 <td>
                   <span class="serviceBadge">{action.targetService || action.service || '-'}</span>
                 </td>
@@ -290,6 +296,10 @@
 </div>
 
 <style>
+  .failedRow {
+    box-shadow: inset 3px 0 var(--dangerColor);
+  }
+
   .viewContainer {
     display: flex;
     flex-direction: column;

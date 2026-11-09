@@ -709,22 +709,45 @@ func (o *Orchestrator) validateEpisodeDeletion(ctx context.Context, seriesID int
 
 // RejectStagedAction marks a pending staged action as rejected.
 func (o *Orchestrator) RejectStagedAction(ctx context.Context, id int) error {
-	return o.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		res, execErr := tx.ExecContext(ctx, `
+	_, err := o.RejectStagedActions(ctx, []int{id})
+	return err
+}
+
+// RejectStagedActions rejects a batch atomically while reserving Servarr work.
+func (o *Orchestrator) RejectStagedActions(ctx context.Context, ids []int) ([]int, error) {
+	if !o.workMu.TryLock() {
+		return nil, ErrSyncInProgress
+	}
+	defer o.workMu.Unlock()
+	err := o.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		for _, id := range ids {
+			if err := rejectStagedAction(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append([]int{}, ids...), nil
+}
+
+func rejectStagedAction(ctx context.Context, tx *sql.Tx, id int) error {
+	res, execErr := tx.ExecContext(ctx, `
 			UPDATE staged_sync_actions
 			SET status = 'REJECTED'
 			WHERE id = ? AND status = 'PENDING';
 		`, id)
-		if execErr != nil {
-			return execErr
-		}
-		rows, rowsErr := res.RowsAffected()
-		if rowsErr != nil {
-			return rowsErr
-		}
-		if rows == 0 {
-			return fmt.Errorf("staged action %d not found or not pending", id)
-		}
-		return nil
-	})
+	if execErr != nil {
+		return execErr
+	}
+	rows, rowsErr := res.RowsAffected()
+	if rowsErr != nil {
+		return rowsErr
+	}
+	if rows == 0 {
+		return fmt.Errorf("staged action %d not found or not pending", id)
+	}
+	return nil
 }

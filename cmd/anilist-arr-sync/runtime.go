@@ -146,7 +146,8 @@ func (r *appRuntime) syncOnce(ctx context.Context, out io.Writer) error {
 		return errors.New("sync requires an AniList username and a Servarr URL/API key")
 	}
 	if err := r.refreshMappings(ctx); err != nil {
-		return fmt.Errorf("fribb mappings: %w", err)
+		_, writeErr := fmt.Fprintf(out, "FAILED: could not prepare mappings: %v\n", err)
+		return errors.Join(fmt.Errorf("fribb mappings: %w", err), writeErr)
 	}
 	report, err := r.orch.Sync(ctx, orchestrator.TriggerCLI)
 	if report != nil {

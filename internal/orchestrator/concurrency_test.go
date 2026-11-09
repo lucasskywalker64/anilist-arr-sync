@@ -130,6 +130,12 @@ func TestApplyBatchReservesSyncUntilAllActionsFinish(t *testing.T) {
 		if ids, err := o.ApplyStagedActions(cancelled, []int{1, 2}); !errors.Is(err, orchestrator.ErrSyncInProgress) || len(ids) != 0 {
 			t.Errorf("concurrent batch during action %d: applied=%v err=%v", i+1, ids, err)
 		}
+		if ids, err := o.RejectStagedActions(ctx, []int{2, 1}); !errors.Is(err, orchestrator.ErrSyncInProgress) || len(ids) != 0 {
+			t.Errorf("rejection during action %d: rejected=%v err=%v", i+1, ids, err)
+		}
+		if err := o.RejectStagedAction(ctx, i+1); !errors.Is(err, orchestrator.ErrSyncInProgress) {
+			t.Errorf("single rejection during action %d: %v", i+1, err)
+		}
 		release <- struct{}{}
 	}
 	if result := <-done; result.err != nil || !slices.Equal(result.ids, []int{1, 2}) {
