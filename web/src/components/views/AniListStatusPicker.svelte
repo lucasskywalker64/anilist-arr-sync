@@ -21,6 +21,7 @@
 
 <script lang="ts">
   export let label: string;
+  export let showLegend = true;
   export let value: string | undefined = undefined;
 
   $: selected = selectedStatuses(value);
@@ -31,8 +32,8 @@
   }
 </script>
 
-<fieldset>
-  <legend>{label}</legend>
+<fieldset class:aligned={!showLegend} aria-label={showLegend ? undefined : label}>
+  {#if showLegend}<legend>{label}</legend>{/if}
   <div class="options">
     {#each statuses as status (status.value)}
       {@const checked = selected.includes(status)}
@@ -47,7 +48,10 @@
 
 <style>
   fieldset { border: 0; margin: 16px 0; padding: 0; min-width: 0; }
+  .aligned { margin: 0; padding: 8px 0; }
+  .aligned input { margin: 0; }
   legend { font-weight: 600; margin-bottom: 8px; padding: 0; }
   .options { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+  .aligned .options { column-gap: 10px; }
   label { display: flex; align-items: center; gap: 6px; }
 </style>

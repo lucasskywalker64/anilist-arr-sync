@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -51,6 +52,9 @@ func (t StagedActionType) usesLocalIDs() bool {
 
 // ErrStagedEndpointChanged indicates that an action's original endpoint cannot be verified.
 var ErrStagedEndpointChanged = errors.New("staged action endpoint changed or is unknown. Reject it and run a new dry run")
+
+// ErrDuplicateStagedAction indicates that a batch repeats an action ID.
+var ErrDuplicateStagedAction = errors.New("duplicate staged action ID")
 
 // StagedActionStatus represents the execution lifecycle of a staged action.
 type StagedActionStatus string
@@ -143,6 +147,20 @@ func (o *Orchestrator) servarrEndpoint(service string) string {
 	return ""
 }
 
+func stagedEndpointKey(endpoint string) string {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint
+	}
+	// An IPv6 zone names an interface, so preserve its case.
+	host, zone, hasZone := strings.Cut(parsed.Host, "%")
+	parsed.Host = strings.ToLower(host)
+	if hasZone {
+		parsed.Host += "%" + zone
+	}
+	return parsed.String()
+}
+
 // stageAction persists a planned Servarr action and skips identical pending actions at the same endpoint.
 func (o *Orchestrator) stageAction(
 	ctx context.Context,
@@ -158,20 +176,29 @@ func (o *Orchestrator) stageAction(
 	}
 	var endpoint string
 	if actionType.usesLocalIDs() {
-		endpoint = o.servarrEndpoint(targetService)
+		endpoint = stagedEndpointKey(o.servarrEndpoint(targetService))
 	}
 
 	return o.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		var exists int
-		checkErr := tx.QueryRowContext(ctx, `
-			SELECT 1 FROM staged_sync_actions
-			WHERE action_type = ? AND target_service = ? AND target_endpoint = ? AND payload_json = ? AND status = 'PENDING'
-			LIMIT 1;
-		`, string(actionType), targetService, endpoint, string(payloadBytes)).Scan(&exists)
-		if checkErr == nil {
-			return nil
-		} else if !errors.Is(checkErr, sql.ErrNoRows) {
-			return checkErr
+		rows, err := tx.QueryContext(ctx, `
+			SELECT target_endpoint FROM staged_sync_actions
+			WHERE action_type = ? AND target_service = ? AND payload_json = ? AND status = 'PENDING';
+		`, string(actionType), targetService, string(payloadBytes))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var storedEndpoint string
+			if err := rows.Scan(&storedEndpoint); err != nil {
+				return err
+			}
+			if stagedEndpointKey(storedEndpoint) == endpoint {
+				return nil
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return err
 		}
 
 		_, execErr := tx.ExecContext(ctx, `
@@ -234,6 +261,13 @@ func (o *Orchestrator) ApplyStagedActions(ctx context.Context, ids []int) ([]int
 	if len(ids) == 0 {
 		return applied, nil
 	}
+	seen := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		if _, exists := seen[id]; exists {
+			return applied, fmt.Errorf("%w %d", ErrDuplicateStagedAction, id)
+		}
+		seen[id] = struct{}{}
+	}
 	if !o.workMu.TryLock() {
 		return applied, ErrSyncInProgress
 	}
@@ -268,7 +302,7 @@ func (o *Orchestrator) applyStagedAction(ctx context.Context, id int) error {
 		}
 		return fmt.Errorf("query staged action %d: %w", id, err)
 	}
-	if action.ActionType.usesLocalIDs() && (endpoint == "" || endpoint != o.servarrEndpoint(action.TargetService)) {
+	if action.ActionType.usesLocalIDs() && (endpoint == "" || stagedEndpointKey(endpoint) != stagedEndpointKey(o.servarrEndpoint(action.TargetService))) {
 		return ErrStagedEndpointChanged
 	}
 

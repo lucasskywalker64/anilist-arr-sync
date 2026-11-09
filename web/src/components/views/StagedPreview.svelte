@@ -75,19 +75,30 @@
     }
   }
 
-  async function applySelected() {
-    if (selectedIds.size === 0 || actionLoading) return;
+  async function applyActions(ids: number[]) {
+    if (ids.length === 0 || actionLoading) return;
     actionLoading = true;
     errorMsg = '';
     successMsg = '';
+    let applied: number[];
+    let failure = '';
     try {
-      const ids = Array.from(selectedIds);
       const res = await api.applyStaged(ids);
+      applied = res.applied ?? ids;
       successMsg = `Applied ${res.appliedCount} staged action(s).`;
-      selectedIds = new Set();
-      await loadData();
     } catch (e: any) {
-      errorMsg = e.message || 'Failed to apply staged actions';
+      applied = e.applied ?? [];
+      failure = e.message || 'Failed to apply staged actions';
+      if (applied.length > 0) {
+        successMsg = `Applied ${applied.length} staged action(s) before the error.`;
+      }
+    }
+    const appliedIds = new Set(applied);
+    stagedActions = stagedActions.filter(action => !appliedIds.has(action.id));
+    selectedIds = new Set([...selectedIds].filter(id => !appliedIds.has(id)));
+    try {
+      await loadData();
+      if (failure) errorMsg = errorMsg ? `${failure} ${errorMsg}` : failure;
     } finally {
       actionLoading = false;
     }
@@ -106,22 +117,6 @@
       await loadData();
     } catch (e: any) {
       errorMsg = e.message || 'Failed to reject staged actions';
-    } finally {
-      actionLoading = false;
-    }
-  }
-
-  async function applySingle(id: number) {
-    if (actionLoading) return;
-    actionLoading = true;
-    errorMsg = '';
-    try {
-      await api.applyStaged([id]);
-      selectedIds.delete(id);
-      selectedIds = new Set(selectedIds);
-      await loadData();
-    } catch (e: any) {
-      errorMsg = e.message || 'Failed to apply action';
     } finally {
       actionLoading = false;
     }
@@ -251,7 +246,7 @@
                 <td class="timestamp">{new Date(action.createdAt).toLocaleTimeString()}</td>
                 <td style="text-align: right;">
                   <div class="rowActions">
-                    <Button kind="success" size="small" on:click={() => applySingle(action.id)} disabled={actionLoading}>
+                    <Button kind="success" size="small" on:click={() => applyActions([action.id])} disabled={actionLoading}>
                       <Check size={12} /> Apply
                     </Button>
                     <Button kind="danger" size="small" on:click={() => rejectSingle(action.id)} disabled={actionLoading}>
@@ -274,7 +269,7 @@
           kind="success"
           size="medium"
           disabled={selectedCount === 0 || actionLoading}
-          on:click={applySelected}
+          on:click={() => applyActions([...selectedIds])}
         >
           <Check size={16} /> Approve Selected
         </Button>

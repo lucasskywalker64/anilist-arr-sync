@@ -168,8 +168,21 @@ func TestApplyStagedActionRequiresOriginalEndpoint(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	original := strings.Replace(o.radarr.BaseURL(), "127.0.0.1", "localhost", 1)
+	radarr, err := servarr.NewRadarrClient(original, "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.UpdateServarrConfig(*o.cfg, o.sonarr, radarr)
 	stage()
-	original := o.radarr.BaseURL()
+	if err := o.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "UPDATE staged_sync_actions SET target_endpoint = ?", strings.Replace(original, "localhost", "LOCALHOST", 1))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stage()
+
 	replacement, err := servarr.NewRadarrClient(original+"/different-library", "key")
 	if err != nil {
 		t.Fatal(err)
@@ -182,6 +195,14 @@ func TestApplyStagedActionRequiresOriginalEndpoint(t *testing.T) {
 	}
 	if err := o.ApplyStagedAction(ctx, actions[0].ID); !errors.Is(err, ErrStagedEndpointChanged) || len(library.calls) != 0 {
 		t.Fatalf("apply with a different endpoint: calls=%v err=%v", library.calls, err)
+	}
+	caseChangedPath, err := servarr.NewRadarrClient(original+"/Different-Library", "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.UpdateServarrConfig(*o.cfg, o.sonarr, caseChangedPath)
+	if err := o.ApplyStagedAction(ctx, actions[1].ID); !errors.Is(err, ErrStagedEndpointChanged) || len(library.calls) != 0 {
+		t.Fatalf("apply with a case change in the path: calls=%v err=%v", library.calls, err)
 	}
 	if err := o.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, "UPDATE staged_sync_actions SET target_endpoint = '' WHERE id = ?", actions[1].ID)

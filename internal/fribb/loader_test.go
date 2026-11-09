@@ -2,6 +2,7 @@ package fribb
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -585,10 +586,16 @@ func TestLoader_Sync_InvalidRefreshLeavesLiveTableIntact(t *testing.T) {
 	}
 	forceNotModified.Store(false)
 
-	// Initial sync
-	_, err = loader.Sync(ctx)
-	if err != nil {
-		t.Fatalf("initial sync failed: %v", err)
+	// Old loaders could save an ETag even when no entries were published.
+	if err := db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "INSERT INTO fribb_meta (key, etag, entry_count) VALUES (?, ?, 0)", DefaultMetaKey, v1ETag)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := loader.Sync(ctx)
+	if err != nil || result.NotModified || result.EntryCount != 3 {
+		t.Fatalf("refresh must download mappings despite the legacy ETag: result=%+v err=%v", result, err)
 	}
 
 	// Update upstream to return corrupt/truncated payload midway through

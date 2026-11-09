@@ -307,9 +307,14 @@ func TestRuntimeRepeatedRestartReloadsConfig(t *testing.T) {
 
 func TestOneShotSyncSummaryAndErrors(t *testing.T) {
 	var fail atomic.Bool
+	var emptyMappings atomic.Bool
 	fixture := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == "GET" {
+			if emptyMappings.Load() {
+				_, _ = io.WriteString(w, `[]`)
+				return
+			}
 			_, _ = io.WriteString(w, `[{"anilist_id":1,"tvdb_id":2,"type":"TV"}]`)
 			return
 		}
@@ -344,6 +349,18 @@ func TestOneShotSyncSummaryAndErrors(t *testing.T) {
 	if !strings.Contains(out.String(), "SUCCESS: scanned=0") {
 		t.Fatalf("missing summary: %s", out.String())
 	}
+
+	emptyDir := t.TempDir()
+	if err := config.Save(filepath.Join(emptyDir, "config.xml"), cfg); err != nil {
+		t.Fatal(err)
+	}
+	emptyMappings.Store(true)
+	out.Reset()
+	if err := run(t.Context(), []string{"--data-dir", emptyDir, "--sync"}, &out); err == nil || !strings.Contains(err.Error(), "mapping download contained no entries") {
+		t.Fatalf("CLI sync without cached or downloaded mappings: %v", err)
+	}
+	emptyMappings.Store(false)
+
 	fail.Store(true)
 	out.Reset()
 	if err := run(t.Context(), []string{"--data-dir", dir, "--sync"}, &out); err == nil {

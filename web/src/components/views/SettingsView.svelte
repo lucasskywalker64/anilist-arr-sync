@@ -896,9 +896,18 @@
             />
           </FormGroup>
 
-          <AniListStatusPicker label="Series lists" bind:value={formConfig.aniListTvStatus} />
-          <AniListStatusPicker label="Movie lists" bind:value={formConfig.aniListMovieStatus} />
-          <p>Dropped titles are eligible for cleanup only. Completed and dropped cleanup rules still apply.</p>
+          <div class="aniListLists">
+            <FormGroup label="Series lists" isDirty={isFieldDirty("aniListTvStatus")}>
+              <AniListStatusPicker label="Series lists" showLegend={false} bind:value={formConfig.aniListTvStatus} />
+            </FormGroup>
+            <FormGroup
+              label="Movie lists"
+              helpText="For both lists, dropped titles are eligible for cleanup only. Completed and dropped cleanup rules still apply."
+              isDirty={isFieldDirty("aniListMovieStatus")}
+            >
+              <AniListStatusPicker label="Movie lists" showLegend={false} bind:value={formConfig.aniListMovieStatus} />
+            </FormGroup>
+          </div>
 
           <FormGroup
             label="Sync Interval (Hours)"
@@ -1461,6 +1470,10 @@
 
   .innerContentBody {
     padding: var(--pageContentBodyPadding);
+  }
+
+  .aniListLists {
+    padding-block: 8px 12px;
   }
 
   .stickySaveText {
