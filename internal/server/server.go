@@ -468,6 +468,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/ignored/{id}", s.handleDeleteIgnored)
 
 	mux.HandleFunc("GET /api/v1/overrides", s.handleListOverrides)
+	mux.HandleFunc("GET /api/v1/sonarr/specials/{tvdbId}", s.handleSpecialEpisodes)
 	mux.HandleFunc("POST /api/v1/overrides", s.handleCreateOverride)
 	mux.HandleFunc("DELETE /api/v1/overrides/{id}", s.handleDeleteOverride)
 

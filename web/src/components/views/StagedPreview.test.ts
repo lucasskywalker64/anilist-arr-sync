@@ -21,6 +21,17 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
+it('shows the Specials episode numbers in the staged preview', async () => {
+  vi.mocked(api.getStaged).mockResolvedValue([{
+    id: 1, title: 'Narumi no Heijitsu', actionType: 'MONITOR_SEASON', mediaType: 'SERIES',
+    status: 'PENDING', createdAt: '', payloadJson: JSON.stringify({
+      seriesId: 10, seasonNumber: 0, episodeIds: [104, 105, 106, 107], episodeNumbers: [4, 5, 6, 7],
+    }),
+  }]);
+  component = new StagedPreview({ target: document.body });
+  await vi.waitFor(() => expect(document.querySelector('tbody')?.textContent).toContain('Specials (Season 0), episodes 4, 5, 6, 7'));
+});
+
 it('marks the failed row after refreshing a partially applied batch', async () => {
   const actions = [1, 2, 3].map(id => ({
     id, title: `Movie ${id}`, actionType: 'ADD_MOVIE', mediaType: 'MOVIE',

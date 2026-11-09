@@ -26,6 +26,8 @@
     tmdbId: string;
     seasons: string;
     titleOverride: string;
+    episodeNumbers?: number[];
+    specialEpisodes?: { episodeNumber: number; title: string }[];
   }
   let formState: Record<number, ItemState> = {};
   let failedImages = new Set<number>();
@@ -90,6 +92,7 @@
     formState[itemId].tvdbId = candidate.tvdbId ? String(candidate.tvdbId) : '';
     formState[itemId].tmdbId = candidate.tmdbId ? String(candidate.tmdbId) : '';
     formState[itemId].seasons = '1';
+    clearEpisodes(itemId);
     if (candidate.title) {
       formState[itemId].titleOverride = candidate.title;
     }
@@ -129,6 +132,7 @@
         tmdbId: tmdbStr ? parseInt(tmdbStr, 10) : null,
         seasons: seasonsStr || '1',
         titleOverride: titleStr || undefined,
+        episodeNumbers: state.mediaType === 'SERIES' && seasonsStr === '0' ? state.episodeNumbers : [],
       });
 
       successMsg = `Resolved "${item.titleRomaji}" and saved manual override.`;
@@ -138,6 +142,35 @@
     } finally {
       actionLoading = false;
     }
+  }
+
+  function clearEpisodes(itemId: number) {
+    formState[itemId].episodeNumbers = [];
+    formState[itemId].specialEpisodes = undefined;
+  }
+
+  async function loadSpecials(itemId: number) {
+    const state = formState[itemId];
+    const tvdbId = Number(state.tvdbId);
+    state.seasons = '0';
+    clearEpisodes(itemId);
+    actionLoading = true;
+    errorMsg = '';
+    try {
+      state.specialEpisodes = await api.getSpecialEpisodes(tvdbId);
+      if (state.specialEpisodes.length === 0) errorMsg = 'No Specials episodes found in Sonarr.';
+    } catch (e: any) {
+      errorMsg = e.message || 'Failed to load Specials episodes';
+    } finally {
+      formState = { ...formState };
+      actionLoading = false;
+    }
+  }
+
+  function toggleEpisode(itemId: number, number: number) {
+    const selected = formState[itemId].episodeNumbers ?? [];
+    formState[itemId].episodeNumbers = selected.includes(number)
+      ? selected.filter(value => value !== number) : [...selected, number].sort((a, b) => a - b);
   }
 
   async function handleIgnore(item: ReviewItem) {
@@ -290,6 +323,7 @@
                           id="media-type-{item.id}"
                           class="inlineInput"
                           bind:value={formState[item.id].mediaType}
+                          on:change={() => clearEpisodes(item.id)}
                           disabled={actionLoading}
                         >
                           <option value="SERIES">SERIES</option>
@@ -305,6 +339,7 @@
                           class="inlineInput"
                           placeholder="TVDB ID"
                           bind:value={formState[item.id].tvdbId}
+                          on:input={() => clearEpisodes(item.id)}
                           disabled={actionLoading}
                         />
                       </div>
@@ -329,8 +364,12 @@
                           class="inlineInput"
                           placeholder="1"
                           bind:value={formState[item.id].seasons}
+                          on:input={() => clearEpisodes(item.id)}
                           disabled={actionLoading}
                         />
+                        {#if formState[item.id].mediaType === 'SERIES'}
+                          <button type="button" disabled={actionLoading || !formState[item.id].tvdbId} on:click={() => loadSpecials(item.id)}>Specials (Season 0)</button>
+                        {/if}
                       </div>
 
                       <div class="inputCol flexGrow">
@@ -346,11 +385,23 @@
                       </div>
                     </div>
 
+                    {#if formState[item.id].mediaType === 'SERIES' && String(formState[item.id].seasons) === '0'}
+                      <fieldset class="specialEpisodes">
+                        <legend>Specials (Season 0): select at least one episode</legend>
+                        {#each formState[item.id].specialEpisodes ?? [] as episode}
+                          <label>
+                            <input type="checkbox" checked={formState[item.id].episodeNumbers?.includes(episode.episodeNumber) ?? false} disabled={actionLoading} on:change={() => toggleEpisode(item.id, episode.episodeNumber)} />
+                            Episode {episode.episodeNumber}: {episode.title}
+                          </label>
+                        {/each}
+                      </fieldset>
+                    {/if}
+
                     <div class="buttonRow">
                       <Button
                         kind="success"
                         size="medium"
-                        disabled={actionLoading}
+                        disabled={actionLoading || (formState[item.id].mediaType === 'SERIES' && String(formState[item.id].seasons) === '0' && !formState[item.id].episodeNumbers?.length)}
                         on:click={() => handleResolve(item)}
                       >
                         <Check size={16} /> Resolve & Save Override
@@ -377,6 +428,14 @@
 </div>
 
 <style>
+  .specialEpisodes {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 12px 0;
+    border: 1px solid var(--borderColor);
+  }
+
   .viewContainer {
     display: flex;
     flex-direction: column;

@@ -330,6 +330,10 @@ export const api = {
     });
   },
 
+  async getSpecialEpisodes(tvdbId: number): Promise<{ episodeNumber: number; title: string }[]> {
+    return request(`/api/v1/sonarr/specials/${tvdbId}`);
+  },
+
   async deleteOverride(id: number): Promise<{ status: string }> {
     return request(`/api/v1/overrides/${id}`, {
       method: 'DELETE',

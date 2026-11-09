@@ -29,6 +29,7 @@ export interface OverrideItem {
   tvdbId?: number | null;
   tmdbId?: number | null;
   seasons: string;
+  episodeNumbers?: number[];
   titleOverride?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -215,6 +216,7 @@ export interface MappingResolution {
   tvdbId?: number | null;
   tmdbId?: number | null;
   seasons?: string;
+  episodeNumbers?: number[];
   titleOverride?: string;
 }
 
