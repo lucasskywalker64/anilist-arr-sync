@@ -10,26 +10,26 @@ import (
 func TestFormatBackupFilename(t *testing.T) {
 	t.Parallel()
 
-	ts := time.Date(2026, 10, 9, 23, 15, 30, 0, time.UTC)
+	ts := time.Date(2026, 10, 10, 1, 15, 30, 0, time.FixedZone("UTC+2", 2*60*60))
 	tests := []struct {
-		name       string
-		backupType backup.Type
-		expected   string
+		name     string
+		version  string
+		expected string
 	}{
 		{
-			name:       "scheduled backup",
-			backupType: backup.TypeScheduled,
-			expected:   "anilist-arr-sync_backup_scheduled_2026.10.09_23.15.30.zip",
+			name:     "release version",
+			version:  "1.2.3",
+			expected: "anilist-arr-sync_backup_v1.2.3_2026.10.09_23.15.30.zip",
 		},
 		{
-			name:       "manual backup",
-			backupType: backup.TypeManual,
-			expected:   "anilist-arr-sync_backup_manual_2026.10.09_23.15.30.zip",
+			name:     "prefixed release version",
+			version:  "v2.10.30",
+			expected: "anilist-arr-sync_backup_v2.10.30_2026.10.09_23.15.30.zip",
 		},
 		{
-			name:       "update backup",
-			backupType: backup.TypeUpdate,
-			expected:   "anilist-arr-sync_backup_update_2026.10.09_23.15.30.zip",
+			name:     "development version",
+			version:  "dev",
+			expected: "anilist-arr-sync_backup_vdev_2026.10.09_23.15.30.zip",
 		},
 	}
 
@@ -37,7 +37,7 @@ func TestFormatBackupFilename(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := backup.FormatBackupFilename(tc.backupType, ts)
+			got := backup.FormatBackupFilename(tc.version, ts)
 			if got != tc.expected {
 				t.Errorf("expected %q, got %q", tc.expected, got)
 			}
@@ -55,6 +55,16 @@ func TestParseBackupFilename(t *testing.T) {
 		wantTime    time.Time
 		expectError bool
 	}{
+		{
+			name:     "versioned filename",
+			filename: "anilist-arr-sync_backup_v1.2.3_2026.11.10_14.30.00.zip",
+			wantTime: time.Date(2026, 11, 10, 14, 30, 0, 0, time.UTC),
+		},
+		{
+			name:     "development filename",
+			filename: "anilist-arr-sync_backup_vdev_2026.11.10_14.30.00.zip",
+			wantTime: time.Date(2026, 11, 10, 14, 30, 0, 0, time.UTC),
+		},
 		{
 			name:        "valid scheduled filename",
 			filename:    "anilist-arr-sync_backup_scheduled_2026.10.09_23.15.30.zip",
@@ -129,7 +139,7 @@ func TestSelectBackupsToPrune(t *testing.T) {
 	var backups []backup.Info
 	for i := 0; i < 10; i++ {
 		ts := baseTime.Add(time.Duration(i) * 24 * time.Hour)
-		name := backup.FormatBackupFilename(backup.TypeScheduled, ts)
+		name := backup.FormatBackupFilename("1.2.3", ts)
 		backups = append(backups, backup.Info{
 			Filename:  name,
 			Path:      "/backups/" + name,

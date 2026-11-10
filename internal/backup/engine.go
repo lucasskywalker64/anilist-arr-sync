@@ -23,6 +23,7 @@ import (
 type Engine struct {
 	db         *storage.DB
 	configPath string
+	version    string
 	nowFn      func() time.Time
 	settingsMu sync.RWMutex
 	settings   backupSettings
@@ -48,6 +49,13 @@ func (w contextWriter) Write(p []byte) (int, error) {
 // Option configures optional parameters on Engine.
 type Option func(*Engine)
 
+// WithVersion sets the application version used in new archive filenames.
+func WithVersion(version string) Option {
+	return func(e *Engine) {
+		e.version = version
+	}
+}
+
 // WithRetention sets the rolling retention window in days.
 func WithRetention(retention int) Option {
 	return func(e *Engine) {
@@ -67,6 +75,7 @@ func NewEngine(db *storage.DB, configPath, backupDir string, opts ...Option) *En
 	e := &Engine{
 		db:         db,
 		configPath: configPath,
+		version:    "dev",
 		nowFn:      time.Now,
 		settings:   backupSettings{dir: backupDir, retention: DefaultRetention},
 	}
@@ -102,7 +111,7 @@ func (e *Engine) Create(ctx context.Context, backupType Type) (*Info, error) {
 	}
 
 	now := e.nowFn()
-	archiveName := FormatBackupFilename(backupType, now)
+	archiveName := FormatBackupFilename(e.version, now)
 	archivePath := filepath.Join(settings.dir, archiveName)
 
 	stagingDir, err := os.MkdirTemp("", "anilist-backup-snapshot-*")

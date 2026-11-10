@@ -112,9 +112,9 @@
   }
 
   function formatBytes(bytes: number): string {
-    if (!bytes) return '0 B';
+    if (bytes === 0) return '0 B';
     const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const sizes = ['B', 'KiB', 'MiB', 'GiB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
   }
@@ -217,8 +217,8 @@
                 {#each backups as item}
                   <tr>
                     <td class="boldName">{item.filename}</td>
-                    <td>{formatBytes(item.size)}</td>
-                    <td>{new Date(item.createdAt).toLocaleString()}</td>
+                    <td>{formatBytes(item.size_bytes)}</td>
+                    <td>{new Date(item.created_at).toLocaleString()}</td>
                     <td style="text-align: right;">
                       <Button kind="warning" size="small" on:click={() => openRestoreModal(item)} disabled={actionLoading}>
                         <RotateCcw size={12} /> Restore

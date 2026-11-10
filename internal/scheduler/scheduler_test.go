@@ -220,7 +220,7 @@ func TestBackupsStartOffPeakAndRepeat(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = db.Close() }()
-		engine := backup.NewEngine(db, configPath, filepath.Join(dir, "backups"))
+		engine := backup.NewEngine(db, configPath, filepath.Join(dir, "backups"), backup.WithVersion("1.2.3"))
 		s := scheduler.New(*cfg, nil, engine, nil)
 		s.Start(t.Context())
 		defer s.Stop()
@@ -239,8 +239,8 @@ func TestBackupsStartOffPeakAndRepeat(t *testing.T) {
 			t.Fatalf("backup archives: %v, err=%v", archives, err)
 		}
 		for _, archive := range archives {
-			if archive.Type != backup.TypeScheduled {
-				t.Errorf("backup type: %s", archive.Type)
+			if !strings.HasPrefix(archive.Filename, "anilist-arr-sync_backup_v1.2.3_") || archive.Type != "" {
+				t.Errorf("expected versioned backup without an inferred type: %+v", archive)
 			}
 		}
 		status := s.Status().Backup

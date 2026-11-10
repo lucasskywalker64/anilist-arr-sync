@@ -154,8 +154,8 @@ export interface AppConfig {
 
 export interface BackupItem {
   filename: string;
-  size: number;
-  createdAt: string;
+  size_bytes: number;
+  created_at: string;
 }
 
 export interface UpdateStatus {

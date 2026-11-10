@@ -58,7 +58,7 @@ func TestBackupEngine_CreateBackup_GeneratesZipWithDBSnapshotAndConfig(t *testin
 	}
 
 	fixedTime := time.Date(2026, 10, 9, 23, 30, 0, 0, time.UTC)
-	engine := backup.NewEngine(db, configPath, backupDir, backup.WithNowFunc(func() time.Time {
+	engine := backup.NewEngine(db, configPath, backupDir, backup.WithVersion("v1.2.3"), backup.WithNowFunc(func() time.Time {
 		return fixedTime
 	}))
 
@@ -67,7 +67,7 @@ func TestBackupEngine_CreateBackup_GeneratesZipWithDBSnapshotAndConfig(t *testin
 		t.Fatalf("engine.Create failed: %v", err)
 	}
 
-	expectedName := "anilist-arr-sync_backup_scheduled_2026.10.09_23.30.00.zip"
+	expectedName := "anilist-arr-sync_backup_v1.2.3_2026.10.09_23.30.00.zip"
 	if info.Filename != expectedName {
 		t.Errorf("expected filename %q, got %q", expectedName, info.Filename)
 	}
@@ -149,6 +149,73 @@ func TestBackupEngine_CreateBackup_GeneratesZipWithDBSnapshotAndConfig(t *testin
 	}
 	if userCount != 1 {
 		t.Fatalf("expected 1 user in extracted db, got %d", userCount)
+	}
+}
+
+func TestBackupEngine_VersionedAndLegacyArchives(t *testing.T) {
+	t.Parallel()
+	db, _, configPath, backupDir := setupTestEnvironment(t)
+	now := time.Date(2026, 11, 10, 14, 30, 0, 0, time.UTC)
+	engine := backup.NewEngine(db, configPath, backupDir,
+		backup.WithVersion("1.2.3"), backup.WithNowFunc(func() time.Time { return now }))
+	for _, backupType := range []backup.Type{backup.TypeManual, backup.TypeScheduled, backup.TypeUpdate} {
+		info, err := engine.Create(t.Context(), backupType)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "anilist-arr-sync_backup_v1.2.3_" + now.Format(backup.TimeFormat) + ".zip"
+		if info.Filename != want {
+			t.Fatalf("%s backup filename = %q, want %q", backupType, info.Filename, want)
+		}
+		data, err := os.ReadFile(info.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacy := fmt.Sprintf("anilist-arr-sync_backup_%s_%s.zip", backupType, now.Format(backup.TimeFormat))
+		if err := os.WriteFile(filepath.Join(backupDir, legacy), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(time.Second)
+	}
+	listed, err := engine.List()
+	if err != nil || len(listed) != 6 {
+		t.Fatalf("list = %v, err = %v", listed, err)
+	}
+	for _, info := range listed {
+		if strings.HasPrefix(info.Filename, "anilist-arr-sync_backup_v") && info.Type != "" {
+			t.Errorf("versioned archive has backup type %q", info.Type)
+		}
+		stat, err := os.Stat(info.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.SizeBytes == 0 || info.SizeBytes != stat.Size() {
+			t.Fatalf("listed size = %d, filesystem size = %d", info.SizeBytes, stat.Size())
+		}
+		cfg := config.NewDefault()
+		cfg.InstanceName = "Changed"
+		if err := config.Save(configPath, cfg); err != nil {
+			t.Fatal(err)
+		}
+		if err := engine.Restore(t.Context(), info.Path); err != nil {
+			t.Fatalf("restore %s: %v", info.Filename, err)
+		}
+		restored, err := config.Load(configPath, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if restored.InstanceName != "TestInstance" {
+			t.Fatalf("restore %s: instance name = %q", info.Filename, restored.InstanceName)
+		}
+	}
+	now = now.AddDate(0, 0, 8)
+	pruned, err := engine.Prune(t.Context())
+	if err != nil || len(pruned) != 6 {
+		t.Fatalf("pruned = %v, err = %v", pruned, err)
+	}
+	remaining, err := engine.List()
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("remaining = %v, err = %v", remaining, err)
 	}
 }
 
