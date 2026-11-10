@@ -612,6 +612,16 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	connectionsChanged := servarrConnectionsChanged(*s.cfg, next)
+	if connectionsChanged && s.db != nil {
+		var count int
+		err := s.db.Read(r.Context(), func(ctx context.Context, q storage.Querier) error {
+			return q.QueryRowContext(ctx, `SELECT COUNT(*) FROM review_preparations`).Scan(&count)
+		})
+		if err != nil || count > 0 {
+			s.writeJSONError(w, http.StatusConflict, "finish or cancel review preparations before changing service connections")
+			return
+		}
+	}
 	var sonarrClient *servarr.SonarrClient
 	var radarrClient *servarr.RadarrClient
 	if connectionsChanged && s.orch != nil {

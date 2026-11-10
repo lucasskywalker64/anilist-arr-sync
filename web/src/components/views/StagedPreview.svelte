@@ -145,8 +145,9 @@
     if (!payload) return '-';
     try {
       const parsed = typeof payload === 'string' ? JSON.parse(payload) : payload;
+      const season = parsed.episodeSeason ?? parsed.seasonNumber ?? 0;
       const scope = parsed.episodeNumbers?.length
-        ? `Specials (Season 0), episodes ${parsed.episodeNumbers.join(', ')}: ` : '';
+        ? `${season === 0 ? 'Specials (Season 0)' : `Season ${season}`}, episodes ${parsed.episodeNumbers.join(', ')}: ` : '';
       return scope + (typeof payload === 'string' ? payload : JSON.stringify(payload));
     } catch {
       return String(payload);

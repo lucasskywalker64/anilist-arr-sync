@@ -93,6 +93,7 @@ type AddSeriesPayload struct {
 
 // MonitorSeasonPayload stores parameters for monitoring or unmonitoring a season or episode slice.
 type MonitorSeasonPayload struct {
+	EpisodeSeason    int                    `json:"episodeSeason,omitempty"`
 	SpecialsOverride *SpecialsOverrideScope `json:"specialsOverride,omitempty"`
 	EpisodeNumbers   []int                  `json:"episodeNumbers,omitempty"`
 	SeriesID         int                    `json:"seriesId"`
@@ -111,6 +112,7 @@ type UnmonitorMoviePayload struct {
 
 // DeleteFilePayload stores parameters for deleting files in Sonarr or Radarr.
 type DeleteFilePayload struct {
+	EpisodeSeason      int                    `json:"episodeSeason,omitempty"`
 	SpecialsOverride   *SpecialsOverrideScope `json:"specialsOverride,omitempty"`
 	EpisodeNumbers     []int                  `json:"episodeNumbers,omitempty"`
 	MovieID            int                    `json:"movieId,omitempty"`
@@ -124,6 +126,7 @@ type DeleteFilePayload struct {
 
 // UnmonitorEpisodePayload stores parameters for unmonitoring episodes in Sonarr.
 type UnmonitorEpisodePayload struct {
+	EpisodeSeason    int                    `json:"episodeSeason,omitempty"`
 	SpecialsOverride *SpecialsOverrideScope `json:"specialsOverride,omitempty"`
 	EpisodeNumbers   []int                  `json:"episodeNumbers,omitempty"`
 	SeriesID         int                    `json:"seriesId"`
@@ -133,6 +136,7 @@ type UnmonitorEpisodePayload struct {
 
 // DeleteEpisodeFilePayload stores parameters for deleting episode files in Sonarr.
 type DeleteEpisodeFilePayload struct {
+	EpisodeSeason      int                    `json:"episodeSeason,omitempty"`
 	SpecialsOverride   *SpecialsOverrideScope `json:"specialsOverride,omitempty"`
 	EpisodeNumbers     []int                  `json:"episodeNumbers,omitempty"`
 	SeriesID           int                    `json:"seriesId"`
@@ -144,6 +148,7 @@ type DeleteEpisodeFilePayload struct {
 
 // SpecialsOverrideScope pins the complete mapping for validation before staged execution.
 type SpecialsOverrideScope struct {
+	SeasonNumber   int   `json:"seasonNumber,omitempty"`
 	AniListID      int   `json:"anilistId"`
 	EpisodeNumbers []int `json:"episodeNumbers"`
 	EpisodeIDs     []int `json:"episodeIds"`
@@ -323,11 +328,17 @@ func (o *Orchestrator) applyStagedAction(ctx context.Context, id int) error {
 	}
 	if action.TargetService == "SONARR" {
 		var payload struct {
+			TVDBID           int                    `json:"tvdbId"`
 			SeriesID         int                    `json:"seriesId"`
 			SpecialsOverride *SpecialsOverrideScope `json:"specialsOverride"`
 		}
 		if err := json.Unmarshal([]byte(action.PayloadJSON), &payload); err != nil {
 			return fmt.Errorf("unmarshal Sonarr scope: %w", err)
+		}
+		if blocked, err := o.reviewBlocksSeries(ctx, payload.SeriesID, payload.TVDBID); err != nil {
+			return err
+		} else if blocked {
+			return errors.New("series is being prepared in review")
 		}
 		if scope := payload.SpecialsOverride; scope != nil {
 			if o.sonarr == nil {
@@ -337,7 +348,7 @@ func (o *Orchestrator) applyStagedAction(ctx context.Context, id int) error {
 			if err != nil {
 				return err
 			}
-			ids, resolved := resolveOverrideEpisodes(episodes, 0, scope.EpisodeNumbers)
+			ids, resolved := resolveOverrideEpisodes(episodes, scope.SeasonNumber, scope.EpisodeNumbers)
 			if !resolved || len(ids) == 0 || !slices.Equal(ids, scope.EpisodeIDs) {
 				report := &SyncReport{}
 				o.reviewMissingEpisodes(ctx, anilist.MediaListEntry{Media: anilist.Media{ID: scope.AniListID, Title: anilist.MediaTitle{Romaji: action.Title}}}, report)

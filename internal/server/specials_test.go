@@ -31,7 +31,7 @@ func TestSpecialsOverrideValidationAndResolution(t *testing.T) {
 		{"zero episode", `"mediaType":"SERIES","tvdbId":423075,"seasons":"0","episodeNumbers":[0]`, false},
 		{"negative episode", `"mediaType":"SERIES","tvdbId":423075,"seasons":"0","episodeNumbers":[-1]`, false},
 		{"duplicate episode", `"mediaType":"SERIES","tvdbId":423075,"seasons":"0","episodeNumbers":[4,4]`, false},
-		{"regular season", `"mediaType":"SERIES","tvdbId":423075,"seasons":"1","episodeNumbers":[4]`, false},
+		{"multiple regular seasons", `"mediaType":"SERIES","tvdbId":423075,"seasons":"1,2","episodeNumbers":[4]`, false},
 		{"multiple seasons", `"mediaType":"SERIES","tvdbId":423075,"seasons":"0,1","episodeNumbers":[4]`, false},
 		{"movie", `"mediaType":"MOVIE","tmdbId":1,"seasons":"0","episodeNumbers":[4]`, false},
 	} {

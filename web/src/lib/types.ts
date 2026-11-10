@@ -212,12 +212,21 @@ export interface ServarrConnectionOptions {
 }
 
 export interface MappingResolution {
+	preparationRequired?: boolean;
   mediaType: 'SERIES' | 'MOVIE';
   tvdbId?: number | null;
   tmdbId?: number | null;
   seasons?: string;
   episodeNumbers?: number[];
   titleOverride?: string;
+}
+
+export interface ReviewPreparation {
+  status: 'WAITING' | 'READY' | 'ERROR' | 'CANCELLING' | 'CANCELLED' | 'RETAINED';
+  message?: string;
+  created: boolean;
+  series?: { id: number; tvdbId: number; title: string; year?: number; overview?: string; remotePoster?: string; seasons: { seasonNumber: number }[] };
+  episodes?: { id: number; seasonNumber: number; episodeNumber: number; title: string; finaleType?: string }[];
 }
 
 export interface IgnoredItem {

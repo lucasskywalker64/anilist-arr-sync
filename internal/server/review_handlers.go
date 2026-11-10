@@ -43,12 +43,13 @@ type ReviewQueueItem struct {
 }
 
 type resolveReviewRequest struct {
-	MediaType      string `json:"mediaType"`
-	TVDBID         *int   `json:"tvdbId"`
-	TMDBID         *int   `json:"tmdbId"`
-	Seasons        string `json:"seasons"`
-	TitleOverride  string `json:"titleOverride"`
-	EpisodeNumbers []int  `json:"episodeNumbers"`
+	PreparationRequired bool   `json:"preparationRequired"`
+	MediaType           string `json:"mediaType"`
+	TVDBID              *int   `json:"tvdbId"`
+	TMDBID              *int   `json:"tmdbId"`
+	Seasons             string `json:"seasons"`
+	TitleOverride       string `json:"titleOverride"`
+	EpisodeNumbers      []int  `json:"episodeNumbers"`
 }
 
 type ignoreReviewRequest struct {
@@ -75,14 +76,17 @@ func validateSeasons(seasons string) bool {
 	return true
 }
 
-// validateEpisodeOverride keeps episode selections exclusive to Sonarr Specials.
+// validateEpisodeOverride validates selections in one Sonarr season and requires them for Specials.
 func validateEpisodeOverride(mediaType, seasons string, numbers []int) error {
 	if seasons == "0" {
 		if mediaType != "SERIES" || len(numbers) == 0 {
 			return errors.New("specials (season 0) requires a SERIES override with at least one episode")
 		}
 	} else if len(numbers) > 0 {
-		return errors.New("episodeNumbers requires Specials (Season 0)")
+		season, err := strconv.Atoi(seasons)
+		if mediaType != "SERIES" || err != nil || season < 0 || strconv.Itoa(season) != seasons {
+			return errors.New("episodeNumbers requires one Sonarr season")
+		}
 	} else {
 		for _, part := range strings.FieldsFunc(seasons, func(c rune) bool { return c == ',' || c == ' ' || c == ';' }) {
 			if number, err := strconv.Atoi(part); err == nil && number == 0 {
@@ -266,6 +270,13 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 		s.writeJSONError(w, http.StatusBadRequest, "tvdbId is required for SERIES")
 		return
 	}
+	switch reqMedia {
+	case "MOVIE":
+		tvdbVal = nil
+		resolvedID = *req.TMDBID
+	case "SERIES":
+		tmdbVal = nil
+	}
 
 	seasons := strings.TrimSpace(req.Seasons)
 	if seasons == "" {
@@ -296,7 +307,7 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var anilistID int
-	err = s.db.Write(r.Context(), func(ctx context.Context, tx *sql.Tx) error {
+	saveMapping := func(ctx context.Context, tx *sql.Tx) error {
 		var queueMediaType, titleRomaji string
 		queryErr := tx.QueryRowContext(ctx, `
 			SELECT anilist_id, media_type, title_romaji
@@ -310,6 +321,14 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 		mediaType := reqMedia
 		if mediaType == "" {
 			mediaType = queueMediaType
+		}
+		if mediaType == "MOVIE" {
+			tvdbVal = nil
+			if req.TMDBID != nil {
+				resolvedID = *req.TMDBID
+			}
+		} else {
+			tmdbVal = nil
 		}
 		if mediaType == "MOVIE" && tmdbVal == nil {
 			return errTmdbRequiredForMovie
@@ -385,7 +404,17 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 			return sql.ErrNoRows
 		}
 		return nil
-	})
+	}
+	if s.orch != nil {
+		tvdbID := 0
+		if reqMedia != "MOVIE" && req.TVDBID != nil {
+			tvdbID = *req.TVDBID
+		}
+		season, _ := strconv.Atoi(seasons)
+		err = s.orch.ConfirmReviewMapping(r.Context(), id, tvdbID, season, req.EpisodeNumbers, req.PreparationRequired, saveMapping)
+	} else {
+		err = s.db.Write(r.Context(), saveMapping)
+	}
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

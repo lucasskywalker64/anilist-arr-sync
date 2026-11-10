@@ -603,6 +603,12 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 		targetSeason = 1
 	}
 
+	if blocked, err := o.reviewBlocksSeries(ctx, 0, res.TargetID); err != nil {
+		report.Errors = append(report.Errors, err.Error())
+		return dispatchOutcome{}
+	} else if blocked {
+		return dispatchOutcome{}
+	}
 	series, lookupErr := o.sonarr.LookupSeriesByTVDBID(ctx, res.TargetID)
 	if lookupErr != nil && !errors.Is(lookupErr, servarr.ErrNotFound) {
 		report.Errors = append(report.Errors, fmt.Sprintf("lookup series tvdb %d: %v", res.TargetID, lookupErr))
@@ -749,7 +755,7 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 	}
 	var specialsOverride *SpecialsOverrideScope
 	if len(overrideEpisodeIDs) > 0 {
-		specialsOverride = &SpecialsOverrideScope{AniListID: entry.Media.ID, EpisodeNumbers: res.EpisodeNumbers, EpisodeIDs: overrideEpisodeIDs}
+		specialsOverride = &SpecialsOverrideScope{SeasonNumber: targetSeason, AniListID: entry.Media.ID, EpisodeNumbers: res.EpisodeNumbers, EpisodeIDs: overrideEpisodeIDs}
 	}
 
 	var startDate time.Time
@@ -781,7 +787,7 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 
 	tolerance := time.Duration(o.cfg.DateToleranceDays) * 24 * time.Hour
 	matchRes := season.MatchSeason(startDate, titles, domainEpisodes, tolerance)
-	if targetSeason != 0 && matchRes.Season > 0 && !matchRes.Conflict {
+	if res.Tier != resolver.TierOverride && targetSeason != 0 && matchRes.Season > 0 && !matchRes.Conflict {
 		if matchRes.MatchedBy == season.MatchMethodBoth || matchRes.MatchedBy == season.MatchMethodAirDate {
 			targetSeason = matchRes.Season
 		} else if hasExplicitSeason(titles...) {
@@ -840,6 +846,7 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 								SeasonNumber:     targetSeason,
 								EpisodeIDs:       sliceEpisodeIDs,
 								EpisodeNumbers:   selectedEpisodeNumbers(episodes, sliceEpisodeIDs),
+								EpisodeSeason:    targetSeason,
 								SpecialsOverride: specialsOverride,
 								AnilistID:        entry.Media.ID,
 							}); err != nil {
@@ -923,6 +930,7 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 							Title:              series.Title,
 							EpisodeIDs:         targetEpisodeIDs,
 							EpisodeNumbers:     selectedEpisodeNumbers(episodes, targetEpisodeIDs),
+							EpisodeSeason:      targetSeason,
 							SpecialsOverride:   specialsOverride,
 							RequireUnmonitored: &unmonitorEnabled,
 						}); err != nil {
@@ -1009,6 +1017,7 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 							SeriesID:         series.ID,
 							EpisodeIDs:       epIDsToUnmonitor,
 							EpisodeNumbers:   selectedEpisodeNumbers(episodes, epIDsToUnmonitor),
+							EpisodeSeason:    targetSeason,
 							SpecialsOverride: specialsOverride,
 							Title:            series.Title,
 						}); err != nil {
@@ -1041,6 +1050,7 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 							Title:              series.Title,
 							EpisodeIDs:         watchedEpisodeIDs,
 							EpisodeNumbers:     selectedEpisodeNumbers(episodes, watchedEpisodeIDs),
+							EpisodeSeason:      targetSeason,
 							SpecialsOverride:   specialsOverride,
 							RequireUnmonitored: &o.cfg.UnmonitorWatched,
 						}); err != nil {
@@ -1089,6 +1099,7 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 					SeasonNumber:     targetSeason,
 					EpisodeIDs:       episodesToMonitor,
 					EpisodeNumbers:   selectedEpisodeNumbers(episodes, episodesToMonitor),
+					EpisodeSeason:    targetSeason,
 					SpecialsOverride: specialsOverride,
 					AnilistID:        entry.Media.ID,
 				}); err != nil {
@@ -1228,7 +1239,7 @@ func (o *Orchestrator) searchUnwatchedEpisodes(ctx context.Context, episodes []s
 func selectedEpisodeNumbers(episodes []servarr.Episode, ids []int) []int {
 	var numbers []int
 	for _, ep := range episodes {
-		if ep.SeasonNumber == 0 && containsInt(ids, ep.ID) {
+		if containsInt(ids, ep.ID) {
 			numbers = append(numbers, ep.EpisodeNumber)
 		}
 	}

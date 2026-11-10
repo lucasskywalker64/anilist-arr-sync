@@ -25,6 +25,7 @@ type AddSeriesOptions struct {
 
 // AddSeriesRequest contains the parameters required to add a new series to Sonarr.
 type AddSeriesRequest struct {
+	MonitorNewItems  string            `json:"monitorNewItems,omitempty"`
 	Title            string            `json:"title"`
 	TVDBID           int               `json:"tvdbId"`
 	QualityProfileID int               `json:"qualityProfileId"`
@@ -39,6 +40,9 @@ type AddSeriesRequest struct {
 
 // Series represents a Sonarr series entry.
 type Series struct {
+	MonitorNewItems  string            `json:"monitorNewItems,omitempty"`
+	Year             int               `json:"year,omitempty"`
+	RemotePoster     string            `json:"remotePoster,omitempty"`
 	ID               int               `json:"id,omitempty"`
 	Title            string            `json:"title"`
 	SortTitle        string            `json:"sortTitle,omitempty"`
@@ -55,6 +59,43 @@ type Series struct {
 	Seasons          []Season          `json:"seasons,omitempty"`
 	Tags             []int             `json:"tags,omitempty"`
 	AddOptions       *AddSeriesOptions `json:"addOptions,omitempty"`
+}
+
+// GetCommands returns recent command state, including the automatic initial refresh.
+func (c *SonarrClient) GetCommands(ctx context.Context) ([]Command, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/api/v3/command", nil)
+	if err != nil {
+		return nil, err
+	}
+	var result []Command
+	_, err = c.do(req, &result)
+	return result, err
+}
+
+// DeleteSeries removes a library entry while preserving files and allowing future imports.
+func (c *SonarrClient) DeleteSeries(ctx context.Context, id int) error {
+	req, err := c.newRequest(ctx, http.MethodDelete, fmt.Sprintf("/api/v3/series/%d?deleteFiles=false&addImportListExclusion=false", id), nil)
+	if err != nil {
+		return err
+	}
+	_, err = c.do(req, nil)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
+// DeleteTag removes an unused preparation ownership tag.
+func (c *SonarrClient) DeleteTag(ctx context.Context, id int) error {
+	req, err := c.newRequest(ctx, http.MethodDelete, fmt.Sprintf("/api/v3/tag/%d", id), nil)
+	if err != nil {
+		return err
+	}
+	_, err = c.do(req, nil)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	return err
 }
 
 // SonarrClient is a typed client for the Sonarr REST v3 API.
