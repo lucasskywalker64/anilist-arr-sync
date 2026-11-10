@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -29,7 +30,7 @@ const (
 	DefaultRetention = 7
 )
 
-var filenameRegex = regexp.MustCompile(`^anilist-arr-sync_backup_([a-zA-Z0-9_]+)_(\d{4}\.\d{2}\.\d{2}_\d{2}\.\d{2}\.\d{2})\.zip$`)
+var filenameRegex = regexp.MustCompile(`^anilist-arr-sync_backup_(?:v(?:\d+\.\d+\.\d+|dev)|([a-zA-Z0-9_]+))_(\d{4}\.\d{2}\.\d{2}_\d{2}\.\d{2}\.\d{2})\.zip$`)
 
 // Info captures metadata about a backup archive.
 type Info struct {
@@ -37,20 +38,17 @@ type Info struct {
 	Path      string    `json:"path"`
 	Type      Type      `json:"type"`
 	CreatedAt time.Time `json:"created_at"`
-	SizeBytes int64     `json:"size_bytes,omitempty"`
+	SizeBytes int64     `json:"size_bytes"`
 }
 
 // FormatBackupFilename generates the canonical archive name:
-// anilist-arr-sync_backup_{type}_YYYY.MM.DD_HH.MM.SS.zip
-func FormatBackupFilename(backupType Type, t time.Time) string {
-	if backupType == "" {
-		backupType = TypeManual
-	}
+// anilist-arr-sync_backup_v{version}_YYYY.MM.DD_HH.MM.SS.zip
+func FormatBackupFilename(version string, t time.Time) string {
 	timestamp := t.UTC().Format(TimeFormat)
-	return fmt.Sprintf("%s%s_%s%s", Prefix, backupType, timestamp, Extension)
+	return fmt.Sprintf("%sv%s_%s%s", Prefix, strings.TrimPrefix(version, "v"), timestamp, Extension)
 }
 
-// ParseBackupFilename extracts the backup type and creation timestamp from an archive filename.
+// ParseBackupFilename extracts the creation timestamp and legacy backup type from an archive filename.
 func ParseBackupFilename(path string) (*Info, error) {
 	filename := filepath.Base(path)
 	matches := filenameRegex.FindStringSubmatch(filename)

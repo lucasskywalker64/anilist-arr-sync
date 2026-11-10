@@ -389,6 +389,9 @@ func TestOneShotSyncSummaryAndErrors(t *testing.T) {
 }
 
 func TestRuntimeBackupSettingsTakeEffectOnSave(t *testing.T) {
+	previousVersion := version
+	version = "v1.2.3"
+	t.Cleanup(func() { version = previousVersion })
 	dir := t.TempDir()
 	cfg := config.NewDefault()
 	cfg.APIKey = "runtime-key"
@@ -425,12 +428,12 @@ func TestRuntimeBackupSettingsTakeEffectOnSave(t *testing.T) {
 	}
 	now := time.Now()
 	for _, age := range []time.Duration{72 * time.Hour, time.Hour, 2 * time.Hour, 3 * time.Hour} {
-		name := backup.FormatBackupFilename(backup.TypeManual, now.Add(-age))
+		name := backup.FormatBackupFilename("1.2.3", now.Add(-age))
 		if err := os.WriteFile(filepath.Join(newDir, name), nil, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	expired := backup.FormatBackupFilename(backup.TypeManual, now.Add(-72*time.Hour))
+	expired := backup.FormatBackupFilename("1.2.3", now.Add(-72*time.Hour))
 	previousArchive := filepath.Join(dir, "backups", expired)
 	if err := os.WriteFile(previousArchive, nil, 0600); err != nil {
 		t.Fatal(err)
@@ -447,6 +450,8 @@ func TestRuntimeBackupSettingsTakeEffectOnSave(t *testing.T) {
 	}
 	if rec := request("POST", "/api/v1/backups", ""); rec.Code != http.StatusCreated {
 		t.Fatalf("backup: %d %s", rec.Code, rec.Body.String())
+	} else if !strings.Contains(rec.Body.String(), "anilist-arr-sync_backup_v1.2.3_") {
+		t.Fatalf("backup must use the running application version: %s", rec.Body)
 	}
 	archives, err := filepath.Glob(filepath.Join(newDir, "*.zip"))
 	if err != nil || len(archives) != 4 {

@@ -82,7 +82,7 @@ func bootstrap(ctx context.Context, o options, paths runtimePaths) (*appRuntime,
 	}
 	al := anilist.NewClient("", anilist.WithHTTPClient(client))
 	orch := orchestrator.New(db, cfg, al, sonarrClient, radarrClient)
-	backups := backup.NewEngine(db, paths.config, backupDir, backup.WithRetention(cfg.BackupRetention))
+	backups := backup.NewEngine(db, paths.config, backupDir, backup.WithVersion(version), backup.WithRetention(cfg.BackupRetention))
 	srv := server.NewServer(cfg, paths.config, db, orch, backups)
 	srv.SetBackupSettingsPreparation(func(current, next config.Config) (func(), error) {
 		dir := dataPath(paths.data, next.BackupFolder)
