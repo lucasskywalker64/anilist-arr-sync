@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/orchestrator"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 )
@@ -348,18 +349,19 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 
 		_, overrideErr := tx.ExecContext(ctx, `
 			INSERT INTO mapping_overrides (
-				anilist_id, media_type, tvdb_id, tmdb_id, seasons, title_override, episode_numbers, updated_at
+				anilist_id, media_type, tvdb_id, tmdb_id, seasons, title_override, episode_numbers, whole_season, updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 			ON CONFLICT(anilist_id) DO UPDATE SET
 				media_type = excluded.media_type,
 				tvdb_id = excluded.tvdb_id,
 				tmdb_id = excluded.tmdb_id,
 				seasons = excluded.seasons,
 				episode_numbers = excluded.episode_numbers,
+				whole_season = excluded.whole_season,
 				title_override = excluded.title_override,
 				updated_at = CURRENT_TIMESTAMP;
-		`, anilistID, mediaType, tvdbVal, tmdbVal, seasons, titleVal, string(episodeNumbersJSON))
+		`, anilistID, mediaType, tvdbVal, tmdbVal, seasons, titleVal, string(episodeNumbersJSON), req.PreparationRequired && mediaType == "SERIES" && len(req.EpisodeNumbers) == 0)
 		if overrideErr != nil {
 			return overrideErr
 		}
@@ -417,6 +419,10 @@ func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
+		if errors.Is(err, orchestrator.ErrSyncInProgress) || errors.Is(err, orchestrator.ErrReviewPreparationChanged) {
+			s.writeJSONError(w, http.StatusConflict, err.Error())
+			return
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			s.writeJSONError(w, http.StatusNotFound, fmt.Sprintf("review queue item %d not found or already resolved", id))
 			return

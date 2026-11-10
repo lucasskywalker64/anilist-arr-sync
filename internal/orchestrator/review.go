@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
@@ -23,16 +25,22 @@ type ReviewPreparation struct {
 	Created  bool              `json:"created"`
 }
 
+// ErrReviewPreparationChanged means the selection must be checked before confirmation.
+var ErrReviewPreparationChanged = errors.New("review preparation changed")
+
 type reviewLease struct {
 	id, tvdbID, seriesID, tagID   int
 	endpoint, token, baseline     string
 	created, cancelled, confirmed bool
+	addStartedAt                  sql.NullTime
+	refreshCompleted              bool
+	refreshID                     int
 }
 
 func (o *Orchestrator) reviewLease(ctx context.Context, id int) (reviewLease, error) {
 	p := reviewLease{id: id}
 	err := o.db.Read(ctx, func(ctx context.Context, q storage.Querier) error {
-		return q.QueryRowContext(ctx, `SELECT endpoint,tvdb_id,series_id,tag_id,token,baseline,created,cancelled,confirmed FROM review_preparations WHERE review_id=?`, id).Scan(&p.endpoint, &p.tvdbID, &p.seriesID, &p.tagID, &p.token, &p.baseline, &p.created, &p.cancelled, &p.confirmed)
+		return q.QueryRowContext(ctx, `SELECT endpoint,tvdb_id,series_id,tag_id,token,baseline,created,cancelled,confirmed,add_started_at,refresh_completed,refresh_id FROM review_preparations WHERE review_id=?`, id).Scan(&p.endpoint, &p.tvdbID, &p.seriesID, &p.tagID, &p.token, &p.baseline, &p.created, &p.cancelled, &p.confirmed, &p.addStartedAt, &p.refreshCompleted, &p.refreshID)
 	})
 	return p, err
 }
@@ -82,7 +90,7 @@ func (o *Orchestrator) PrepareReview(ctx context.Context, id, tvdbID int) (*Revi
 			return nil, errors.New("configure a Sonarr quality profile and root folder before loading episodes")
 		}
 		// The ownership marker is persisted before the add, so an uncertain HTTP response can be recovered.
-		p.tagID, err = run.sonarr.EnsureTag(ctx, "anilist-review-"+p.token)
+		p.tagID, err = run.sonarr.EnsureTag(ctx, p.tagLabel())
 		if err != nil {
 			return nil, err
 		}
@@ -101,14 +109,21 @@ func (o *Orchestrator) PrepareReview(ctx context.Context, id, tvdbID int) (*Revi
 		for i := range seasons {
 			seasons[i].Monitored = false
 		}
+		if err = run.writeReview(ctx, `UPDATE review_preparations SET add_started_at=CURRENT_TIMESTAMP WHERE review_id=?`, id); err != nil {
+			return nil, err
+		}
 		series, err = run.sonarr.AddSeries(ctx, servarr.AddSeriesRequest{TVDBID: tvdbID, Title: series.Title, RootFolderPath: run.cfg.SonarrRootFolderPath, QualityProfileID: run.cfg.SonarrQualityProfileID, SeriesType: run.cfg.SonarrSeriesType, SeasonFolder: true, Monitored: false, MonitorNewItems: "none", Seasons: seasons, Tags: tags, AddOptions: &servarr.AddSeriesOptions{Monitor: "none"}})
+		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
 		if err != nil {
+			var apiErr *servarr.APIError
+			if errors.Is(err, servarr.ErrUnauthorized) || errors.Is(err, servarr.ErrNotFound) || (errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusBadRequest) {
+				return nil, errors.Join(err, run.releaseReview(saveCtx, p, false))
+			}
 			return nil, fmt.Errorf("add outcome is pending verification; cancel or retry this preparation: %w", err)
 		}
 		p.seriesID = series.ID
 		p.baseline = reviewFingerprint(series)
-		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
 		if err = run.writeReview(saveCtx, `UPDATE review_preparations SET series_id=?,baseline=? WHERE review_id=?`, p.seriesID, p.baseline, id); err != nil {
 			return nil, err
 		}
@@ -116,19 +131,28 @@ func (o *Orchestrator) PrepareReview(ctx context.Context, id, tvdbID int) (*Revi
 	return run.pollReview(ctx, p)
 }
 
+func (p reviewLease) tagLabel() string { return "anilist-review-" + strings.ToLower(p.token) }
+
 func reviewFingerprint(s *servarr.Series) string {
 	tags := slices.Clone(s.Tags)
 	slices.Sort(tags)
 	value, _ := json.Marshal(struct {
-		Path    string
-		Profile int
-		Type    string
-		Tags    []int
-	}{s.Path, s.QualityProfileID, s.SeriesType, tags})
+		Path           string
+		Profile        int
+		Type           string
+		NewItems       string
+		SeasonFolder   bool
+		SceneNumbering bool
+		Added          time.Time
+		Tags           []int
+	}{s.Path, s.QualityProfileID, s.SeriesType, s.MonitorNewItems, s.SeasonFolder, s.UseSceneNumbering, s.Added, tags})
 	return string(value)
 }
 
 func (o *Orchestrator) pollReview(ctx context.Context, p reviewLease) (*ReviewPreparation, error) {
+	if p.cancelled && !p.created {
+		return &ReviewPreparation{Status: "CANCELLED"}, o.releaseReview(ctx, p, false)
+	}
 	if o.sonarr == nil || p.endpoint != o.sonarr.BaseURL() {
 		return nil, errors.New("sonarr connection changed; restore the original connection to finish this preparation")
 	}
@@ -137,19 +161,28 @@ func (o *Orchestrator) pollReview(ctx context.Context, p reviewLease) (*ReviewPr
 		series, err := o.sonarr.LookupSeriesByTVDBID(ctx, p.tvdbID)
 		if errors.Is(err, servarr.ErrNotFound) || (err == nil && series.ID == 0) {
 			if p.cancelled {
+				if p.addStartedAt.Valid {
+					result.Status = "CANCELLING"
+					result.Message = "Verifying whether Sonarr accepted the add"
+					return result, nil
+				}
+				result.Status = "CANCELLED"
 				return result, o.releaseReview(ctx, p, false)
 			}
-			return nil, errors.New("the series was not added; cancel this preparation and try again")
+			result.Message = "Waiting to verify whether Sonarr accepted the add"
+			return result, nil
 		}
 		if err != nil {
 			return nil, err
 		}
 		if !slices.Contains(series.Tags, p.tagID) || p.tagID == 0 {
-			return nil, errors.New("add outcome is uncertain; existing series was not claimed or removed")
+			result.Status = "RETAINED"
+			result.Message = "A series already exists in Sonarr and was left in place. Load episodes again to reuse it."
+			return result, o.releaseReview(ctx, p, false)
 		}
 		p.seriesID = series.ID
-		p.baseline = reviewFingerprint(series)
-		if err = o.writeReview(ctx, `UPDATE review_preparations SET series_id=?,baseline=? WHERE review_id=?`, p.seriesID, p.baseline, p.id); err != nil {
+		// Recovery proves ownership through the tag, but cannot reconstruct the original settings.
+		if err = o.writeReview(ctx, `UPDATE review_preparations SET series_id=? WHERE review_id=?`, p.seriesID, p.id); err != nil {
 			return nil, err
 		}
 	}
@@ -161,6 +194,9 @@ func (o *Orchestrator) pollReview(ctx context.Context, p reviewLease) (*ReviewPr
 	if err != nil {
 		return nil, err
 	}
+	if series.TVDBID != p.tvdbID {
+		return nil, errors.New("the Sonarr series identity changed; preparation cannot be applied or removed")
+	}
 	result.Series = series
 	if p.confirmed {
 		return result, o.releaseReview(ctx, p, true)
@@ -169,26 +205,30 @@ func (o *Orchestrator) pollReview(ctx context.Context, p reviewLease) (*ReviewPr
 	if err != nil {
 		return nil, err
 	}
-	running, failed, complete := false, false, false
-	if p.created || series.AddOptions != nil {
-		commands, err := o.sonarr.GetCommands(ctx)
+	running, failed, complete := false, false, p.refreshCompleted
+	refreshUnknown := false
+	if !complete && (p.created || series.AddOptions != nil) {
+		status, err := o.reviewRefreshStatus(ctx, p)
 		if err != nil {
 			return nil, err
 		}
-		for _, cmd := range commands {
-			if cmd.Name == "RefreshSeries" && cmd.Body.IsNewSeries && slices.Contains(cmd.Body.SeriesIDs, p.seriesID) {
-				switch cmd.Status {
-				case "queued", "started":
-					running = true
-				case "failed", "aborted":
-					failed = true
-				case "completed":
-					complete = true
-				}
-			}
+		switch status {
+		case "":
+			refreshUnknown = true
+		case "queued", "started":
+			running = true
+		case "failed", "aborted", "cancelled", "orphaned":
+			failed = true
+		case "completed":
+			complete = true
 		}
-	} else {
+	} else if !p.created {
 		complete = true
+	}
+	if p.created && complete && !p.refreshCompleted {
+		if err = o.writeReview(ctx, `UPDATE review_preparations SET refresh_completed=1 WHERE review_id=?`, p.id); err != nil {
+			return nil, err
+		}
 	}
 	unmonitored := !series.Monitored
 	for _, season := range series.Seasons {
@@ -215,9 +255,16 @@ func (o *Orchestrator) pollReview(ctx context.Context, p reviewLease) (*ReviewPr
 		for _, ep := range episodes {
 			adopted = adopted || ep.HasFile
 		}
-		if adopted || !unmonitored || reviewFingerprint(series) != p.baseline || !slices.Contains(series.Tags, p.tagID) {
+		owner, err := o.reviewOwnsTag(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+		if refreshUnknown || adopted || !unmonitored || reviewFingerprint(series) != p.baseline || !owner || !slices.Contains(series.Tags, p.tagID) {
 			result.Status = "RETAINED"
 			result.Message = "Series changed or was adopted; it was left in Sonarr"
+			if refreshUnknown {
+				result.Message = "Refresh completion could not be verified; series left in Sonarr. Load episodes again to reuse it."
+			}
 			if err = o.writeReview(ctx, `UPDATE review_preparations SET confirmed=1 WHERE review_id=?`, p.id); err != nil {
 				return nil, err
 			}
@@ -229,6 +276,11 @@ func (o *Orchestrator) pollReview(ctx context.Context, p reviewLease) (*ReviewPr
 		result.Status = "CANCELLED"
 		result.Message = "Temporary series removed; files were preserved"
 		return result, o.releaseReview(ctx, p, false)
+	}
+	if refreshUnknown {
+		result.Status = "ERROR"
+		result.Message = "Sonarr's refresh history is unavailable. Cancel preparation and load episodes again. If metadata is still incomplete, refresh the series in Sonarr first."
+		return result, nil
 	}
 	if failed && !running {
 		result.Status = "ERROR"
@@ -249,16 +301,44 @@ func (o *Orchestrator) pollReview(ctx context.Context, p reviewLease) (*ReviewPr
 	return result, nil
 }
 
+func (o *Orchestrator) reviewRefreshStatus(ctx context.Context, p reviewLease) (string, error) {
+	if p.refreshID > 0 {
+		cmd, err := o.sonarr.GetCommand(ctx, p.refreshID)
+		if err == nil {
+			return cmd.Status, nil
+		}
+		if !errors.Is(err, servarr.ErrNotFound) {
+			return "", err
+		}
+	}
+	commands, err := o.sonarr.GetCommands(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, cmd := range commands {
+		if cmd.Name == "RefreshSeries" && cmd.Body.IsNewSeries && slices.Contains(cmd.Body.SeriesIDs, p.seriesID) {
+			if err = o.writeReview(ctx, `UPDATE review_preparations SET refresh_id=? WHERE review_id=?`, cmd.ID, p.id); err != nil {
+				return "", err
+			}
+			return cmd.Status, nil
+		}
+	}
+	return "", nil
+}
+
 func (o *Orchestrator) releaseReview(ctx context.Context, p reviewLease, keep bool) error {
-	if p.created && p.tagID > 0 {
+	owner, err := o.reviewOwnsTag(ctx, p)
+	if err != nil {
+		return err
+	}
+	if owner {
 		if keep && p.seriesID > 0 {
 			series, err := o.sonarr.GetSeriesByID(ctx, p.seriesID)
 			if err != nil && !errors.Is(err, servarr.ErrNotFound) {
 				return err
 			}
 			if err == nil && slices.Contains(series.Tags, p.tagID) {
-				series.Tags = slices.DeleteFunc(series.Tags, func(id int) bool { return id == p.tagID })
-				if _, err = o.sonarr.UpdateSeries(ctx, series); err != nil {
+				if err = o.sonarr.RemoveSeriesTag(ctx, p.seriesID, p.tagID); err != nil {
 					return err
 				}
 			}
@@ -268,6 +348,17 @@ func (o *Orchestrator) releaseReview(ctx context.Context, p reviewLease, keep bo
 		}
 	}
 	return o.writeReview(ctx, `DELETE FROM review_preparations WHERE review_id=?`, p.id)
+}
+
+func (o *Orchestrator) reviewOwnsTag(ctx context.Context, p reviewLease) (bool, error) {
+	if !p.created || p.tagID <= 0 {
+		return false, nil
+	}
+	tags, err := o.sonarr.GetTags(ctx)
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(tags, func(tag servarr.Tag) bool { return tag.ID == p.tagID && strings.EqualFold(tag.Label, p.tagLabel()) }), nil
 }
 
 // PollReview updates a preparation and renews its browser-independent lease.
@@ -289,8 +380,11 @@ func (o *Orchestrator) PollReview(ctx context.Context, id int) (*ReviewPreparati
 
 // CancelReview durably requests cleanup; an in-flight refresh is allowed to finish first.
 func (o *Orchestrator) CancelReview(ctx context.Context, id int) (*ReviewPreparation, error) {
+	if err := o.writeReview(ctx, `UPDATE review_preparations SET cancelled=1 WHERE review_id=? AND confirmed=0`, id); err != nil {
+		return nil, err
+	}
 	if !o.workMu.TryLock() {
-		return nil, ErrSyncInProgress
+		return &ReviewPreparation{Status: "CANCELLING"}, nil
 	}
 	defer o.workMu.Unlock()
 	run := o.snapshot()
@@ -304,10 +398,9 @@ func (o *Orchestrator) CancelReview(ctx context.Context, id int) (*ReviewPrepara
 	if !p.created {
 		return &ReviewPreparation{Status: "CANCELLED"}, run.releaseReview(ctx, p, false)
 	}
-	if err = run.writeReview(ctx, `UPDATE review_preparations SET cancelled=1 WHERE review_id=?`, id); err != nil {
-		return nil, err
+	if p.confirmed {
+		return &ReviewPreparation{Status: "RETAINED", Message: "Mapping confirmed; series kept in Sonarr"}, nil
 	}
-	p.cancelled = true
 	return run.pollReview(ctx, p)
 }
 
@@ -324,41 +417,45 @@ func (o *Orchestrator) ConfirmReviewMapping(ctx context.Context, id, tvdbID, sea
 	}
 	prepared := err == nil
 	if required && !prepared {
-		return errors.New("preparation expired; load episodes again before confirming")
+		return fmt.Errorf("%w: load episodes again before confirming", ErrReviewPreparationChanged)
 	}
 	if prepared {
 		if p.cancelled || p.confirmed || p.tvdbID != tvdbID {
-			return errors.New("preparation target changed or was cancelled")
+			return fmt.Errorf("%w: target changed or was cancelled", ErrReviewPreparationChanged)
 		}
 		result, err := run.pollReview(ctx, p)
 		if err != nil {
 			return err
 		}
 		if result.Status != "READY" {
-			return errors.New("wait for episode preparation before confirming")
+			return fmt.Errorf("%w: wait for episode preparation before confirming", ErrReviewPreparationChanged)
 		}
 		validSeason := false
 		for _, value := range result.Series.Seasons {
 			validSeason = validSeason || value.SeasonNumber == season
 		}
 		if !validSeason {
-			return errors.New("selected season is not in this series")
+			return fmt.Errorf("%w: selected season is unavailable", ErrReviewPreparationChanged)
 		}
 		if len(numbers) > 0 {
 			if _, ok := resolveOverrideEpisodes(result.Episodes, season, numbers); !ok {
-				return errors.New("selected episodes are not in this season")
+				return fmt.Errorf("%w: selected episodes are unavailable", ErrReviewPreparationChanged)
 			}
 		}
 	}
 	err = run.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		if err := save(ctx, tx); err != nil {
-			return err
-		}
 		if prepared {
-			_, err := tx.ExecContext(ctx, `UPDATE review_preparations SET confirmed=1 WHERE review_id=?`, id)
-			return err
+			res, err := tx.ExecContext(ctx, `UPDATE review_preparations SET confirmed=1 WHERE review_id=? AND cancelled=0`, id)
+			if err != nil {
+				return err
+			}
+			if count, err := res.RowsAffected(); err != nil {
+				return err
+			} else if count != 1 {
+				return fmt.Errorf("%w: preparation was cancelled", ErrReviewPreparationChanged)
+			}
 		}
-		return nil
+		return save(ctx, tx)
 	})
 	if err != nil {
 		return err

@@ -48,6 +48,7 @@ type Result struct {
 	TargetID       int
 	TVDBSeason     int
 	EpisodeNumbers []int
+	WholeSeason    bool
 	TitleOverride  string
 	Diverted       bool
 	DivertReason   string
@@ -88,14 +89,15 @@ func (r *Resolver) resolve(ctx context.Context, media anilist.Media, queueReview
 	var tvdbID, tmdbID sql.NullInt64
 	var seasons, titleOverride sql.NullString
 	var episodeNumbersJSON string
+	var wholeSeason bool
 
 	err := r.db.Read(ctx, func(ctx context.Context, q storage.Querier) error {
 		row := q.QueryRowContext(ctx, `
-			SELECT media_type, tvdb_id, tmdb_id, seasons, title_override, episode_numbers
+			SELECT media_type, tvdb_id, tmdb_id, seasons, title_override, episode_numbers, whole_season
 			FROM mapping_overrides
 			WHERE anilist_id = ?;
 		`, media.ID)
-		return row.Scan(&overrideMediaType, &tvdbID, &tmdbID, &seasons, &titleOverride, &episodeNumbersJSON)
+		return row.Scan(&overrideMediaType, &tvdbID, &tmdbID, &seasons, &titleOverride, &episodeNumbersJSON, &wholeSeason)
 	})
 
 	if err == nil {
@@ -134,6 +136,7 @@ func (r *Resolver) resolve(ctx context.Context, media anilist.Media, queueReview
 					Tier:           TierOverride,
 					TargetService:  "SONARR",
 					EpisodeNumbers: episodeNumbers,
+					WholeSeason:    wholeSeason,
 					TargetID:       int(tvdbID.Int64),
 					TVDBSeason:     seasonNum,
 					TitleOverride:  titleOverride.String,

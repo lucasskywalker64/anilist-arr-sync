@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,7 +16,7 @@ import (
 )
 
 func TestReviewPreparationLifecycle(t *testing.T) {
-	for _, tc := range []struct{ existing, confirm, cancelEarly, adopted, failDelete bool }{{}, {existing: true}, {confirm: true}, {cancelEarly: true}, {adopted: true}, {failDelete: true}} {
+	for _, tc := range []struct{ existing, confirm, cancelEarly, adopted, failDelete, uncertainAdd, commandLost bool }{{}, {existing: true}, {confirm: true}, {cancelEarly: true}, {adopted: true}, {failDelete: true}, {uncertainAdd: true}, {commandLost: true}} {
 		existing := tc.existing
 		name := map[bool]string{false: "new", true: "existing"}[existing]
 		if tc.confirm {
@@ -30,6 +31,12 @@ func TestReviewPreparationLifecycle(t *testing.T) {
 		if tc.failDelete {
 			name += "/retry-cleanup"
 		}
+		if tc.uncertainAdd {
+			name += "/late-add"
+		}
+		if tc.commandLost {
+			name += "/lost-refresh-history"
+		}
 		t.Run(name, func(t *testing.T) {
 			db := newTestStorage(t)
 			if err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
@@ -39,9 +46,11 @@ func TestReviewPreparationLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			ready := existing
+			commandAvailable := true
 			added := existing
 			deleted := false
 			failDelete := tc.failDelete
+			var ownershipTag servarr.Tag
 			series := servarr.Series{ID: 10, TVDBID: 123, Title: "Anime", Path: "/anime/Anime", QualityProfileID: 1, Seasons: []servarr.Season{{SeasonNumber: 1}}}
 			series.Monitored = existing
 			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -53,13 +62,19 @@ func TestReviewPreparationLifecycle(t *testing.T) {
 					}
 					_ = json.NewEncoder(w).Encode([]servarr.Series{result})
 				case r.URL.Path == "/api/v3/tag" && r.Method == http.MethodGet:
-					_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 1, Label: "anilist-sync"}})
+					tags := []servarr.Tag{{ID: 1, Label: "anilist-sync"}}
+					if ownershipTag.ID > 0 {
+						tags = append(tags, ownershipTag)
+					}
+					_ = json.NewEncoder(w).Encode(tags)
 				case r.URL.Path == "/api/v3/tag" && r.Method == http.MethodPost:
 					var tag servarr.Tag
 					_ = json.NewDecoder(r.Body).Decode(&tag)
 					tag.ID = 99
+					ownershipTag = tag
 					_ = json.NewEncoder(w).Encode(tag)
 				case r.URL.Path == "/api/v3/tag/99" && r.Method == http.MethodDelete:
+					ownershipTag = servarr.Tag{}
 					w.WriteHeader(http.StatusOK)
 				case r.URL.Path == "/api/v3/series" && r.Method == http.MethodPost:
 					var req servarr.AddSeriesRequest
@@ -70,10 +85,22 @@ func TestReviewPreparationLifecycle(t *testing.T) {
 					series.Tags = req.Tags
 					added = true
 					series.AddOptions = req.AddOptions
+					if tc.uncertainAdd {
+						added = false
+						http.Error(w, "response lost", http.StatusBadGateway)
+						return
+					}
 					_ = json.NewEncoder(w).Encode(series)
-				case r.URL.Path == "/api/v3/series" && r.Method == http.MethodPut:
-					_ = json.NewDecoder(r.Body).Decode(&series)
-					_ = json.NewEncoder(w).Encode(series)
+				case r.URL.Path == "/api/v3/series/editor" && r.Method == http.MethodPut:
+					var body struct {
+						SeriesIDs, Tags []int
+						ApplyTags       string
+					}
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					if !slices.Equal(body.SeriesIDs, []int{10}) || !slices.Equal(body.Tags, []int{99}) || body.ApplyTags != "remove" {
+						t.Errorf("unexpected tag edit: %+v", body)
+					}
+					series.Tags = slices.DeleteFunc(series.Tags, func(id int) bool { return id == 99 })
 				case r.URL.Path == "/api/v3/series/10" && r.Method == http.MethodDelete:
 					if failDelete {
 						http.Error(w, "try again", http.StatusBadRequest)
@@ -93,12 +120,25 @@ func TestReviewPreparationLifecycle(t *testing.T) {
 						result.AddOptions = nil
 					}
 					_ = json.NewEncoder(w).Encode(result)
-				case r.URL.Path == "/api/v3/command":
+				case r.URL.Path == "/api/v3/command" || r.URL.Path == "/api/v3/command/7":
+					if !commandAvailable {
+						if r.URL.Path == "/api/v3/command" {
+							_, _ = w.Write([]byte(`[]`))
+						} else {
+							http.NotFound(w, r)
+						}
+						return
+					}
 					status := "started"
 					if ready {
 						status = "completed"
 					}
-					_ = json.NewEncoder(w).Encode([]map[string]any{{"id": 7, "name": "RefreshSeries", "status": status, "body": map[string]any{"seriesIds": []int{10}, "isNewSeries": true}}})
+					cmd := map[string]any{"id": 7, "name": "RefreshSeries", "status": status, "body": map[string]any{"seriesIds": []int{10}, "isNewSeries": true}}
+					if r.URL.Path == "/api/v3/command" {
+						_ = json.NewEncoder(w).Encode([]any{cmd})
+					} else {
+						_ = json.NewEncoder(w).Encode(cmd)
+					}
 				case r.URL.Path == "/api/v3/episode":
 					_ = json.NewEncoder(w).Encode([]servarr.Episode{{ID: 101, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 1}, {ID: 113, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 13, Title: "Part 2 premiere"}})
 				default:
@@ -125,6 +165,28 @@ func TestReviewPreparationLifecycle(t *testing.T) {
 				return rec
 			}
 			rec := request(http.MethodPost, "/api/v1/review/1/prepare", `{"targetId":123}`)
+			if tc.uncertainAdd {
+				if rec.Code == 200 {
+					t.Fatal("expected an uncertain add response")
+				}
+				// A lost response remains uncertain even after the normal cleanup timeout.
+				if err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+					_, err := tx.ExecContext(ctx, `UPDATE review_preparations SET add_started_at=datetime('now','-1 day')`)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				rec = request(http.MethodDelete, "/api/v1/review/1/preparation", "")
+				if !strings.Contains(rec.Body.String(), `"status":"CANCELLING"`) || ownershipTag.ID != 99 {
+					t.Fatalf("lost lease before add settled: %s", rec.Body.String())
+				}
+				added, ready = true, true
+				rec = request(http.MethodGet, "/api/v1/review/1/preparation", "")
+				if !strings.Contains(rec.Body.String(), `"status":"RETAINED"`) || deleted {
+					t.Fatalf("could not prove original settings: %s", rec.Body.String())
+				}
+				return
+			}
 			if rec.Code != http.StatusOK {
 				t.Fatalf("prepare %d: %s", rec.Code, rec.Body.String())
 			}
@@ -147,11 +209,28 @@ func TestReviewPreparationLifecycle(t *testing.T) {
 				return
 			}
 			ready = true
+			if tc.commandLost {
+				commandAvailable = false
+				rec = request(http.MethodGet, "/api/v1/review/1/preparation", "")
+				if !strings.Contains(rec.Body.String(), `"status":"ERROR"`) {
+					t.Fatalf("missing command should offer recovery: %s", rec.Body.String())
+				}
+				rec = request(http.MethodDelete, "/api/v1/review/1/preparation", "")
+				if !strings.Contains(rec.Body.String(), `"status":"RETAINED"`) || deleted {
+					t.Fatalf("unverified refresh should retain series: %s", rec.Body.String())
+				}
+				rec = request(http.MethodPost, "/api/v1/review/1/prepare", `{"targetId":123}`)
+				if !strings.Contains(rec.Body.String(), `"status":"READY"`) {
+					t.Fatalf("could not reload retained series: %s", rec.Body.String())
+				}
+				return
+			}
 			rec = request(http.MethodGet, "/api/v1/review/1/preparation", "")
 			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"READY"`) || !strings.Contains(rec.Body.String(), "Part 2 premiere") {
 				t.Fatalf("poll: %d %s", rec.Code, rec.Body.String())
 			}
 			if tc.confirm {
+				commandAvailable = false
 				rec = request(http.MethodPost, "/api/v1/review/1/resolve", `{"mediaType":"SERIES","tvdbId":123,"seasons":"1","episodeNumbers":[13]}`)
 				if rec.Code != 200 {
 					t.Fatalf("confirm: %d %s", rec.Code, rec.Body.String())
@@ -162,7 +241,7 @@ func TestReviewPreparationLifecycle(t *testing.T) {
 				}
 			}
 			if tc.adopted {
-				series.Monitored = true
+				series.SeasonFolder = !series.SeasonFolder
 			}
 			rec = request(http.MethodDelete, "/api/v1/review/1/preparation", "")
 			if tc.failDelete {

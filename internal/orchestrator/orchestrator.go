@@ -753,9 +753,9 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 		o.reviewMissingEpisodes(ctx, entry, report)
 		return dispatchOutcome{monitoredStatus: "PENDING_REVIEW", season: targetSeason, shouldUpsert: true}
 	}
-	var specialsOverride *SpecialsOverrideScope
+	var episodeOverride *EpisodeOverrideScope
 	if len(overrideEpisodeIDs) > 0 {
-		specialsOverride = &SpecialsOverrideScope{SeasonNumber: targetSeason, AniListID: entry.Media.ID, EpisodeNumbers: res.EpisodeNumbers, EpisodeIDs: overrideEpisodeIDs}
+		episodeOverride = &EpisodeOverrideScope{SeasonNumber: targetSeason, AniListID: entry.Media.ID, EpisodeNumbers: res.EpisodeNumbers, EpisodeIDs: overrideEpisodeIDs}
 	}
 
 	var startDate time.Time
@@ -795,7 +795,11 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 		}
 	}
 	subSeasonNum := extractSubSeasonNumber(titles...)
-	sliceEpisodeIDs, isSplitCour := FindSubSeasonEpisodeSlice(episodes, targetSeason, subSeasonNum, startDate, tolerance)
+	var sliceEpisodeIDs []int
+	var isSplitCour bool
+	if !res.WholeSeason {
+		sliceEpisodeIDs, isSplitCour = FindSubSeasonEpisodeSlice(episodes, targetSeason, subSeasonNum, startDate, tolerance)
+	}
 	if len(overrideEpisodeIDs) > 0 {
 		sliceEpisodeIDs, isSplitCour = overrideEpisodeIDs, true
 	}
@@ -812,7 +816,7 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 			return dispatchOutcome{shouldUpsert: false}
 		}
 	}
-	if hasManagedTag && !isSplitCour && (subSeasonNum > 0 || hasMidseasonBoundary(episodes, targetSeason)) &&
+	if hasManagedTag && !res.WholeSeason && !isSplitCour && (subSeasonNum > 0 || hasMidseasonBoundary(episodes, targetSeason)) &&
 		((entry.Status == anilist.StatusCompleted && (o.cfg.UnmonitorCompleted || o.cfg.DeleteCompleted)) ||
 			(entry.Status == anilist.StatusDropped && (o.cfg.UnmonitorDropped || o.cfg.DeleteDropped)) ||
 			((entry.Status == "" || entry.Status == anilist.StatusCurrent) && entry.Progress > 0 && (o.cfg.UnmonitorWatched || o.cfg.DeleteWatched))) {
@@ -841,14 +845,13 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 					if anyMonitored {
 						if dryRun {
 							if err := o.stageAction(ctx, ActionUnmonitorSeason, "SERIES", title, "SONARR", MonitorSeasonPayload{
-								SeriesID:         series.ID,
-								TVDBID:           series.TVDBID,
-								SeasonNumber:     targetSeason,
-								EpisodeIDs:       sliceEpisodeIDs,
-								EpisodeNumbers:   selectedEpisodeNumbers(episodes, sliceEpisodeIDs),
-								EpisodeSeason:    targetSeason,
-								SpecialsOverride: specialsOverride,
-								AnilistID:        entry.Media.ID,
+								SeriesID:        series.ID,
+								TVDBID:          series.TVDBID,
+								SeasonNumber:    targetSeason,
+								EpisodeIDs:      sliceEpisodeIDs,
+								EpisodeNumbers:  selectedEpisodeNumbers(episodes, sliceEpisodeIDs),
+								EpisodeOverride: episodeOverride,
+								AnilistID:       entry.Media.ID,
 							}); err != nil {
 								report.Errors = append(report.Errors, fmt.Sprintf("stage unmonitor episodes series %d: %v", series.ID, err))
 								return dispatchOutcome{shouldUpsert: false}
@@ -931,7 +934,7 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 							EpisodeIDs:         targetEpisodeIDs,
 							EpisodeNumbers:     selectedEpisodeNumbers(episodes, targetEpisodeIDs),
 							EpisodeSeason:      targetSeason,
-							SpecialsOverride:   specialsOverride,
+							EpisodeOverride:    episodeOverride,
 							RequireUnmonitored: &unmonitorEnabled,
 						}); err != nil {
 							report.Errors = append(report.Errors, fmt.Sprintf("stage delete episode files series %d: %v", series.ID, err))
@@ -1014,12 +1017,12 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 				if len(epIDsToUnmonitor) > 0 {
 					if dryRun {
 						if err := o.stageAction(ctx, ActionUnmonitorEpisode, "SERIES", title, "SONARR", UnmonitorEpisodePayload{
-							SeriesID:         series.ID,
-							EpisodeIDs:       epIDsToUnmonitor,
-							EpisodeNumbers:   selectedEpisodeNumbers(episodes, epIDsToUnmonitor),
-							EpisodeSeason:    targetSeason,
-							SpecialsOverride: specialsOverride,
-							Title:            series.Title,
+							SeriesID:        series.ID,
+							EpisodeIDs:      epIDsToUnmonitor,
+							EpisodeNumbers:  selectedEpisodeNumbers(episodes, epIDsToUnmonitor),
+							EpisodeSeason:   targetSeason,
+							EpisodeOverride: episodeOverride,
+							Title:           series.Title,
 						}); err != nil {
 							report.Errors = append(report.Errors, fmt.Sprintf("stage unmonitor watched episodes series %d: %v", series.ID, err))
 							return dispatchOutcome{shouldUpsert: false}
@@ -1051,7 +1054,7 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 							EpisodeIDs:         watchedEpisodeIDs,
 							EpisodeNumbers:     selectedEpisodeNumbers(episodes, watchedEpisodeIDs),
 							EpisodeSeason:      targetSeason,
-							SpecialsOverride:   specialsOverride,
+							EpisodeOverride:    episodeOverride,
 							RequireUnmonitored: &o.cfg.UnmonitorWatched,
 						}); err != nil {
 							report.Errors = append(report.Errors, fmt.Sprintf("stage delete watched episode files series %d: %v", series.ID, err))
@@ -1094,14 +1097,13 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 		if len(episodesToMonitor) > 0 {
 			if dryRun {
 				if err := o.stageAction(ctx, ActionMonitorSeason, "SERIES", title, "SONARR", MonitorSeasonPayload{
-					SeriesID:         series.ID,
-					TVDBID:           series.TVDBID,
-					SeasonNumber:     targetSeason,
-					EpisodeIDs:       episodesToMonitor,
-					EpisodeNumbers:   selectedEpisodeNumbers(episodes, episodesToMonitor),
-					EpisodeSeason:    targetSeason,
-					SpecialsOverride: specialsOverride,
-					AnilistID:        entry.Media.ID,
+					SeriesID:        series.ID,
+					TVDBID:          series.TVDBID,
+					SeasonNumber:    targetSeason,
+					EpisodeIDs:      episodesToMonitor,
+					EpisodeNumbers:  selectedEpisodeNumbers(episodes, episodesToMonitor),
+					EpisodeOverride: episodeOverride,
+					AnilistID:       entry.Media.ID,
 				}); err != nil {
 					report.Errors = append(report.Errors, fmt.Sprintf("stage monitor episodes series %d: %v", series.ID, err))
 					return dispatchOutcome{shouldUpsert: false}

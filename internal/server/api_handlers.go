@@ -170,6 +170,7 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 				tmdb_id = excluded.tmdb_id,
 				seasons = excluded.seasons,
 				episode_numbers = excluded.episode_numbers,
+				whole_season = CASE WHEN mapping_overrides.media_type = excluded.media_type AND mapping_overrides.tvdb_id = excluded.tvdb_id AND mapping_overrides.seasons = excluded.seasons AND excluded.episode_numbers = '[]' THEN mapping_overrides.whole_season ELSE 0 END,
 				title_override = excluded.title_override,
 				updated_at = CURRENT_TIMESTAMP;
 		`, req.AniListID, req.MediaType, req.TVDBID, req.TMDBID, seasons, titleVal, string(episodeNumbersJSON))
@@ -612,16 +613,6 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	connectionsChanged := servarrConnectionsChanged(*s.cfg, next)
-	if connectionsChanged && s.db != nil {
-		var count int
-		err := s.db.Read(r.Context(), func(ctx context.Context, q storage.Querier) error {
-			return q.QueryRowContext(ctx, `SELECT COUNT(*) FROM review_preparations`).Scan(&count)
-		})
-		if err != nil || count > 0 {
-			s.writeJSONError(w, http.StatusConflict, "finish or cancel review preparations before changing service connections")
-			return
-		}
-	}
 	var sonarrClient *servarr.SonarrClient
 	var radarrClient *servarr.RadarrClient
 	if connectionsChanged && s.orch != nil {

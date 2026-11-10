@@ -14,6 +14,7 @@
   let season = '';
   let scope = /\b(part|cour)\s+\d+/i.test(item.titleRomaji) ? 'episodes' : 'season';
   let selected: number[] = [];
+  let titleOverride = '';
   let busy = false;
   let polling = false;
   let paused = false;
@@ -23,6 +24,7 @@
   let info = '';
   let timer: ReturnType<typeof setTimeout> | undefined;
   let deadline = 0;
+  let pollVersion = 0;
   $: episodes = (preparation?.episodes ?? []).filter(ep => ep.seasonNumber === Number(season)).sort((a,b) => a.episodeNumber-b.episodeNumber);
   $: ready = mediaType === 'MOVIE' ? !!movie : preparation?.status === 'READY' && season !== '' && (season !== '0' && scope === 'season' || selected.length > 0);
   $: dispatch('locked', busy || !!preparation);
@@ -30,11 +32,31 @@
   export function selectCandidate(candidate: Candidate) {
     if (preparation || busy) return;
     targetId = String((mediaType === 'SERIES' ? candidate.tvdbId : candidate.tmdbId) ?? '');
-    movie = null; selected = []; season = ''; error = '';
+    clearMatch();
+    titleOverride = candidate.title;
   }
 
   function clearMatch() { movie = null; selected = []; season = ''; error = ''; }
-  function stopPolling() { if (timer) clearTimeout(timer); polling = false; }
+  function stopPolling() {
+    if (timer) clearTimeout(timer);
+    pollVersion++;
+    polling = false;
+  }
+  function schedulePoll(delay: number) {
+    const version = pollVersion;
+    timer = setTimeout(async () => {
+      try {
+        const result = await api.getReviewPreparation(item.id);
+        if (version === pollVersion) accept(result);
+      } catch (e: any) {
+        if (version === pollVersion) {
+          error = e.message;
+          paused = true;
+          stopPolling();
+        }
+      }
+    }, delay);
+  }
   function accept(result: ReviewPreparation) {
     if (destroyed) return;
     preparation = result;
@@ -44,7 +66,7 @@
     }
     if (result.status === 'READY') {
       stopPolling(); paused = false;
-      timer = setTimeout(async () => { try { accept(await api.getReviewPreparation(item.id)); } catch (e: any) { if (!destroyed) { error = e.message; paused = true; } } },60000);
+      schedulePoll(60000);
       if (!season) {
         const seasons = result.series?.seasons.map(value => value.seasonNumber) ?? [];
         season = item.reason.includes('SPECIAL') && seasons.includes(0) ? '0' : seasons.includes(1) ? '1' : String(seasons[0] ?? '');
@@ -68,10 +90,7 @@
     if (destroyed) return;
     if (Date.now() >= deadline) { paused = true; return; }
     polling = true;
-    timer = setTimeout(async () => {
-      try { accept(await api.getReviewPreparation(item.id)); }
-      catch (e: any) { if (!destroyed) { error = e.message; paused = true; stopPolling(); } }
-    },1500);
+    schedulePoll(1500);
   }
   async function lookup() {
     busy = true; error = ''; info = ''; paused = false; deadline = Date.now()+60000;
@@ -96,11 +115,19 @@
   function toggleEpisode(number: number) { selected = selected.includes(number) ? selected.filter(value => value !== number) : [...selected,number].sort((a,b) => a-b); }
   async function confirm() {
     if (!ready) return;
-    busy = true; error = '';
+    busy = true; error = ''; stopPolling();
     try {
-      await api.resolveReview(item.id,{ mediaType, preparationRequired:mediaType === 'SERIES', tvdbId: mediaType === 'SERIES' ? Number(targetId) : null, tmdbId: mediaType === 'MOVIE' ? Number(targetId) : null, seasons: mediaType === 'SERIES' ? season : '1', episodeNumbers: mediaType === 'SERIES' && (scope === 'episodes' || season === '0') ? selected : [] });
+      await api.resolveReview(item.id,{
+        mediaType,
+        preparationRequired: mediaType === 'SERIES',
+        tvdbId: mediaType === 'SERIES' ? Number(targetId) : null,
+        tmdbId: mediaType === 'MOVIE' ? Number(targetId) : null,
+        seasons: mediaType === 'SERIES' ? season : '1',
+        episodeNumbers: mediaType === 'SERIES' && (scope === 'episodes' || season === '0') ? selected : [],
+        titleOverride: titleOverride.trim() || undefined,
+      });
       preparation = null; stopPolling(); dispatch('resolved',`Resolved "${item.titleRomaji}" and saved its mapping.`);
-    } catch (e: any) { error = e.message || 'Confirmation failed'; }
+    } catch (e: any) { error = e.message || 'Confirmation failed'; if (preparation && !destroyed) schedulePoll(60000); }
     finally { busy = false; }
   }
   async function ignore() {
@@ -139,8 +166,9 @@
     {:else}
       <p class="waiting" aria-live="polite">{#if polling || busy}<RefreshCw size={16} class="spinning" />{/if}{cancelling ? 'Removing the temporary series after its initial refresh…' : paused ? 'Preparation is taking longer or needs attention.' : 'Loading Sonarr episode metadata…'}</p>
     {/if}
-    <div class="actions"><Button disabled={busy} on:click={cancelPreparation}><X size={16} />Cancel preparation</Button>{#if paused}<Button disabled={busy} on:click={continueWaiting}>Continue waiting / retry</Button>{/if}</div>
+    <div class="actions"><Button disabled={busy} on:click={cancelPreparation}><X size={16} />Cancel preparation</Button>{#if paused}<Button disabled={busy} on:click={continueWaiting}>Check again</Button>{/if}</div>
   {/if}
+  {#if ready}<label>Title override (optional)<input type="text" bind:value={titleOverride} disabled={busy} /></label>{/if}
   <div class="actions"><Button kind="success" disabled={busy || !ready || cancelling} on:click={confirm}><Check size={16} />Confirm mapping</Button><Button kind="danger" disabled={busy || !!preparation} on:click={ignore}><Ban size={16} />Ignore title</Button></div>
   <p class="hint">Monitoring and searches follow your configured sync mode after confirmation.</p>
 </div>

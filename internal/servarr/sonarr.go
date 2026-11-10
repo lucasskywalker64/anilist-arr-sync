@@ -40,25 +40,37 @@ type AddSeriesRequest struct {
 
 // Series represents a Sonarr series entry.
 type Series struct {
-	MonitorNewItems  string            `json:"monitorNewItems,omitempty"`
-	Year             int               `json:"year,omitempty"`
-	RemotePoster     string            `json:"remotePoster,omitempty"`
-	ID               int               `json:"id,omitempty"`
-	Title            string            `json:"title"`
-	SortTitle        string            `json:"sortTitle,omitempty"`
-	Status           string            `json:"status,omitempty"`
-	Overview         string            `json:"overview,omitempty"`
-	Monitored        bool              `json:"monitored"`
-	QualityProfileID int               `json:"qualityProfileId,omitempty"`
-	RootFolderPath   string            `json:"rootFolderPath,omitempty"`
-	Path             string            `json:"path,omitempty"`
-	TVDBID           int               `json:"tvdbId"`
-	TitleSlug        string            `json:"titleSlug,omitempty"`
-	SeriesType       string            `json:"seriesType,omitempty"`
-	SeasonFolder     bool              `json:"seasonFolder"`
-	Seasons          []Season          `json:"seasons,omitempty"`
-	Tags             []int             `json:"tags,omitempty"`
-	AddOptions       *AddSeriesOptions `json:"addOptions,omitempty"`
+	Added             time.Time         `json:"added"`
+	UseSceneNumbering bool              `json:"useSceneNumbering,omitempty"`
+	MonitorNewItems   string            `json:"monitorNewItems,omitempty"`
+	Year              int               `json:"year,omitempty"`
+	ID                int               `json:"id,omitempty"`
+	Title             string            `json:"title"`
+	SortTitle         string            `json:"sortTitle,omitempty"`
+	Status            string            `json:"status,omitempty"`
+	Overview          string            `json:"overview,omitempty"`
+	Monitored         bool              `json:"monitored"`
+	QualityProfileID  int               `json:"qualityProfileId,omitempty"`
+	RootFolderPath    string            `json:"rootFolderPath,omitempty"`
+	Path              string            `json:"path,omitempty"`
+	TVDBID            int               `json:"tvdbId"`
+	TitleSlug         string            `json:"titleSlug,omitempty"`
+	SeriesType        string            `json:"seriesType,omitempty"`
+	SeasonFolder      bool              `json:"seasonFolder"`
+	Seasons           []Season          `json:"seasons,omitempty"`
+	Tags              []int             `json:"tags,omitempty"`
+	AddOptions        *AddSeriesOptions `json:"addOptions,omitempty"`
+}
+
+// RemoveSeriesTag updates only the named tag, preserving the other series settings.
+func (c *SonarrClient) RemoveSeriesTag(ctx context.Context, seriesID, tagID int) error {
+	payload := map[string]any{"seriesIds": []int{seriesID}, "tags": []int{tagID}, "applyTags": "remove"}
+	req, err := c.newRequest(ctx, http.MethodPut, "/api/v3/series/editor", payload)
+	if err != nil {
+		return err
+	}
+	_, err = c.do(req, nil)
+	return err
 }
 
 // GetCommands returns recent command state, including the automatic initial refresh.
@@ -68,6 +80,17 @@ func (c *SonarrClient) GetCommands(ctx context.Context) ([]Command, error) {
 		return nil, err
 	}
 	var result []Command
+	_, err = c.do(req, &result)
+	return result, err
+}
+
+// GetCommand reads a command by ID after it leaves the active queue.
+func (c *SonarrClient) GetCommand(ctx context.Context, id int) (Command, error) {
+	var result Command
+	req, err := c.newRequest(ctx, http.MethodGet, fmt.Sprintf("/api/v3/command/%d", id), nil)
+	if err != nil {
+		return result, err
+	}
 	_, err = c.do(req, &result)
 	return result, err
 }

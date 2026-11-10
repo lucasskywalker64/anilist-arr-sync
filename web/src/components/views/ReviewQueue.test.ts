@@ -66,6 +66,25 @@ it('cancels preparation before allowing a target change',async()=>{
   expect(document.body.textContent).toContain('TMDB movie ID');
 });
 
+it('ignores an in-flight poll that finishes after cancellation', async () => {
+  vi.mocked(api.getReviewQueue).mockResolvedValue([item]);
+  vi.mocked(api.prepareReview).mockResolvedValue({status:'WAITING',created:true});
+  let finishPoll!: (value: ReviewPreparation) => void;
+  vi.mocked(api.getReviewPreparation).mockReturnValue(new Promise(resolve => { finishPoll = resolve; }));
+  vi.mocked(api.cancelReviewPreparation).mockResolvedValue({status:'CANCELLED',created:true});
+  component = new ReviewQueue({target:document.body});
+  await vi.waitFor(() => expect(button('Load episodes')).toBeDefined());
+  button('Load episodes').click();
+  await vi.waitFor(() => expect(api.getReviewPreparation).toHaveBeenCalled(), {timeout:3000});
+  button('Cancel preparation').click();
+  await vi.waitFor(() => expect(button('Load episodes').disabled).toBe(false));
+  finishPoll(prepared);
+  await tick();
+  expect(button('Load episodes').disabled).toBe(false);
+  expect(document.querySelector('fieldset')).toBeNull();
+  expect(button('Confirm mapping').disabled).toBe(true);
+});
+
 it('looks up an unadded movie and sends only its TMDB ID',async()=>{
   vi.mocked(api.getReviewQueue).mockResolvedValue([{...item,mediaType:'MOVIE',reason:'UNMAPPED',candidates:[{tmdbId:372058,title:'Your Name.'}]}]);
   vi.mocked(api.lookupReviewMovie).mockResolvedValue({tmdbId:372058,title:'Your Name.',year:2016});
