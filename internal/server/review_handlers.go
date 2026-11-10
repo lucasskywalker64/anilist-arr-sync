@@ -113,7 +113,7 @@ func (s *Server) handleSpecialEpisodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := s.Config()
-	client, err := servarr.NewSonarrClient(cfg.SonarrURL, cfg.SonarrAPIKey)
+	client, err := servarr.NewSonarrClient(cfg.SonarrURL, cfg.SonarrAPIKey, servarr.WithHTTPClient(s.outboundHTTPClient))
 	if err != nil {
 		s.writeJSONError(w, http.StatusBadRequest, "Sonarr is not configured")
 		return

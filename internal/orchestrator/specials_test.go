@@ -22,7 +22,7 @@ import (
 func TestSync_SpecialsEpisodeScope(t *testing.T) {
 	for _, seasonNumber := range []int{0, 1} {
 		for _, dryRun := range []bool{false, true} {
-			for _, scenario := range []string{"monitor", "watched", "completed", "dropped", "missing", "absent series", "missing before apply", "shared file"} {
+			for _, scenario := range []string{"monitor", "watched", "completed", "dropped", "missing", "absent series", "absent completed", "absent dropped", "missing before apply", "shared file"} {
 				t.Run(fmt.Sprintf("season=%d/%s/staged=%v", seasonNumber, scenario, dryRun), func(t *testing.T) {
 					ctx := context.Background()
 					db := setupTestDB(t)
@@ -36,10 +36,10 @@ func TestSync_SpecialsEpisodeScope(t *testing.T) {
 					if scenario == "watched" {
 						entry.Progress = 2
 					}
-					if scenario == "completed" || scenario == "shared file" {
+					if scenario == "completed" || scenario == "shared file" || scenario == "absent completed" {
 						entry.Status = anilist.StatusCompleted
 					}
-					if scenario == "dropped" {
+					if scenario == "dropped" || scenario == "absent dropped" {
 						entry.Status = anilist.StatusDropped
 					}
 					episodes := []servarr.Episode{}
@@ -64,7 +64,7 @@ func TestSync_SpecialsEpisodeScope(t *testing.T) {
 						switch {
 						case r.Method == http.MethodGet && r.URL.Path == "/api/v3/series/lookup":
 							lookup := series
-							if scenario == "absent series" {
+							if strings.HasPrefix(scenario, "absent ") {
 								lookup.ID = 0
 							}
 							_ = json.NewEncoder(w).Encode([]servarr.Series{lookup})
@@ -148,6 +148,12 @@ func TestSync_SpecialsEpisodeScope(t *testing.T) {
 							t.Fatalf("missing selection produced actions: %+v, mutations=%d, actions=%+v", report, mutations, actions)
 						}
 						assertSpecialsInReview(t, db)
+						return
+					}
+					if scenario == "absent completed" || scenario == "absent dropped" {
+						if report.QueuedReview != 0 || mutations != 0 || len(actions) != 0 {
+							t.Fatalf("absent cleanup target produced work: %+v mutations=%d actions=%+v", report, mutations, actions)
+						}
 						return
 					}
 					if dryRun {

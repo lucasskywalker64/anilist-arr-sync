@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -115,10 +116,17 @@ func TestSpecialEpisodesListsNumbersAndTitles(t *testing.T) {
 	cfg := config.NewDefault()
 	cfg.AuthenticationRequired = "DisabledForLocalAddresses"
 	cfg.SonarrURL, cfg.SonarrAPIKey = sonarr.URL, "key"
+	// The configured transport is the only route to this Sonarr host.
+	proxyURL, _ := url.Parse(sonarr.URL)
+	cfg.SonarrURL = "http://sonarr.invalid"
+	outbound := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	defer outbound.CloseIdleConnections()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sonarr/specials/423075", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	rec := httptest.NewRecorder()
-	NewServer(cfg, "", nil, nil, nil).Handler().ServeHTTP(rec, req)
+	srv := NewServer(cfg, "", nil, nil, nil)
+	srv.SetOutboundHTTPClient(outbound)
+	srv.Handler().ServeHTTP(rec, req)
 	var episodes []servarr.Episode
 	if err := json.Unmarshal(rec.Body.Bytes(), &episodes); err != nil {
 		t.Fatalf("%v: %s", err, rec.Body.String())

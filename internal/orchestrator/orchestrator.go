@@ -616,16 +616,16 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 	}
 
 	seriesExists := lookupErr == nil && series != nil && series.ID > 0
+	if !seriesExists && (entry.Status == anilist.StatusDropped || (entry.Status == anilist.StatusCompleted &&
+		(o.cleanupOnly(entry) || o.cfg.UnmonitorCompleted || o.cfg.DeleteCompleted))) {
+		return dispatchOutcome{shouldUpsert: false}
+	}
 	if len(res.EpisodeNumbers) > 0 && !seriesExists {
 		o.reviewMissingEpisodes(ctx, entry, report)
 		return dispatchOutcome{monitoredStatus: "PENDING_REVIEW", season: targetSeason, shouldUpsert: true}
 	}
 
 	if !seriesExists {
-		if entry.Status == anilist.StatusDropped || (entry.Status == anilist.StatusCompleted &&
-			(o.cleanupOnly(entry) || o.cfg.UnmonitorCompleted || o.cfg.DeleteCompleted)) {
-			return dispatchOutcome{shouldUpsert: false}
-		}
 		monitorOnAdd := o.cfg.SonarrMonitorOnAdd
 		pruneOnAdd := monitorOnAdd && o.cfg.UnmonitorWatched && entry.Progress > 0 &&
 			(entry.Status == "" || entry.Status == anilist.StatusCurrent) && o.cfg.TagName != ""

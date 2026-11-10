@@ -103,8 +103,9 @@
         tvdbId: tvdbStr ? parseInt(tvdbStr, 10) : null,
         tmdbId: tmdbStr ? parseInt(tmdbStr, 10) : null,
         seasons: seasonsStr || '1',
-        episodeNumbers: formMediaType === 'SERIES' && seasonsStr === '0' && tvdbStr === String(editingOverride?.tvdbId)
-          ? editingOverride?.episodeNumbers : [],
+        episodeNumbers: formMediaType === 'SERIES' && editingOverride?.mediaType === 'SERIES'
+          && seasonsStr === editingOverride.seasons && tvdbStr === String(editingOverride.tvdbId)
+          ? editingOverride.episodeNumbers ?? [] : [],
         titleOverride: titleStr || null,
       };
 
@@ -291,8 +292,8 @@
             disabled={formSaving}
           />
         </FormGroup>
-        {#if formSeasons === '0' && editingOverride?.episodeNumbers?.length}
-          <p>Specials episodes: {editingOverride.episodeNumbers.join(', ')}. Change the episode selection in the review queue.</p>
+        {#if formSeasons.trim() === editingOverride?.seasons && String(formTvdbId).trim() === String(editingOverride?.tvdbId) && editingOverride?.episodeNumbers?.length}
+          <p>Selected episodes: {editingOverride.episodeNumbers.join(', ')}. Change the episode selection in the review queue.</p>
         {/if}
       {:else}
         <FormGroup label="TMDB ID" helpText="Target TMDb movie ID">
