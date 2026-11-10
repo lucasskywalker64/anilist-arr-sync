@@ -143,9 +143,12 @@
 
   function formatPayload(payload: any): string {
     if (!payload) return '-';
-    if (typeof payload === 'string') return payload;
     try {
-      return JSON.stringify(payload);
+      const parsed = typeof payload === 'string' ? JSON.parse(payload) : payload;
+      const season = parsed.episodeSeason ?? parsed.seasonNumber ?? 0;
+      const scope = parsed.episodeNumbers?.length
+        ? `${season === 0 ? 'Specials (Season 0)' : `Season ${season}`}, episodes ${parsed.episodeNumbers.join(', ')}: ` : '';
+      return scope + (typeof payload === 'string' ? payload : JSON.stringify(payload));
     } catch {
       return String(payload);
     }

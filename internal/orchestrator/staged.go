@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -92,11 +93,13 @@ type AddSeriesPayload struct {
 
 // MonitorSeasonPayload stores parameters for monitoring or unmonitoring a season or episode slice.
 type MonitorSeasonPayload struct {
-	SeriesID     int   `json:"seriesId"`
-	TVDBID       int   `json:"tvdbId"`
-	SeasonNumber int   `json:"seasonNumber"`
-	EpisodeIDs   []int `json:"episodeIds,omitempty"`
-	AnilistID    int   `json:"anilistId,omitempty"`
+	EpisodeOverride *EpisodeOverrideScope `json:"specialsOverride,omitempty"`
+	EpisodeNumbers  []int                 `json:"episodeNumbers,omitempty"`
+	SeriesID        int                   `json:"seriesId"`
+	TVDBID          int                   `json:"tvdbId"`
+	SeasonNumber    int                   `json:"seasonNumber"`
+	EpisodeIDs      []int                 `json:"episodeIds,omitempty"`
+	AnilistID       int                   `json:"anilistId,omitempty"`
 }
 
 // UnmonitorMoviePayload stores parameters for unmonitoring a movie in Radarr.
@@ -108,29 +111,46 @@ type UnmonitorMoviePayload struct {
 
 // DeleteFilePayload stores parameters for deleting files in Sonarr or Radarr.
 type DeleteFilePayload struct {
-	MovieID            int    `json:"movieId,omitempty"`
-	MovieFileID        int    `json:"movieFileId,omitempty"`
-	SeriesID           int    `json:"seriesId,omitempty"`
-	EpisodeFileIDs     []int  `json:"episodeFileIds,omitempty"`
-	Title              string `json:"title,omitempty"`
-	EpisodeIDs         []int  `json:"episodeIds,omitempty"`
-	RequireUnmonitored *bool  `json:"requireUnmonitored,omitempty"`
+	EpisodeSeason      int                   `json:"episodeSeason,omitempty"`
+	EpisodeOverride    *EpisodeOverrideScope `json:"specialsOverride,omitempty"`
+	EpisodeNumbers     []int                 `json:"episodeNumbers,omitempty"`
+	MovieID            int                   `json:"movieId,omitempty"`
+	MovieFileID        int                   `json:"movieFileId,omitempty"`
+	SeriesID           int                   `json:"seriesId,omitempty"`
+	EpisodeFileIDs     []int                 `json:"episodeFileIds,omitempty"`
+	Title              string                `json:"title,omitempty"`
+	EpisodeIDs         []int                 `json:"episodeIds,omitempty"`
+	RequireUnmonitored *bool                 `json:"requireUnmonitored,omitempty"`
 }
 
 // UnmonitorEpisodePayload stores parameters for unmonitoring episodes in Sonarr.
 type UnmonitorEpisodePayload struct {
-	SeriesID   int    `json:"seriesId"`
-	EpisodeIDs []int  `json:"episodeIds"`
-	Title      string `json:"title,omitempty"`
+	EpisodeSeason   int                   `json:"episodeSeason,omitempty"`
+	EpisodeOverride *EpisodeOverrideScope `json:"specialsOverride,omitempty"`
+	EpisodeNumbers  []int                 `json:"episodeNumbers,omitempty"`
+	SeriesID        int                   `json:"seriesId"`
+	EpisodeIDs      []int                 `json:"episodeIds"`
+	Title           string                `json:"title,omitempty"`
 }
 
 // DeleteEpisodeFilePayload stores parameters for deleting episode files in Sonarr.
 type DeleteEpisodeFilePayload struct {
-	SeriesID           int    `json:"seriesId"`
-	EpisodeFileIDs     []int  `json:"episodeFileIds"`
-	Title              string `json:"title,omitempty"`
-	EpisodeIDs         []int  `json:"episodeIds,omitempty"`
-	RequireUnmonitored *bool  `json:"requireUnmonitored,omitempty"`
+	EpisodeSeason      int                   `json:"episodeSeason,omitempty"`
+	EpisodeOverride    *EpisodeOverrideScope `json:"specialsOverride,omitempty"`
+	EpisodeNumbers     []int                 `json:"episodeNumbers,omitempty"`
+	SeriesID           int                   `json:"seriesId"`
+	EpisodeFileIDs     []int                 `json:"episodeFileIds"`
+	Title              string                `json:"title,omitempty"`
+	EpisodeIDs         []int                 `json:"episodeIds,omitempty"`
+	RequireUnmonitored *bool                 `json:"requireUnmonitored,omitempty"`
+}
+
+// EpisodeOverrideScope pins the complete mapping for validation before staged execution.
+type EpisodeOverrideScope struct {
+	SeasonNumber   int   `json:"seasonNumber,omitempty"`
+	AniListID      int   `json:"anilistId"`
+	EpisodeNumbers []int `json:"episodeNumbers"`
+	EpisodeIDs     []int `json:"episodeIds"`
 }
 
 func (o *Orchestrator) servarrEndpoint(service string) string {
@@ -304,6 +324,39 @@ func (o *Orchestrator) applyStagedAction(ctx context.Context, id int) error {
 	}
 	if action.ActionType.usesLocalIDs() && (endpoint == "" || stagedEndpointKey(endpoint) != stagedEndpointKey(o.servarrEndpoint(action.TargetService))) {
 		return ErrStagedEndpointChanged
+	}
+	if action.TargetService == "SONARR" {
+		var payload struct {
+			TVDBID          int                   `json:"tvdbId"`
+			SeriesID        int                   `json:"seriesId"`
+			EpisodeOverride *EpisodeOverrideScope `json:"specialsOverride"`
+		}
+		if err := json.Unmarshal([]byte(action.PayloadJSON), &payload); err != nil {
+			return fmt.Errorf("unmarshal Sonarr scope: %w", err)
+		}
+		if blocked, err := o.reviewBlocksSeries(ctx, payload.SeriesID, payload.TVDBID); err != nil {
+			return err
+		} else if blocked {
+			return errors.New("series is being prepared in review")
+		}
+		if scope := payload.EpisodeOverride; scope != nil {
+			if o.sonarr == nil {
+				return errors.New("sonarr client is nil")
+			}
+			episodes, err := o.sonarr.GetEpisodes(ctx, payload.SeriesID)
+			if err != nil {
+				return err
+			}
+			ids, resolved := resolveOverrideEpisodes(episodes, scope.SeasonNumber, scope.EpisodeNumbers)
+			if !resolved || len(ids) == 0 || !slices.Equal(ids, scope.EpisodeIDs) {
+				report := &SyncReport{}
+				o.reviewMissingEpisodes(ctx, anilist.MediaListEntry{Media: anilist.Media{ID: scope.AniListID, Title: anilist.MediaTitle{Romaji: action.Title}}}, report)
+				if len(report.Errors) > 0 {
+					return errors.New(strings.Join(report.Errors, "; "))
+				}
+				return errors.New("episode override scope changed or is missing. Resolve the entry in review and run a new sync")
+			}
+		}
 	}
 
 	var syncUpdateFn func(ctx context.Context, tx *sql.Tx) error

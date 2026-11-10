@@ -28,23 +28,25 @@ var errMissingInitialCredentials = errors.New("both username and password are re
 
 // MappingOverride represents a row in mapping_overrides table.
 type MappingOverride struct {
-	AniListID     int       `json:"anilistId"`
-	MediaType     string    `json:"mediaType"`
-	TVDBID        *int      `json:"tvdbId,omitempty"`
-	TMDBID        *int      `json:"tmdbId,omitempty"`
-	Seasons       string    `json:"seasons"`
-	TitleOverride *string   `json:"titleOverride,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	AniListID      int       `json:"anilistId"`
+	MediaType      string    `json:"mediaType"`
+	TVDBID         *int      `json:"tvdbId,omitempty"`
+	TMDBID         *int      `json:"tmdbId,omitempty"`
+	Seasons        string    `json:"seasons"`
+	EpisodeNumbers []int     `json:"episodeNumbers,omitempty"`
+	TitleOverride  *string   `json:"titleOverride,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 type createOverrideRequest struct {
-	AniListID     int    `json:"anilistId"`
-	MediaType     string `json:"mediaType"`
-	TVDBID        *int   `json:"tvdbId"`
-	TMDBID        *int   `json:"tmdbId"`
-	Seasons       string `json:"seasons"`
-	TitleOverride string `json:"titleOverride"`
+	AniListID      int    `json:"anilistId"`
+	MediaType      string `json:"mediaType"`
+	TVDBID         *int   `json:"tvdbId"`
+	TMDBID         *int   `json:"tmdbId"`
+	Seasons        string `json:"seasons"`
+	EpisodeNumbers []int  `json:"episodeNumbers"`
+	TitleOverride  string `json:"titleOverride"`
 }
 
 // handleListOverrides returns all custom mapping overrides.
@@ -57,7 +59,7 @@ func (s *Server) handleListOverrides(w http.ResponseWriter, r *http.Request) {
 	var list []MappingOverride
 	err := s.db.Read(r.Context(), func(ctx context.Context, q storage.Querier) error {
 		rows, err := q.QueryContext(ctx, `
-			SELECT anilist_id, media_type, tvdb_id, tmdb_id, seasons, title_override, created_at, updated_at
+			SELECT anilist_id, media_type, tvdb_id, tmdb_id, seasons, title_override, created_at, updated_at, episode_numbers
 			FROM mapping_overrides
 			ORDER BY anilist_id ASC;
 		`)
@@ -70,14 +72,18 @@ func (s *Server) handleListOverrides(w http.ResponseWriter, r *http.Request) {
 			var o MappingOverride
 			var tvdb, tmdb sql.NullInt64
 			var title sql.NullString
+			var episodeNumbersJSON string
 			if scanErr := rows.Scan(
-				&o.AniListID, &o.MediaType, &tvdb, &tmdb, &o.Seasons, &title, &o.CreatedAt, &o.UpdatedAt,
+				&o.AniListID, &o.MediaType, &tvdb, &tmdb, &o.Seasons, &title, &o.CreatedAt, &o.UpdatedAt, &episodeNumbersJSON,
 			); scanErr != nil {
 				return scanErr
 			}
 			if tvdb.Valid {
 				v := int(tvdb.Int64)
 				o.TVDBID = &v
+			}
+			if err := json.Unmarshal([]byte(episodeNumbersJSON), &o.EpisodeNumbers); err != nil {
+				return err
 			}
 			if tmdb.Valid {
 				v := int(tmdb.Int64)
@@ -133,6 +139,19 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 	if seasons == "" {
 		seasons = "1"
 	}
+	if err := validateEpisodeOverride(req.MediaType, seasons, req.EpisodeNumbers); err != nil {
+		s.writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(req.EpisodeNumbers) > 0 && (req.TVDBID == nil || *req.TVDBID <= 0) {
+		s.writeJSONError(w, http.StatusBadRequest, "tvdbId is required for SERIES")
+		return
+	}
+	sort.Ints(req.EpisodeNumbers)
+	if req.EpisodeNumbers == nil {
+		req.EpisodeNumbers = []int{}
+	}
+	episodeNumbersJSON, _ := json.Marshal(req.EpisodeNumbers)
 
 	var titleVal any
 	if trimmed := strings.TrimSpace(req.TitleOverride); trimmed != "" {
@@ -142,17 +161,19 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 	err := s.db.Write(r.Context(), func(ctx context.Context, tx *sql.Tx) error {
 		_, execErr := tx.ExecContext(ctx, `
 			INSERT INTO mapping_overrides (
-				anilist_id, media_type, tvdb_id, tmdb_id, seasons, title_override, updated_at
+				anilist_id, media_type, tvdb_id, tmdb_id, seasons, title_override, episode_numbers, updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+			VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 			ON CONFLICT(anilist_id) DO UPDATE SET
 				media_type = excluded.media_type,
 				tvdb_id = excluded.tvdb_id,
 				tmdb_id = excluded.tmdb_id,
 				seasons = excluded.seasons,
+				episode_numbers = excluded.episode_numbers,
+				whole_season = CASE WHEN mapping_overrides.media_type = excluded.media_type AND mapping_overrides.tvdb_id = excluded.tvdb_id AND mapping_overrides.seasons = excluded.seasons AND excluded.episode_numbers = '[]' THEN mapping_overrides.whole_season ELSE 0 END,
 				title_override = excluded.title_override,
 				updated_at = CURRENT_TIMESTAMP;
-		`, req.AniListID, req.MediaType, req.TVDBID, req.TMDBID, seasons, titleVal)
+		`, req.AniListID, req.MediaType, req.TVDBID, req.TMDBID, seasons, titleVal, string(episodeNumbersJSON))
 		if execErr != nil {
 			return execErr
 		}

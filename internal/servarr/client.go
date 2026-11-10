@@ -43,6 +43,10 @@ type Tag struct {
 
 // Command represents a dispatched Servarr command.
 type Command struct {
+	Body struct {
+		SeriesIDs   []int `json:"seriesIds"`
+		IsNewSeries bool  `json:"isNewSeries"`
+	} `json:"body"`
 	ID          int       `json:"id"`
 	Name        string    `json:"name"`
 	CommandName string    `json:"commandName"`

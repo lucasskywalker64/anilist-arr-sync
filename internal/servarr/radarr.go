@@ -55,6 +55,23 @@ type RadarrClient struct {
 	*Client
 }
 
+// LookupMovieMetadata retrieves catalog metadata even when the movie is not in the library.
+func (c *RadarrClient) LookupMovieMetadata(ctx context.Context, tmdbID int) (*Movie, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, fmt.Sprintf("/api/v3/movie/lookup/tmdb?tmdbId=%d", tmdbID), nil)
+	if err != nil {
+		return nil, err
+	}
+	var movie Movie
+	_, err = c.do(req, &movie)
+	if err != nil {
+		return nil, err
+	}
+	if movie.TMDBID != tmdbID {
+		return nil, ErrNotFound
+	}
+	return &movie, nil
+}
+
 // NewRadarrClient creates a new Radarr REST v3 client.
 func NewRadarrClient(baseURL, apiKey string, opts ...Option) (*RadarrClient, error) {
 	base, err := NewClient(baseURL, apiKey, opts...)

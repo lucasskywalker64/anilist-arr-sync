@@ -5,6 +5,7 @@ package resolver
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -41,14 +42,16 @@ func (t Tier) String() string {
 
 // Result encapsulates the outcome of resolving an AniList entry.
 type Result struct {
-	Resolved      bool
-	Tier          Tier
-	TargetService string
-	TargetID      int
-	TVDBSeason    int
-	TitleOverride string
-	Diverted      bool
-	DivertReason  string
+	Resolved       bool
+	Tier           Tier
+	TargetService  string
+	TargetID       int
+	TVDBSeason     int
+	EpisodeNumbers []int
+	WholeSeason    bool
+	TitleOverride  string
+	Diverted       bool
+	DivertReason   string
 }
 
 // Resolver coordinates two-tier entity resolution and review queue diversion.
@@ -85,14 +88,16 @@ func (r *Resolver) resolve(ctx context.Context, media anilist.Media, queueReview
 	var overrideMediaType sql.NullString
 	var tvdbID, tmdbID sql.NullInt64
 	var seasons, titleOverride sql.NullString
+	var episodeNumbersJSON string
+	var wholeSeason bool
 
 	err := r.db.Read(ctx, func(ctx context.Context, q storage.Querier) error {
 		row := q.QueryRowContext(ctx, `
-			SELECT media_type, tvdb_id, tmdb_id, seasons, title_override
+			SELECT media_type, tvdb_id, tmdb_id, seasons, title_override, episode_numbers, whole_season
 			FROM mapping_overrides
 			WHERE anilist_id = ?;
 		`, media.ID)
-		return row.Scan(&overrideMediaType, &tvdbID, &tmdbID, &seasons, &titleOverride)
+		return row.Scan(&overrideMediaType, &tvdbID, &tmdbID, &seasons, &titleOverride, &episodeNumbersJSON, &wholeSeason)
 	})
 
 	if err == nil {
@@ -122,13 +127,19 @@ func (r *Resolver) resolve(ctx context.Context, media anilist.Media, queueReview
 			}
 		case "SERIES":
 			if tvdbID.Valid && tvdbID.Int64 > 0 {
+				var episodeNumbers []int
+				if err := json.Unmarshal([]byte(episodeNumbersJSON), &episodeNumbers); err != nil {
+					return nil, fmt.Errorf("resolver: invalid override episodes: %w", err)
+				}
 				return &Result{
-					Resolved:      true,
-					Tier:          TierOverride,
-					TargetService: "SONARR",
-					TargetID:      int(tvdbID.Int64),
-					TVDBSeason:    seasonNum,
-					TitleOverride: titleOverride.String,
+					Resolved:       true,
+					Tier:           TierOverride,
+					TargetService:  "SONARR",
+					EpisodeNumbers: episodeNumbers,
+					WholeSeason:    wholeSeason,
+					TargetID:       int(tvdbID.Int64),
+					TVDBSeason:     seasonNum,
+					TitleOverride:  titleOverride.String,
 				}, nil
 			}
 		}

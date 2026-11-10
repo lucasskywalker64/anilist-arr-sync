@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -764,103 +765,119 @@ func TestSync_ActiveModeSonarr_AdditiveAdditionAndSearchDispatch(t *testing.T) {
 }
 
 func TestSync_ActiveModeSonarr_SelectiveMonitoringAndSplitCour(t *testing.T) {
-	db := setupTestDB(t)
+	for _, wholeSeason := range []bool{false, true} {
+		t.Run(fmt.Sprintf("whole-season=%v", wholeSeason), func(t *testing.T) {
+			db := setupTestDB(t)
 
-	err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
-		_, writeErr := tx.ExecContext(ctx, `
-			INSERT INTO mapping_overrides (anilist_id, media_type, tvdb_id, seasons)
-			VALUES (601, 'SERIES', 88888, '1');
-		`)
-		return writeErr
-	})
-	if err != nil {
-		t.Fatalf("insert mapping failed: %v", err)
-	}
+			err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+				_, writeErr := tx.ExecContext(ctx, `
+			INSERT INTO mapping_overrides (anilist_id, media_type, tvdb_id, seasons, whole_season)
+			VALUES (601, 'SERIES', 88888, '1', ?);
+		`, wholeSeason)
+				return writeErr
+			})
+			if err != nil {
+				t.Fatalf("insert mapping failed: %v", err)
+			}
 
-	entries := []anilist.MediaListEntry{
-		{
-			ID:     1,
-			Status: anilist.StatusCurrent,
-			Media: anilist.Media{
-				ID:     601,
-				Format: "TV",
-				Title:  anilist.MediaTitle{Romaji: "Bleach: Thousand-Year Blood War Part 2"},
-			},
-		},
-	}
-
-	alSrv := setupMockAniList(t, entries)
-
-	episodesMonitored := false
-	var monitoredEpisodeIDs []int
-
-	sonarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
-			_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 42, Label: "anilist-sync"}})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/series/lookup":
-			_ = json.NewEncoder(w).Encode([]servarr.Series{
+			entries := []anilist.MediaListEntry{
 				{
-					ID:        901, // Already exists in library
-					TVDBID:    88888,
-					Title:     "Bleach: Thousand-Year Blood War",
-					Monitored: true,
-					Tags:      []int{42},
-					Seasons: []servarr.Season{
-						{SeasonNumber: 1, Monitored: true},
+					ID:     1,
+					Status: anilist.StatusCurrent,
+					Media: anilist.Media{
+						ID:     601,
+						Format: "TV",
+						Title:  anilist.MediaTitle{Romaji: "Bleach: Thousand-Year Blood War Part 2"},
 					},
 				},
-			})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
-			_ = json.NewEncoder(w).Encode([]servarr.Episode{
-				{ID: 1001, SeriesID: 901, SeasonNumber: 1, EpisodeNumber: 1, Monitored: true, AirDate: "2022-10-11"},
-				{ID: 1013, SeriesID: 901, SeasonNumber: 1, EpisodeNumber: 13, Monitored: true, FinaleType: "midseason", AirDate: "2022-12-27"},
-				{ID: 1014, SeriesID: 901, SeasonNumber: 1, EpisodeNumber: 14, Monitored: false, AirDate: "2023-07-08"},
-				{ID: 1026, SeriesID: 901, SeasonNumber: 1, EpisodeNumber: 26, Monitored: false, FinaleType: "season", AirDate: "2023-09-30"},
-			})
-		case r.Method == http.MethodPut && r.URL.Path == "/api/v3/episode/monitor":
-			episodesMonitored = true
-			var body map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			if ids, ok := body["episodeIds"].([]any); ok {
-				for _, id := range ids {
-					monitoredEpisodeIDs = append(monitoredEpisodeIDs, int(id.(float64)))
-				}
 			}
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`[]`))
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/command":
-			_ = json.NewEncoder(w).Encode(servarr.Command{ID: 1, Name: "SeasonSearch", Status: "queued"})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer sonarrSrv.Close()
 
-	cfg := config.NewDefault()
-	cfg.AniListUsername = "testuser"
-	cfg.FirstRunDryRun = false // Active mode
+			alSrv := setupMockAniList(t, entries)
 
-	alClient := anilist.NewClient(alSrv.URL)
-	sonarrClient, _ := servarr.NewSonarrClient(sonarrSrv.URL, "key")
-	radarrClient, _ := servarr.NewRadarrClient("http://localhost:1234", "key")
+			episodesMonitored := false
+			seasonMonitored := false
+			var monitoredEpisodeIDs []int
 
-	orc := orchestrator.New(db, cfg, alClient, sonarrClient, radarrClient)
+			sonarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v3/tag":
+					_ = json.NewEncoder(w).Encode([]servarr.Tag{{ID: 42, Label: "anilist-sync"}})
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v3/series/lookup":
+					_ = json.NewEncoder(w).Encode([]servarr.Series{
+						{
+							ID:        901, // Already exists in library
+							TVDBID:    88888,
+							Title:     "Bleach: Thousand-Year Blood War",
+							Monitored: true,
+							Tags:      []int{42},
+							Seasons: []servarr.Season{
+								{SeasonNumber: 1, Monitored: !wholeSeason},
+							},
+						},
+					})
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
+					_ = json.NewEncoder(w).Encode([]servarr.Episode{
+						{ID: 1001, SeriesID: 901, SeasonNumber: 1, EpisodeNumber: 1, Monitored: true, AirDate: "2022-10-11"},
+						{ID: 1013, SeriesID: 901, SeasonNumber: 1, EpisodeNumber: 13, Monitored: true, FinaleType: "midseason", AirDate: "2022-12-27"},
+						{ID: 1014, SeriesID: 901, SeasonNumber: 1, EpisodeNumber: 14, Monitored: false, AirDate: "2023-07-08"},
+						{ID: 1026, SeriesID: 901, SeasonNumber: 1, EpisodeNumber: 26, Monitored: false, FinaleType: "season", AirDate: "2023-09-30"},
+					})
+				case r.Method == http.MethodPut && r.URL.Path == "/api/v3/episode/monitor":
+					episodesMonitored = true
+					var body map[string]any
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					if ids, ok := body["episodeIds"].([]any); ok {
+						for _, id := range ids {
+							monitoredEpisodeIDs = append(monitoredEpisodeIDs, int(id.(float64)))
+						}
+					}
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`[]`))
+				case r.Method == http.MethodPut && r.URL.Path == "/api/v3/series":
+					var series servarr.Series
+					_ = json.NewDecoder(r.Body).Decode(&series)
+					seasonMonitored = series.Monitored && len(series.Seasons) == 1 && series.Seasons[0].SeasonNumber == 1 && series.Seasons[0].Monitored
+					_ = json.NewEncoder(w).Encode(series)
+				case r.Method == http.MethodPost && r.URL.Path == "/api/v3/command":
+					_ = json.NewEncoder(w).Encode(servarr.Command{ID: 1, Name: "SeasonSearch", Status: "queued"})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer sonarrSrv.Close()
 
-	report, err := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
-	if err != nil {
-		t.Fatalf("Sync failed: %v", err)
-	}
+			cfg := config.NewDefault()
+			cfg.AniListUsername = "testuser"
+			cfg.FirstRunDryRun = false // Active mode
 
-	if !episodesMonitored {
-		t.Fatal("expected MonitorEpisodes to be called for Part 2 episode slice")
-	}
-	if len(monitoredEpisodeIDs) != 2 || monitoredEpisodeIDs[0] != 1014 || monitoredEpisodeIDs[1] != 1026 {
-		t.Fatalf("expected episode IDs [1014, 1026], got %v", monitoredEpisodeIDs)
-	}
-	if report.MonitoredSonarr != 1 {
-		t.Fatalf("expected MonitoredSonarr=1, got %d", report.MonitoredSonarr)
+			alClient := anilist.NewClient(alSrv.URL)
+			sonarrClient, _ := servarr.NewSonarrClient(sonarrSrv.URL, "key")
+			radarrClient, _ := servarr.NewRadarrClient("http://localhost:1234", "key")
+
+			orc := orchestrator.New(db, cfg, alClient, sonarrClient, radarrClient)
+
+			report, err := orc.Sync(context.Background(), orchestrator.TriggerManualWeb)
+			if err != nil {
+				t.Fatalf("Sync failed: %v", err)
+			}
+
+			if wholeSeason {
+				if !seasonMonitored || episodesMonitored || report.MonitoredSonarr != 1 {
+					t.Fatalf("explicit whole season was replaced by inferred Part 2: season=%v episodes=%v report=%+v", seasonMonitored, episodesMonitored, report)
+				}
+				return
+			}
+			if !episodesMonitored {
+				t.Fatal("expected MonitorEpisodes to be called for Part 2 episode slice")
+			}
+			if len(monitoredEpisodeIDs) != 2 || monitoredEpisodeIDs[0] != 1014 || monitoredEpisodeIDs[1] != 1026 {
+				t.Fatalf("expected episode IDs [1014, 1026], got %v", monitoredEpisodeIDs)
+			}
+			if report.MonitoredSonarr != 1 {
+				t.Fatalf("expected MonitoredSonarr=1, got %d", report.MonitoredSonarr)
+			}
+		})
 	}
 }
 

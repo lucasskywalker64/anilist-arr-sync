@@ -13,6 +13,7 @@ import type {
   CurrentUser,
   Candidate,
   MappingResolution,
+  ReviewPreparation,
   IgnoredItem,
   LibraryItem,
   LibraryStats,
@@ -273,6 +274,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(resolution),
     });
+  },
+
+  async prepareReview(id: number, targetId: number): Promise<ReviewPreparation> {
+    return request(`/api/v1/review/${id}/prepare`, { method: 'POST', body: JSON.stringify({ targetId }) });
+  },
+
+  async getReviewPreparation(id: number): Promise<ReviewPreparation> {
+    return request(`/api/v1/review/${id}/preparation`);
+  },
+
+  async cancelReviewPreparation(id: number): Promise<ReviewPreparation> {
+    return request(`/api/v1/review/${id}/preparation`, { method: 'DELETE' });
+  },
+
+  async lookupReviewMovie(id: number): Promise<{ tmdbId: number; title: string; year?: number; overview?: string }> {
+    return request(`/api/v1/radarr/lookup/${id}`);
   },
 
   async ignoreReview(id: number): Promise<{ status: string }> {

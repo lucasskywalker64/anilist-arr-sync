@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, createEventDispatcher } from 'svelte';
-  import { RefreshCw, ExternalLink, Check, Ban, Film, Tv } from 'lucide-svelte';
+  import { RefreshCw, ExternalLink, Film, Tv } from 'lucide-svelte';
   import PageToolbar from '../layout/PageToolbar.svelte';
   import PageToolbarButton from '../layout/PageToolbarButton.svelte';
   import Button from '../common/Button.svelte';
@@ -8,26 +8,18 @@
   import Alert from '../common/Alert.svelte';
   import { api } from '../../lib/api';
   import type { ReviewItem, Candidate } from '../../lib/types';
+  import ReviewMapping from './ReviewMapping.svelte';
 
   export let reviewItems: ReviewItem[] = [];
 
   const dispatch = createEventDispatcher<{ refresh: void }>();
 
   let loading = false;
-  let actionLoading = false;
   let errorMsg = '';
   let successMsg = '';
 
-  // Per-item resolution state
-  interface ItemState {
-    anilistId: number;
-    mediaType: 'SERIES' | 'MOVIE';
-    tvdbId: string;
-    tmdbId: string;
-    seasons: string;
-    titleOverride: string;
-  }
-  let formState: Record<number, ItemState> = {};
+  const mappingForms: Record<number, ReviewMapping> = {};
+  let lockedItems = new Set<number>();
   let failedImages = new Set<number>();
 
   function handleImageError(id: number) {
@@ -35,65 +27,8 @@
     failedImages = new Set(failedImages);
   }
 
-  $: if (reviewItems) {
-    let changed = false;
-    const activeIds = new Set<number>();
-    for (const item of reviewItems) {
-      activeIds.add(item.id);
-      if (formState[item.id]?.anilistId !== item.anilistId) {
-        const topCandidate = item.candidates && item.candidates.length > 0 ? item.candidates[0] : null;
-        formState[item.id] = {
-          anilistId: item.anilistId,
-          mediaType: item.mediaType || 'SERIES',
-          tvdbId: topCandidate?.tvdbId ? String(topCandidate.tvdbId) : '',
-          tmdbId: topCandidate?.tmdbId ? String(topCandidate.tmdbId) : '',
-          seasons: '1',
-          titleOverride: '',
-        };
-        changed = true;
-      }
-    }
-    for (const key of Object.keys(formState)) {
-      const id = Number(key);
-      if (!activeIds.has(id)) {
-        delete formState[id];
-        changed = true;
-      }
-    }
-    if (changed) {
-      formState = { ...formState };
-    }
-  }
-
-  function initFormState(items: ReviewItem[]) {
-    const next: Record<number, ItemState> = {};
-    for (const item of items) {
-      if (formState[item.id]?.anilistId === item.anilistId) {
-        next[item.id] = formState[item.id];
-      } else {
-        const topCandidate = item.candidates && item.candidates.length > 0 ? item.candidates[0] : null;
-        next[item.id] = {
-          anilistId: item.anilistId,
-          mediaType: item.mediaType || 'SERIES',
-          tvdbId: topCandidate?.tvdbId ? String(topCandidate.tvdbId) : '',
-          tmdbId: topCandidate?.tmdbId ? String(topCandidate.tmdbId) : '',
-          seasons: '1',
-          titleOverride: '',
-        };
-      }
-    }
-    formState = next;
-  }
-
   function selectCandidate(itemId: number, candidate: Candidate) {
-    if (!formState[itemId]) return;
-    formState[itemId].tvdbId = candidate.tvdbId ? String(candidate.tvdbId) : '';
-    formState[itemId].tmdbId = candidate.tmdbId ? String(candidate.tmdbId) : '';
-    formState[itemId].seasons = '1';
-    if (candidate.title) {
-      formState[itemId].titleOverride = candidate.title;
-    }
-    formState = { ...formState };
+    mappingForms[itemId]?.selectCandidate(candidate);
   }
 
   async function loadData() {
@@ -101,7 +36,6 @@
     errorMsg = '';
     try {
       reviewItems = await api.getReviewQueue();
-      initFormState(reviewItems);
       dispatch('refresh');
     } catch (e: any) {
       errorMsg = e.message || 'Failed to load review queue';
@@ -110,50 +44,9 @@
     }
   }
 
-  async function handleResolve(item: ReviewItem) {
-    const state = formState[item.id];
-    if (!state || actionLoading) return;
-
-    actionLoading = true;
-    errorMsg = '';
-    successMsg = '';
-    try {
-      const tvdbStr = String(state.tvdbId ?? '').trim();
-      const tmdbStr = String(state.tmdbId ?? '').trim();
-      const seasonsStr = String(state.seasons ?? '').trim();
-      const titleStr = String(state.titleOverride ?? '').trim();
-
-      await api.resolveReview(item.id, {
-        mediaType: state.mediaType,
-        tvdbId: tvdbStr ? parseInt(tvdbStr, 10) : null,
-        tmdbId: tmdbStr ? parseInt(tmdbStr, 10) : null,
-        seasons: seasonsStr || '1',
-        titleOverride: titleStr || undefined,
-      });
-
-      successMsg = `Resolved "${item.titleRomaji}" and saved manual override.`;
-      await loadData();
-    } catch (e: any) {
-      errorMsg = e.message || 'Failed to resolve review item';
-    } finally {
-      actionLoading = false;
-    }
-  }
-
-  async function handleIgnore(item: ReviewItem) {
-    if (actionLoading) return;
-    actionLoading = true;
-    errorMsg = '';
-    successMsg = '';
-    try {
-      await api.ignoreReview(item.id);
-      successMsg = `Ignored "${item.titleRomaji}". It will not trigger future reviews.`;
-      await loadData();
-    } catch (e: any) {
-      errorMsg = e.message || 'Failed to ignore item';
-    } finally {
-      actionLoading = false;
-    }
+  function markLocked(id: number, locked: boolean) {
+    if (locked) lockedItems.add(id); else lockedItems.delete(id);
+    lockedItems = new Set(lockedItems);
   }
 
   onMount(() => {
@@ -260,6 +153,7 @@
                           type="button"
                           class="candidatePill"
                           on:click={() => selectCandidate(item.id, cand)}
+                          disabled={lockedItems.has(item.id)}
                         >
                           <span class="candidateTitle">{cand.title}</span>
                           {#if cand.year}
@@ -282,90 +176,7 @@
 
                 <!-- Resolution Controls Bar at bottom of card -->
                 <div class="resolutionBar">
-                  {#if formState[item.id]}
-                    <div class="inputRow">
-                      <div class="inputCol" style="width: 130px;">
-                        <label for="media-type-{item.id}" class="inputLabel">Media Type</label>
-                        <select
-                          id="media-type-{item.id}"
-                          class="inlineInput"
-                          bind:value={formState[item.id].mediaType}
-                          disabled={actionLoading}
-                        >
-                          <option value="SERIES">SERIES</option>
-                          <option value="MOVIE">MOVIE</option>
-                        </select>
-                      </div>
-
-                      <div class="inputCol" style="width: 130px;">
-                        <label for="tvdb-id-{item.id}" class="inputLabel">TVDB ID</label>
-                        <input
-                          id="tvdb-id-{item.id}"
-                          type="number"
-                          class="inlineInput"
-                          placeholder="TVDB ID"
-                          bind:value={formState[item.id].tvdbId}
-                          disabled={actionLoading}
-                        />
-                      </div>
-
-                      <div class="inputCol" style="width: 130px;">
-                        <label for="tmdb-id-{item.id}" class="inputLabel">TMDB ID</label>
-                        <input
-                          id="tmdb-id-{item.id}"
-                          type="number"
-                          class="inlineInput"
-                          placeholder="TMDB ID"
-                          bind:value={formState[item.id].tmdbId}
-                          disabled={actionLoading}
-                        />
-                      </div>
-
-                      <div class="inputCol" style="width: 100px;">
-                        <label for="seasons-{item.id}" class="inputLabel">Seasons</label>
-                        <input
-                          id="seasons-{item.id}"
-                          type="text"
-                          class="inlineInput"
-                          placeholder="1"
-                          bind:value={formState[item.id].seasons}
-                          disabled={actionLoading}
-                        />
-                      </div>
-
-                      <div class="inputCol flexGrow">
-                        <label for="title-override-{item.id}" class="inputLabel">Title Override (optional)</label>
-                        <input
-                          id="title-override-{item.id}"
-                          type="text"
-                          class="inlineInput"
-                          placeholder="Override search title"
-                          bind:value={formState[item.id].titleOverride}
-                          disabled={actionLoading}
-                        />
-                      </div>
-                    </div>
-
-                    <div class="buttonRow">
-                      <Button
-                        kind="success"
-                        size="medium"
-                        disabled={actionLoading}
-                        on:click={() => handleResolve(item)}
-                      >
-                        <Check size={16} /> Resolve & Save Override
-                      </Button>
-
-                      <Button
-                        kind="danger"
-                        size="medium"
-                        disabled={actionLoading}
-                        on:click={() => handleIgnore(item)}
-                      >
-                        <Ban size={16} /> Ignore Title
-                      </Button>
-                    </div>
-                  {/if}
+                  <ReviewMapping {item} bind:this={mappingForms[item.id]} on:locked={event => markLocked(item.id,event.detail)} on:resolved={event => { successMsg = event.detail; loadData(); }} />
                 </div>
               </div>
             </div>
@@ -558,55 +369,6 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-  }
-
-  .inputRow {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    align-items: flex-end;
-  }
-
-  .inputCol {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .flexGrow {
-    flex: 1 1 200px;
-  }
-
-  .inputLabel {
-    font-size: var(--extraSmallFontSize);
-    color: var(--helpTextColor);
-    font-weight: bold;
-    text-transform: uppercase;
-  }
-
-  .inlineInput {
-    height: var(--inputHeight);
-    padding: 6px 12px;
-    border: 1px solid var(--inputBorderColor);
-    border-radius: 4px;
-    background-color: var(--inputBackgroundColor);
-    color: var(--textColor);
-    font-family: inherit;
-    font-size: var(--defaultFontSize);
-    outline: none;
-    box-sizing: border-box;
-    width: 100%;
-  }
-
-  .inlineInput:focus {
-    border-color: var(--inputFocusBorderColor);
-    box-shadow: inset 0 1px 1px var(--inputBoxShadowColor), 0 0 8px var(--inputFocusBoxShadowColor);
-  }
-
-  .buttonRow {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
   }
 
   @media (max-width: 768px) {

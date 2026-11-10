@@ -412,6 +412,7 @@ func (s *Server) Start() error {
 		})
 	}
 
+	s.maintainReviewPreparations()
 	return nil
 }
 
@@ -459,6 +460,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/auth/user", s.handleCurrentUser)
 	mux.HandleFunc("GET /api/v1/review", s.handleListReview)
 	mux.HandleFunc("POST /api/v1/review/{id}/resolve", s.handleResolveReview)
+	mux.HandleFunc("POST /api/v1/review/{id}/prepare", s.handlePrepareReview)
+	mux.HandleFunc("GET /api/v1/review/{id}/preparation", s.handlePollReview)
+	mux.HandleFunc("DELETE /api/v1/review/{id}/preparation", s.handleCancelPreparation)
+	mux.HandleFunc("GET /api/v1/radarr/lookup/{tmdbId}", s.handleReviewMovieLookup)
 	mux.HandleFunc("POST /api/v1/review/{id}/ignore", s.handleIgnoreReview)
 
 	mux.HandleFunc("GET /api/v1/library", s.handleListLibrary)
@@ -468,6 +473,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/ignored/{id}", s.handleDeleteIgnored)
 
 	mux.HandleFunc("GET /api/v1/overrides", s.handleListOverrides)
+	mux.HandleFunc("GET /api/v1/sonarr/specials/{tvdbId}", s.handleSpecialEpisodes)
 	mux.HandleFunc("POST /api/v1/overrides", s.handleCreateOverride)
 	mux.HandleFunc("DELETE /api/v1/overrides/{id}", s.handleDeleteOverride)
 
