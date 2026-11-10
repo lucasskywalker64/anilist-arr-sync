@@ -16,7 +16,7 @@ import (
 )
 
 func TestReviewPreparationLifecycle(t *testing.T) {
-	for _, tc := range []struct{ existing, confirm, cancelEarly, adopted, failDelete, uncertainAdd, commandLost bool }{{}, {existing: true}, {confirm: true}, {cancelEarly: true}, {adopted: true}, {failDelete: true}, {uncertainAdd: true}, {commandLost: true}} {
+	for _, tc := range []struct{ existing, confirm, cancelEarly, adopted, failDelete, uncertainAdd, commandLost, sceneMetadata bool }{{}, {existing: true}, {confirm: true}, {cancelEarly: true}, {adopted: true}, {failDelete: true}, {uncertainAdd: true}, {commandLost: true}, {sceneMetadata: true}} {
 		existing := tc.existing
 		name := map[bool]string{false: "new", true: "existing"}[existing]
 		if tc.confirm {
@@ -36,6 +36,9 @@ func TestReviewPreparationLifecycle(t *testing.T) {
 		}
 		if tc.commandLost {
 			name += "/lost-refresh-history"
+		}
+		if tc.sceneMetadata {
+			name += "/scene-metadata"
 		}
 		t.Run(name, func(t *testing.T) {
 			db := newTestStorage(t)
@@ -118,6 +121,10 @@ func TestReviewPreparationLifecycle(t *testing.T) {
 					result := series
 					if ready {
 						result.AddOptions = nil
+						if tc.sceneMetadata {
+							// Sonarr's XEM refresh derives this from available scene mappings.
+							result.UseSceneNumbering = true
+						}
 					}
 					_ = json.NewEncoder(w).Encode(result)
 				case r.URL.Path == "/api/v3/command" || r.URL.Path == "/api/v3/command/7":
@@ -189,6 +196,15 @@ func TestReviewPreparationLifecycle(t *testing.T) {
 			}
 			if rec.Code != http.StatusOK {
 				t.Fatalf("prepare %d: %s", rec.Code, rec.Body.String())
+			}
+			if tc.sceneMetadata {
+				// Preserve compatibility with pending leases that included this metadata field.
+				if err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+					_, err := tx.ExecContext(ctx, `UPDATE review_preparations SET baseline=json_set(baseline,'$.SceneNumbering',json('false')) WHERE review_id=1`)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if !existing && !strings.Contains(rec.Body.String(), `"status":"WAITING"`) {
 				t.Fatalf("not waiting: %s", rec.Body.String())
@@ -262,7 +278,7 @@ func TestReviewPreparationLifecycle(t *testing.T) {
 				t.Fatalf("cancel: %d %s", rec.Code, rec.Body.String())
 			}
 			if deleted == (existing || tc.confirm || tc.adopted) {
-				t.Fatalf("deleted=%v, pre-existing=%v", deleted, existing)
+				t.Fatalf("deleted=%v, pre-existing=%v, response=%s", deleted, existing, rec.Body.String())
 			}
 			if existing && !series.Monitored {
 				t.Fatal("changed pre-existing monitoring")

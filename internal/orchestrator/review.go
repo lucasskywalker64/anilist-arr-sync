@@ -133,20 +133,32 @@ func (o *Orchestrator) PrepareReview(ctx context.Context, id, tvdbID int) (*Revi
 
 func (p reviewLease) tagLabel() string { return "anilist-review-" + strings.ToLower(p.token) }
 
+type reviewSeriesSettings struct {
+	Path         string
+	Profile      int
+	Type         string
+	NewItems     string
+	SeasonFolder bool
+	Added        time.Time
+	Tags         []int
+}
+
 func reviewFingerprint(s *servarr.Series) string {
 	tags := slices.Clone(s.Tags)
 	slices.Sort(tags)
-	value, _ := json.Marshal(struct {
-		Path           string
-		Profile        int
-		Type           string
-		NewItems       string
-		SeasonFolder   bool
-		SceneNumbering bool
-		Added          time.Time
-		Tags           []int
-	}{s.Path, s.QualityProfileID, s.SeriesType, s.MonitorNewItems, s.SeasonFolder, s.UseSceneNumbering, s.Added, tags})
+	// Scene numbering is derived by Sonarr's metadata refresh, not a user setting.
+	value, _ := json.Marshal(reviewSeriesSettings{s.Path, s.QualityProfileID, s.SeriesType, s.MonitorNewItems, s.SeasonFolder, s.Added, tags})
 	return string(value)
+}
+
+func reviewSeriesUnchanged(s *servarr.Series, baseline string) bool {
+	var previous reviewSeriesSettings
+	if err := json.Unmarshal([]byte(baseline), &previous); err != nil {
+		return false
+	}
+	// Normalize older leases that still included the derived SceneNumbering field.
+	value, _ := json.Marshal(previous)
+	return reviewFingerprint(s) == string(value)
 }
 
 func (o *Orchestrator) pollReview(ctx context.Context, p reviewLease) (*ReviewPreparation, error) {
@@ -259,7 +271,7 @@ func (o *Orchestrator) pollReview(ctx context.Context, p reviewLease) (*ReviewPr
 		if err != nil {
 			return nil, err
 		}
-		if refreshUnknown || adopted || !unmonitored || reviewFingerprint(series) != p.baseline || !owner || !slices.Contains(series.Tags, p.tagID) {
+		if refreshUnknown || adopted || !unmonitored || !reviewSeriesUnchanged(series, p.baseline) || !owner || !slices.Contains(series.Tags, p.tagID) {
 			result.Status = "RETAINED"
 			result.Message = "Series changed or was adopted; it was left in Sonarr"
 			if refreshUnknown {
