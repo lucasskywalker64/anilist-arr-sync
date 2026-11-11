@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +26,7 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/server"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/updater"
 )
 
 type appRuntime struct {
@@ -96,17 +99,45 @@ func bootstrap(ctx context.Context, o options, paths runtimePaths) (*appRuntime,
 	srv.SetOutboundHTTPClient(client)
 	srv.SetListenerOverrides(portOverride, bindOverride)
 	srv.SetVersion(version)
+	srv.SetBuildCommit(commit)
 	srv.SetNotifier(notification.NewDispatcher(notification.NewStore(db), client))
 	if !cfg.SyncConfigured() {
 		log.Print("scheduled sync idle: configure AniList and a Servarr URL/API key")
 	}
-	scheduled := scheduler.New(*cfg, orch, backups, nil)
+	scheduled := scheduler.New(*cfg, orch, backups, srv.AutomaticUpdate)
 	srv.SetScheduler(scheduled)
 	ctx, cancel := context.WithCancel(ctx)
 	r := &appRuntime{cfg: cfg, listenerCfg: listenerCfg, db: db, server: srv, orch: orch, scheduler: scheduled,
 		loader: fribb.NewLoader(db, fribb.WithHTTPClient(client)), client: client, ctx: ctx, cancel: cancel}
 	scheduled.SetSyncPreparation(r.ensureSyncMappings)
 	srv.SetSyncPreparation(r.ensureSyncMappings)
+	exe, err := os.Executable()
+	if err != nil {
+		return fail(err)
+	}
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		return fail(err)
+	}
+	args := append([]string(nil), os.Args[1:]...)
+	args = append(args, "--data-dir", paths.data, "--config", paths.config)
+	engine := &updater.Engine{DB: db, Client: client, APIBase: "https://api.github.com/repos/lucasskywalker64/anilist-arr-sync",
+		PublicKey: updatePublicKey, Platform: runtime.GOOS, Arch: runtime.GOARCH,
+		Current: updater.Identity{Version: version, Commit: commit, Channel: cfg.UpdateBranch}, Executable: exe,
+		Staging: filepath.Join(paths.data, "staging"), HealthURL: r.healthURL(), InstanceID: srv.InstanceID(),
+		Args: args, Config: srv.Config, Container: server.IsContainerized}
+	engine.Launch = func(ctx context.Context, plan string) error {
+		if err := updater.SpawnWorker(ctx, plan, exe); err != nil {
+			return err
+		}
+		if err := os.WriteFile(plan+".go", nil, 0600); err != nil {
+			_ = os.WriteFile(plan+".cancel", nil, 0600)
+			return err
+		}
+		srv.NotifyLifecycle(server.LifecycleShutdown)
+		return nil
+	}
+	srv.SetUpdater(engine)
 	return r, nil
 }
 
@@ -207,4 +238,21 @@ func (r *appRuntime) browserURL() string {
 		scheme, port = "https", r.listenerCfg.SslPort
 	}
 	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/" + strings.Trim(r.listenerCfg.URLBase, "/")
+}
+
+func (r *appRuntime) healthURL() string {
+	host := r.listenerCfg.BindAddress
+	if host == "" || host == "0.0.0.0" {
+		host = "127.0.0.1"
+	}
+	if host == "::" {
+		host = "::1"
+	}
+	// The existing HTTP listener remains available alongside HTTPS. Probe locally
+	// without reading certificate/key files or weakening TLS verification.
+	base := strings.Trim(strings.TrimSpace(r.listenerCfg.URLBase), "/")
+	if base != "" {
+		base = "/" + base
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(r.listenerCfg.Port)) + base + "/api/v1/health"
 }

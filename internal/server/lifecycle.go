@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/updater"
 )
 
 // LifecycleAction tells the runtime owner to restart or stop this instance.
@@ -59,6 +61,27 @@ func (s *Server) NotifyLifecycle(action LifecycleAction) {
 
 // SetVersion supplies the runtime build version for health and status responses.
 func (s *Server) SetVersion(version string) { s.version = version }
+
+// SetBuildCommit supplies the exact source identity used by health verification.
+func (s *Server) SetBuildCommit(commit string) { s.commit = commit }
+
+// InstanceID identifies this boot for update health verification.
+func (s *Server) InstanceID() string { return s.instanceID }
+
+// SetUpdater attaches the runtime-owned update supervisor before startup.
+func (s *Server) SetUpdater(engine *updater.Engine) { s.updater = engine }
+
+// AutomaticUpdate reads the current preference so channel changes never enable it.
+func (s *Server) AutomaticUpdate(ctx context.Context) error {
+	if s.updater == nil || !s.Config().UpdateAutomatically {
+		return nil
+	}
+	status, err := s.updater.Status(ctx)
+	if err != nil || !status.CanUpdate {
+		return err
+	}
+	return s.updater.Apply(ctx)
+}
 
 // SetListenerOverrides applies transient CLI settings before Start is called.
 func (s *Server) SetListenerOverrides(port *int, bindAddress *string) {

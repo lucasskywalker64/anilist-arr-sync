@@ -163,6 +163,11 @@ export interface UpdateStatus {
   currentVersion: string;
   latestVersion: string;
   updateAvailable: boolean;
+	canUpdate: boolean;
+	updateOwner: string;
+	reason?: string;
+	commit?: string;
+	latestCommit?: string;
   releaseNotes?: string;
   lastCheckedAt?: string;
 }
