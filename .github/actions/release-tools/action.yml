@@ -3,6 +3,19 @@ description: Install pinned OSS packaging tools, then build the embedded fronten
 runs:
   using: composite
   steps:
+    - name: Complete hosted ARM64 desktop setup
+      if: runner.environment == 'github-hosted' && runner.os == 'Windows' && runner.arch == 'ARM64'
+      shell: pwsh
+      run: |
+        # windows-11-arm can leave first-logon privacy setup blocking Explorer.
+        # https://github.com/actions/runner-images/issues/14069
+        $policy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE'
+        New-Item -Path $policy -Force | Out-Null
+        New-ItemProperty -Path $policy -Name DisablePrivacyExperience -Value 1 -PropertyType DWord -Force | Out-Null
+        $session = [Diagnostics.Process]::GetCurrentProcess().SessionId
+        $setup = Get-Process WWAHost -ErrorAction SilentlyContinue | Where-Object SessionId -eq $session
+        Write-Host "Completing desktop setup in session $session ($(@($setup).Count) privacy setup processes)"
+        $setup | Stop-Process -Force
     - uses: actions/setup-go@v5
       with:
         go-version-file: go.mod
