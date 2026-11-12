@@ -1,0 +1,8 @@
+{
+  "name": "release-signing-bridge",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@actions/artifact": "6.3.1"
+  }
+}

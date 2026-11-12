@@ -28,10 +28,10 @@ var (
 )
 
 type options struct {
-	configPath, dataDir, bindAddress string
-	port                             int
-	sync, noBrowser, showVersion     bool
-	portSet, bindSet                 bool
+	configPath, dataDir, bindAddress   string
+	port                               int
+	sync, noBrowser, showVersion, tray bool
+	portSet, bindSet                   bool
 }
 
 func parseFlags(args []string, out io.Writer) (options, error) {
@@ -45,6 +45,7 @@ func parseFlags(args []string, out io.Writer) (options, error) {
 	fs.BoolVar(&o.sync, "sync", false, "Run one sync and exit")
 	fs.BoolVar(&o.noBrowser, "no-browser", false, "Suppress browser launch")
 	fs.BoolVar(&o.showVersion, "version", false, "Print build version")
+	fs.BoolVar(&o.tray, "tray", false, "Run with a Windows notification-area icon")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -104,6 +105,8 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 		_, err := fmt.Fprintf(out, "anilist-arr-sync %s (commit %s, built %s)\n", version, commit, date)
 		return err
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	paths, err := resolvePaths(o, runtime.GOOS, server.IsContainerized(""))
 	if err != nil {
 		return err
@@ -156,6 +159,13 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 		r.start()
 		url := r.browserURL()
 		log.Printf("listening at %s", url)
+		stopTray := func() {}
+		if o.tray {
+			stopTray, err = startTray(url, cancel)
+			if err != nil {
+				return errors.Join(err, r.close())
+			}
+		}
 		if r.listenerCfg.LaunchBrowser && !o.noBrowser && out == os.Stdout && isatty.IsTerminal(os.Stdout.Fd()) && !server.IsContainerized(r.listenerCfg.UpdateMechanism) {
 			if err := openBrowser(url); err != nil {
 				log.Printf("browser: %v", err)
@@ -175,6 +185,7 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 			}
 		}()
 		action := r.server.WaitLifecycle()
+		stopTray()
 		close(stopWatching)
 		if handoff != nil {
 			handoff.Close()

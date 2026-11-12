@@ -8,6 +8,12 @@
 *.out
 /devserver
 /devserver.exe
+/.release-tools/
+/.release/
+/dist/
+/cmd/anilist-arr-sync/resource_windows_*.syso
+/packaging/node_modules/
+/packaging/__pycache__/
 
 # OS generated files
 .DS_Store

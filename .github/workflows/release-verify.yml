@@ -1,0 +1,45 @@
+name: Verify release packaging
+on:
+  pull_request:
+    paths:
+      - '.goreleaser.yaml'
+      - 'Dockerfile'
+      - 'packaging/**'
+      - 'cmd/**'
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'web/**'
+      - '.github/actions/release-tools/**'
+      - '.github/workflows/release*.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      RELEASE_MODE: fixture
+      RELEASE_SNAPSHOT_TEST: '1'
+      RELEASE_INSTALL_TEST: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/release-tools
+      - name: Build and verify disposable-key snapshot
+        run: go test ./cmd/release -run '^TestSnapshot$' -count=1 -timeout=30m
+      - name: Verify publication failure paths
+        run: python -m unittest discover -s packaging -p '*_test.py'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fixture-${{ runner.arch }}
+          path: .release/final/*
+          if-no-files-found: error
+          retention-days: 3
