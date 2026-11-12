@@ -14,7 +14,7 @@ builds:
     binary: anilist-arr-sync
     env: [CGO_ENABLED=0]
     goos: [linux, windows]
-    goarch: [amd64, arm64]
+    goarch: [arm64, amd64]
     ldflags:
       - >-
         -s -w

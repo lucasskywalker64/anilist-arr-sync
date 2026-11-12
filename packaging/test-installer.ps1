@@ -109,12 +109,13 @@ try {
         & "$PSScriptRoot/verify-authenticode.ps1" -Path (Join-Path $app 'anilist-arr-sync.exe')
         & "$PSScriptRoot/verify-authenticode.ps1" -Path (Join-Path $app 'unins000.exe')
     }
+    $stage = 'prepare tray desktop'
+    EnsureTrayDesktop
     $stage = 'switch to desktop installation'
     Install '' 'desktop'
     if (Get-Service -Name $service -ErrorAction SilentlyContinue) { throw 'Desktop mode retained the Windows service' }
     $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($startup)
     if ($shortcut.TargetPath -ne (Join-Path $app 'anilist-arr-sync.exe') -or !$shortcut.Arguments.Contains('--tray') -or !$shortcut.Arguments.Contains($data)) { throw 'Desktop startup shortcut lost tray/data arguments' }
-    EnsureTrayDesktop
     $stage = 'tray startup'
     StartTray
     WaitHealthy
