@@ -340,6 +340,12 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 
 // handleUpdateConfig validates, persists, and hot-reloads configuration changes.
 func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+	if s.updatePending {
+		s.writeJSONError(w, http.StatusConflict, "settings cannot change during an update handoff")
+		return
+	}
 	var updates map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
 		s.writeJSONError(w, http.StatusBadRequest, "invalid request body")
@@ -1200,23 +1206,36 @@ func (s *Server) handleRestoreBackup(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetUpdateStatus returns current application version and update availability.
-func (s *Server) handleGetUpdateStatus(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleGetUpdateStatus(w http.ResponseWriter, r *http.Request) {
+	if s.updater == nil {
+		s.writeJSONError(w, http.StatusServiceUnavailable, "update supervisor is unavailable")
+		return
+	}
+	status, _ := s.updater.Status(r.Context())
+	if reason := s.updateRestriction(); reason != "" {
+		status.CanUpdate = false
+		status.Reason = reason
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"currentVersion": "1.0.0",
-		"latestVersion":  "1.0.0",
-		"canUpdate":      false,
-	})
+	_ = json.NewEncoder(w).Encode(status)
 }
 
 // handleApplyUpdate downloads and applies the latest application update.
-func (s *Server) handleApplyUpdate(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.updater == nil {
+		s.writeJSONError(w, http.StatusServiceUnavailable, "update supervisor is unavailable")
+		return
+	}
+	if err := s.applyUpdate(r.Context(), false); err != nil {
+		s.writeJSONError(w, http.StatusConflict, err.Error())
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status":  "up to date",
-		"message": "no newer version available",
+		"status":  "updating",
+		"message": "worker will verify startup and roll back on failure",
 	})
 }
 

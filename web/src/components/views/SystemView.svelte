@@ -103,7 +103,7 @@
     successMsg = '';
     try {
       await api.applyUpdate();
-      successMsg = 'Update applied successfully. Reloading service...';
+      successMsg = 'Update started. The worker will verify startup and restore the previous version if needed.';
     } catch (e: any) {
       errorMsg = e.message || 'Failed to apply update';
     } finally {
@@ -265,7 +265,10 @@
               </div>
             {/if}
 
-            {#if updateStatus?.updateAvailable}
+            {#if updateStatus?.reason}
+              <Alert kind="warning">{updateStatus.reason}</Alert>
+            {/if}
+            {#if updateStatus?.canUpdate}
               <div style="margin-top: 20px;">
                 <Button kind="success" size="medium" on:click={handleApplyUpdate} disabled={actionLoading}>
                   <Download size={16} class={actionLoading ? 'spinning' : ''} /> Install Latest Update

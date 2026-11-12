@@ -16,13 +16,15 @@ import (
 	"time"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/server"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/updater"
 	"github.com/mattn/go-isatty"
 )
 
 var (
-	version = "dev"
-	commit  = "unknown"
-	date    = "unknown"
+	version         = "dev"
+	commit          = "unknown"
+	date            = "unknown"
+	updatePublicKey = ""
 )
 
 type options struct {
@@ -64,6 +66,20 @@ func parseFlags(args []string, out io.Writer) (options, error) {
 }
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "--update-worker" {
+		if err := updater.RunWorker(os.Args[2]); err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		return
+	}
+	if handled, err := runPlatformService(); handled || err != nil {
+		if err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		return
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.Stdout); err != nil {
@@ -76,6 +92,10 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, out io.Writer) error {
+	return runWithReady(ctx, args, out, func() {})
+}
+
+func runWithReady(ctx context.Context, args []string, out io.Writer, ready func()) error {
 	o, err := parseFlags(args, out)
 	if err != nil {
 		return err
@@ -127,6 +147,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		if err := r.server.Start(); err != nil {
 			return failRestart(errors.Join(err, r.close()))
 		}
+		ready()
 		if handoff != nil {
 			if err := handoff.Ready(ctx, r.server); err != nil {
 				log.Printf("restart readiness: %v", err)

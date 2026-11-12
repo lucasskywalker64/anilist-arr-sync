@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/url"
@@ -11,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/updater"
 )
 
 // LifecycleAction tells the runtime owner to restart or stop this instance.
@@ -59,6 +62,54 @@ func (s *Server) NotifyLifecycle(action LifecycleAction) {
 
 // SetVersion supplies the runtime build version for health and status responses.
 func (s *Server) SetVersion(version string) { s.version = version }
+
+// SetBuildCommit supplies the exact source identity used by health verification.
+func (s *Server) SetBuildCommit(commit string) { s.commit = commit }
+
+// InstanceID identifies this boot for update health verification.
+func (s *Server) InstanceID() string { return s.instanceID }
+
+// SetUpdater attaches the runtime-owned update supervisor before startup.
+func (s *Server) SetUpdater(engine *updater.Engine) { s.updater = engine }
+
+// AutomaticUpdate reads the current preference so channel changes never enable it.
+func (s *Server) AutomaticUpdate(ctx context.Context) error {
+	return s.applyUpdate(ctx, true)
+}
+
+func (s *Server) updateRestriction() string {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	if s.requiresRestart(*s.cfg) {
+		return "A restart is required before updating to apply pending settings."
+	}
+	return ""
+}
+
+func (s *Server) applyUpdate(ctx context.Context, automatic bool) error {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+	if automatic && (s.updater == nil || !s.Config().UpdateAutomatically) {
+		return nil
+	}
+	if s.updatePending {
+		return errors.New("an update handoff is already committed")
+	}
+	if reason := s.updateRestriction(); reason != "" {
+		return errors.New(reason)
+	}
+	if automatic {
+		status, err := s.updater.Status(ctx)
+		if err != nil || !status.CanUpdate {
+			return err
+		}
+	}
+	if err := s.updater.Apply(ctx); err != nil {
+		return err
+	}
+	s.updatePending = true
+	return nil
+}
 
 // SetListenerOverrides applies transient CLI settings before Start is called.
 func (s *Server) SetListenerOverrides(port *int, bindAddress *string) {

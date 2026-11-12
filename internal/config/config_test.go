@@ -32,7 +32,7 @@ func TestNewDefault(t *testing.T) {
 	check("EnableDesktopNotifications", cfg.EnableDesktopNotifications, false)
 	check("UpdateBranch", cfg.UpdateBranch, "main")
 	check("UpdateAutomatically", cfg.UpdateAutomatically, false)
-	check("UpdateMechanism", cfg.UpdateMechanism, "Docker")
+	check("UpdateMechanism", cfg.UpdateMechanism, "BuiltIn")
 	check("BackupFolder", cfg.BackupFolder, "Backups")
 	check("BackupInterval", cfg.BackupInterval, 1)
 	check("BackupRetention", cfg.BackupRetention, 28)

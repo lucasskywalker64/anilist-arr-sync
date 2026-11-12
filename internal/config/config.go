@@ -140,7 +140,7 @@ func NewDefault() *Config {
 		EnableDesktopNotifications: false,
 		UpdateBranch:               "main",
 		UpdateAutomatically:        false,
-		UpdateMechanism:            "Docker",
+		UpdateMechanism:            "BuiltIn",
 		BackupFolder:               "Backups",
 		BackupInterval:             1,
 		BackupRetention:            28,
@@ -241,6 +241,7 @@ func (c *Config) Validate() error {
 	default:
 		check(false, "UpdateMechanism must be BuiltIn, Docker, or Package, got %q", c.UpdateMechanism)
 	}
+	check(c.UpdateBranch == "main" || c.UpdateBranch == "develop", "UpdateBranch must be main or develop, got %q", c.UpdateBranch)
 
 	check(strings.TrimSpace(c.DatabasePath) != "", "DatabasePath cannot be empty")
 	if _, err := c.ProxyURL(); err != nil {

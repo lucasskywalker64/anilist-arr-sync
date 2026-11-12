@@ -40,3 +40,13 @@ it('displays API backup byte counts with IEC units and creation dates in the use
     expect(cells[2].textContent).toBe(new Date(createdAt).toLocaleString());
   }
 });
+
+it.each(['scoop', 'aur', 'winget', 'chocolatey', 'Docker'])('explains update ownership for %s and hides installation', async (owner) => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    currentVersion: 'v1.0.0', latestVersion: 'v1.1.0', updateAvailable: true,
+    canUpdate: false, updateOwner: owner, reason: `Updates are managed by ${owner}.`,
+  }), { headers: { 'content-type': 'application/json' } })));
+  component = new SystemView({ target: document.body, props: { subTab: 'updates' } });
+  await vi.waitFor(() => expect(document.body.textContent).toContain(`Updates are managed by ${owner}.`));
+  expect(document.body.textContent).not.toContain('Install Latest Update');
+});

@@ -25,6 +25,7 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/orchestrator"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/scheduler"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/updater"
 	"github.com/lucasskywalker64/anilist-arr-sync/web"
 )
 
@@ -53,9 +54,14 @@ type Server struct {
 	stopping     bool
 	instanceID   string
 	version      string
+	commit       string
+	updater      *updater.Engine
 	portOverride *int
 	bindOverride *string
 	handoff      *RestartHandoff
+
+	updateMu      sync.Mutex
+	updatePending bool
 
 	outboundHTTPClient    *http.Client
 	prepareSync           func(context.Context) error
@@ -645,6 +651,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status":     "ok",
 		"version":    s.version,
+		"commit":     s.commit,
 		"instanceId": s.instanceID,
 	})
 }
