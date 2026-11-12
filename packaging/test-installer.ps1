@@ -27,6 +27,29 @@ public static class FixtureTray {
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string title);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern IntPtr CreateWindowEx(uint style, string className, string title, uint windowStyle, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr parameter);
+    [DllImport("user32.dll")] static extern bool DestroyWindow(IntPtr window);
+    [DllImport("user32.dll", EntryPoint="LoadIconW")] static extern IntPtr LoadIcon(IntPtr instance, IntPtr name);
+    [DllImport("shell32.dll", CharSet=CharSet.Unicode)] static extern bool Shell_NotifyIcon(uint message, ref NotifyIcon icon);
+    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct NotifyIcon {
+        public uint Size; public IntPtr Window; public uint Id, Flags, Message; public IntPtr Icon;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst=128)] public string Tip;
+        public uint State, StateMask;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst=256)] public string Info;
+        public uint Version;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst=64)] public string Title;
+        public uint InfoFlags; public Guid Guid; public IntPtr Balloon;
+    }
+    public static bool NotificationAreaReady() {
+        IntPtr window = CreateWindowEx(0, "STATIC", "AniList-Arr-Sync fixture probe", 0, 0, 0, 0, 0, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+        if (window == IntPtr.Zero) throw new InvalidOperationException("Cannot create notification probe window");
+        try {
+            var icon = new NotifyIcon { Size=(uint)Marshal.SizeOf<NotifyIcon>(), Window=window, Id=1, Flags=2|4, Icon=LoadIcon(IntPtr.Zero, new IntPtr(32512)), Tip="AniList-Arr-Sync fixture probe" };
+            if (!Shell_NotifyIcon(0, ref icon)) return false;
+            Shell_NotifyIcon(2, ref icon);
+            return true;
+        } finally { DestroyWindow(window); }
+    }
     public static IntPtr AppWindow(uint process) {
         IntPtr window = IntPtr.Zero;
         while ((window = FindWindowEx(IntPtr.Zero, window, "AniListArrSyncTray", null)) != IntPtr.Zero) {
@@ -39,16 +62,18 @@ public static class FixtureTray {
 '@
 
 function EnsureTrayDesktop {
-    if ([FixtureTray]::FindWindow('Shell_TrayWnd', $null) -ne [IntPtr]::Zero) { return }
     # Hosted runners may start without Explorer. Exercise the real tray in a
     # desktop with its notification area; never turn tray verification off.
-    Start-Process -FilePath "$env:SystemRoot\explorer.exe" -WindowStyle Hidden
+    if ([FixtureTray]::FindWindow('Shell_TrayWnd', $null) -eq [IntPtr]::Zero) {
+        Start-Process -FilePath "$env:SystemRoot\explorer.exe" -WindowStyle Hidden
+    }
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
     while ([DateTime]::UtcNow -lt $deadline) {
-        if ([FixtureTray]::FindWindow('Shell_TrayWnd', $null) -ne [IntPtr]::Zero) { return }
+        if ([FixtureTray]::NotificationAreaReady()) { return }
         Start-Sleep -Milliseconds 100
     }
-    throw "[$stage] No notification area on this desktop (session $([Diagnostics.Process]::GetCurrentProcess().SessionId), interactive=$([Environment]::UserInteractive))"
+    $shell = Get-Process explorer -ErrorAction SilentlyContinue | ForEach-Object { "pid=$($_.Id),session=$($_.SessionId)" }
+    throw "[$stage] Notification area rejected a native probe (session $([Diagnostics.Process]::GetCurrentProcess().SessionId), interactive=$([Environment]::UserInteractive), arch=$([Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture), explorer=$($shell -join '; '))"
 }
 
 function StartTray {
