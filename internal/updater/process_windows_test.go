@@ -113,7 +113,7 @@ func TestWindowsServiceReplacementAndRollback(t *testing.T) {
 			}))
 			defer srv.Close()
 			p.HealthURL = srv.URL
-			err := execute(context.Background(), p, controller, 150*time.Millisecond, srv.Client())
+			_, err := execute(context.Background(), p, controller, 150*time.Millisecond, srv.Client())
 			if (err == nil) != (failure == "") {
 				t.Fatalf("service update: %v", err)
 			}

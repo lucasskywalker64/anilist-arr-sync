@@ -26,6 +26,7 @@ type fixtureControl struct {
 	health                  Identity
 	instance                string
 	db                      *storage.DB
+	cancelAfterStart        context.CancelFunc
 }
 
 func (f *fixtureControl) Prepare() error { return nil }
@@ -61,6 +62,9 @@ func (f *fixtureControl) Start() error {
 			return err
 		}
 		f.health, f.instance = f.plan.Expected, "new-boot"
+		if f.cancelAfterStart != nil {
+			f.cancelAfterStart()
+		}
 		switch f.failure {
 		case "version":
 			f.health.Version = "v0.0.0"
@@ -75,6 +79,59 @@ func (f *fixtureControl) Start() error {
 		f.health, f.instance = f.plan.Previous, "rollback-boot"
 	}
 	return nil
+}
+
+func TestRollbackOutlivesUpdateDeadline(t *testing.T) {
+	p := fixturePlan(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := &fixtureControl{plan: p, cancelAfterStart: cancel}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": f.health.Version, "commit": f.health.Commit, "instanceId": f.instance})
+	}))
+	defer srv.Close()
+	p.HealthURL = srv.URL
+	if _, err := execute(ctx, p, f, 150*time.Millisecond, srv.Client()); err == nil {
+		t.Fatal("cancelled update succeeded")
+	}
+	if f.db != nil {
+		_ = f.db.Close()
+	}
+	if f.health != p.Previous {
+		t.Fatal("prior build was not restarted")
+	}
+	checkRestoration(t, p, false)
+}
+
+func TestRollbackRestartsWhenHistoryCannotBeRecorded(t *testing.T) {
+	p := fixturePlan(t)
+	db, err := storage.Open(p.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Writer().Exec(`CREATE TRIGGER reject_update_history BEFORE INSERT ON update_history BEGIN SELECT RAISE(FAIL,'fixture history unavailable'); END`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f := &fixtureControl{plan: p, failure: "startup"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": f.health.Version, "commit": f.health.Commit, "instanceId": f.instance})
+	}))
+	defer srv.Close()
+	p.HealthURL = srv.URL
+	completed, err := execute(context.Background(), p, f, 150*time.Millisecond, srv.Client())
+	if err == nil || !strings.Contains(err.Error(), "fixture history unavailable") {
+		t.Fatalf("missing history failure: %v", err)
+	}
+	if f.health != p.Previous {
+		t.Fatal("restored build was left stopped after history failure")
+	}
+	if completed {
+		t.Fatal("history failure released the update block")
+	}
 }
 
 func fixturePlan(t *testing.T) Plan {
@@ -172,7 +229,7 @@ func TestWorkerRecovery(t *testing.T) {
 			}))
 			defer srv.Close()
 			p.HealthURL = srv.URL
-			err := execute(context.Background(), p, f, 150*time.Millisecond, srv.Client())
+			_, err := execute(context.Background(), p, f, 150*time.Millisecond, srv.Client())
 			if (err == nil) != (failure == "") {
 				t.Fatalf("worker result: %v", err)
 			}
@@ -195,6 +252,9 @@ func TestWorkerRecovery(t *testing.T) {
 var runFixtureService func(string) error
 
 func TestMain(m *testing.M) {
+	if fixtureSystemctl() {
+		os.Exit(0)
+	}
 	if len(os.Args) >= 3 {
 		switch os.Args[1] {
 		case "--fixture-service":
@@ -207,6 +267,20 @@ func TestMain(m *testing.M) {
 			}
 			os.Exit(0)
 		case "--update-worker":
+			if os.Getenv("ANILIST_ARR_SYNC_CANCELLATION_FIXTURE") == "1" {
+				path := os.Args[2]
+				_ = os.WriteFile(path+".ready", nil, 0600)
+				for {
+					if _, err := os.Stat(path + ".cancel"); err == nil {
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				time.Sleep(100 * time.Millisecond)
+				_ = os.WriteFile(path+".restored", nil, 0600)
+				_ = os.Remove(path + ".ready")
+				os.Exit(0)
+			}
 			if err := RunWorker(os.Args[2]); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
@@ -227,11 +301,8 @@ func TestMain(m *testing.M) {
 			if os.WriteFile(path, b, 0600) != nil {
 				os.Exit(2)
 			}
-			if err := SpawnWorker(context.Background(), path, p.Executable); err != nil {
+			if _, err := SpawnWorker(context.Background(), path, p.Executable); err != nil {
 				fmt.Fprintln(os.Stderr, err)
-				os.Exit(2)
-			}
-			if os.WriteFile(path+".go", nil, 0600) != nil {
 				os.Exit(2)
 			}
 			os.Exit(0)
@@ -241,6 +312,42 @@ func TestMain(m *testing.M) {
 		}
 	}
 	os.Exit(m.Run())
+}
+
+func TestFailedHandoffWaitsForWorkerRestoration(t *testing.T) {
+	t.Setenv("ANILIST_ARR_SYNC_CANCELLATION_FIXTURE", "1")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plan.json")
+	if err := os.WriteFile(path, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path+".go", 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.WriteFile(path+".cancel", nil, 0600)
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(path + ".ready"); errors.Is(err, os.ErrNotExist) {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = SpawnWorker(context.Background(), path, exe)
+	if err == nil {
+		t.Fatal("failed handoff was accepted")
+	}
+	if _, err := os.Stat(path + ".restored"); err != nil {
+		t.Fatal("handoff returned before worker restored its configuration")
+	}
+	if _, err := os.Stat(path + ".ready"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("worker was still active after cancellation")
+	}
 }
 
 func fixtureApp(path string) {
@@ -368,6 +475,11 @@ func TestDetachedWorkerReplacementAndRollback(t *testing.T) {
 				case <-ctx.Done():
 					t.Fatal("detached worker did not finish")
 				case <-time.After(20 * time.Millisecond):
+				}
+			}
+			for _, staged := range []string{p.Snapshot, p.Next} {
+				if _, err := os.Stat(staged); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("completed worker retained bulky staging files")
 				}
 			}
 			if _, err := os.Stat(filepath.Join(p.Directory, "launch-paths-preserved")); err != nil {

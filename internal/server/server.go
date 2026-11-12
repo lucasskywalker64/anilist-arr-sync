@@ -60,6 +60,9 @@ type Server struct {
 	bindOverride *string
 	handoff      *RestartHandoff
 
+	updateMu      sync.Mutex
+	updatePending bool
+
 	outboundHTTPClient    *http.Client
 	prepareSync           func(context.Context) error
 	prepareBackupSettings func(current, next config.Config) (func(), error)

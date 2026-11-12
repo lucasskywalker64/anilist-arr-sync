@@ -127,14 +127,13 @@ func bootstrap(ctx context.Context, o options, paths runtimePaths) (*appRuntime,
 		Staging: filepath.Join(paths.data, "staging"), HealthURL: r.healthURL(), InstanceID: srv.InstanceID(),
 		Args: args, Config: srv.Config, Container: server.IsContainerized}
 	engine.Launch = func(ctx context.Context, plan string) error {
-		if err := updater.SpawnWorker(ctx, plan, exe); err != nil {
+		managed, err := updater.SpawnWorker(ctx, plan, exe)
+		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(plan+".go", nil, 0600); err != nil {
-			_ = os.WriteFile(plan+".cancel", nil, 0600)
-			return err
+		if !managed {
+			srv.NotifyLifecycle(server.LifecycleShutdown)
 		}
-		srv.NotifyLifecycle(server.LifecycleShutdown)
 		return nil
 	}
 	srv.SetUpdater(engine)

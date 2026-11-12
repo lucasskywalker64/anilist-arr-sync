@@ -17,6 +17,10 @@ func detach(c *exec.Cmd) {
 	c.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.DETACHED_PROCESS, HideWindow: true}
 }
 
+func workerCommand(_ Plan, worker, path string) *exec.Cmd {
+	return exec.Command(worker, "--update-worker", path)
+}
+
 func waitProcess(ctx context.Context, pid int) error {
 	h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
 	if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
@@ -40,8 +44,8 @@ func waitProcess(ctx context.Context, pid int) error {
 	}
 }
 
-func currentService() (string, error) {
-	return winservice.Name(), nil
+func currentService() (string, bool, error) {
+	return winservice.Name(), false, nil
 }
 
 type serviceAPI interface {

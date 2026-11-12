@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+const (
+	workerAttemptTimeout  = 2 * time.Minute
+	workerRecoveryTimeout = 2 * time.Minute
+)
+
 // Plan is private staging state shared with a temporary copy of this application.
 type Plan struct {
 	Expected, Previous                              Identity
@@ -20,6 +25,7 @@ type Plan struct {
 	HealthURL, PreviousInstance, Service, Lock      string
 	Args                                            []string
 	ParentPID                                       int
+	UserService                                     bool
 }
 
 // processControl is the seam for direct child processes and registered services.
@@ -76,42 +82,72 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	return err
 }
 
-// SpawnWorker starts a detached copy and waits until service recovery is suspended.
-func SpawnWorker(ctx context.Context, path, exe string) error {
+// ErrWorkerActive prevents preparation cleanup when cancellation cannot be confirmed.
+var ErrWorkerActive = errors.New("update worker may still be active; staging retained")
+
+// SpawnWorker starts a detached copy and commits the handoff after readiness.
+// The result reports whether the worker owns stopping a registered service.
+func SpawnWorker(ctx context.Context, path, exe string) (bool, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	var plan Plan
+	if err := json.Unmarshal(b, &plan); err != nil {
+		return false, err
+	}
 	worker := filepath.Join(filepath.Dir(path), "worker"+filepath.Ext(exe))
 	if err := copyFile(exe, worker, 0700); err != nil {
-		return err
+		return false, err
 	}
-	c := exec.Command(worker, "--update-worker", path)
+	c := workerCommand(plan, worker, path)
 	detach(c)
 	log, err := os.OpenFile(filepath.Join(filepath.Dir(path), "worker.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = log.Close() }()
 	c.Stdout, c.Stderr = log, log
 	if err := c.Start(); err != nil {
-		return err
+		return false, err
 	}
 	done := make(chan error, 1)
 	go func() { done <- c.Wait() }()
+	cancelWorker := func(cause error) (bool, error) {
+		cancelErr := os.WriteFile(path+".cancel", nil, 0600)
+		timer := time.NewTimer(30 * time.Second)
+		defer timer.Stop()
+		select {
+		case err := <-done:
+			if err != nil {
+				return false, errors.Join(cause, cancelErr, err, ErrWorkerActive)
+			}
+			return false, errors.Join(cause, cancelErr, err)
+		case <-timer.C:
+			return false, errors.Join(cause, cancelErr, ErrWorkerActive)
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	tick := time.NewTicker(25 * time.Millisecond)
 	defer tick.Stop()
 	for {
 		if _, err := os.Stat(path + ".ready"); err == nil {
-			return nil
+			if err := ctx.Err(); err != nil {
+				return cancelWorker(err)
+			}
+			if err := os.WriteFile(path+".go", nil, 0600); err != nil {
+				return cancelWorker(err)
+			}
+			return plan.Service != "", nil
 		}
 		select {
 		case err := <-done:
-			return fmt.Errorf("update worker exited before readiness: %v", err)
+			return false, errors.Join(fmt.Errorf("update worker exited before readiness: %v", err), ErrWorkerActive)
 		case <-ctx.Done():
 			// The worker owns recovery configuration. Ask it to exit cleanly rather
 			// than killing it while the service's recovery actions are disabled.
-			_ = os.WriteFile(path+".cancel", nil, 0600)
-			<-done
-			return ctx.Err()
+			return cancelWorker(ctx.Err())
 		case <-tick.C:
 		}
 	}
@@ -127,74 +163,97 @@ func RunWorker(path string) error {
 	if err := json.Unmarshal(b, &p); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), workerAttemptTimeout)
 	defer cancel()
 	control, err := controller(p)
 	if err != nil {
 		return err
 	}
-	if err := control.Prepare(); err != nil {
-		return errors.Join(err, control.Restore())
+	releaseLock := true
+	defer func() {
+		if releaseLock {
+			_ = os.Remove(p.Lock)
+		}
+	}()
+	restore := func() error {
+		err := control.Restore()
+		if err != nil {
+			releaseLock = false
+		}
+		return err
 	}
-	defer func() { _ = os.Remove(p.Lock) }()
+	if err := control.Prepare(); err != nil {
+		return errors.Join(err, restore())
+	}
 	defer func() { _ = os.Remove(path + ".ready") }()
 	defer func() { _ = os.Remove(path + ".cancel") }()
 	if err := os.WriteFile(path+".ready", nil, 0600); err != nil {
-		return errors.Join(err, control.Restore())
+		return errors.Join(err, restore())
 	}
 	// The parent commits the handoff only after SpawnWorker returns successfully.
 	for {
 		if _, err := os.Stat(path + ".cancel"); err == nil {
-			return control.Restore()
+			return restore()
 		}
 		if _, err := os.Stat(path + ".go"); err == nil {
 			break
 		}
 		select {
 		case <-ctx.Done():
-			return errors.Join(ctx.Err(), control.Restore())
+			return errors.Join(ctx.Err(), restore())
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
 	defer func() { _ = os.Remove(path + ".go") }()
 	if p.Service != "" {
 		if err := control.Stop(ctx); err != nil {
-			return errors.Join(err, control.Restore())
+			return errors.Join(err, restore())
 		}
 	}
 	if err := waitProcess(ctx, p.ParentPID); err != nil {
-		return errors.Join(err, control.Restore())
+		return errors.Join(err, restore())
 	}
-	return execute(ctx, p, control, 30*time.Second, &http.Client{Timeout: 2 * time.Second})
+	completed, err := execute(ctx, p, control, 30*time.Second, &http.Client{Timeout: 2 * time.Second})
+	releaseLock = completed
+	if completed {
+		err = errors.Join(err, completeAttempt(path, p))
+	}
+	return err
 }
 
 // execute runs only after the previous process has released its executable and DB.
-func execute(ctx context.Context, p Plan, control processControl, healthTimeout time.Duration, client *http.Client) (result error) {
-	defer func() { result = errors.Join(result, control.Restore()) }()
+func execute(ctx context.Context, p Plan, control processControl, healthTimeout time.Duration, client *http.Client) (completed bool, result error) {
+	defer func() {
+		err := control.Restore()
+		if err != nil {
+			completed = false
+		}
+		result = errors.Join(result, err)
+	}()
 	// Refresh the online preparation snapshot after shutdown so accepted writes
 	// between preparation and shutdown survive rollback. This opens no migrations.
 	if err := os.Remove(p.Snapshot); err != nil {
-		return errors.Join(err, control.Start())
+		return false, errors.Join(err, control.Start())
 	}
 	db, err := openDatabase(p.Database)
 	if err != nil {
-		return errors.Join(err, control.Start())
+		return false, errors.Join(err, control.Start())
 	}
 	_, err = db.ExecContext(ctx, `VACUUM INTO ?`, p.Snapshot)
 	err = errors.Join(err, db.Close())
 	if err != nil {
-		return errors.Join(err, control.Start())
+		return false, errors.Join(err, control.Start())
 	}
 	backup, replacement := p.Executable+".previous", p.Executable+".next"
 	if err := copyFile(p.Next, replacement, 0755); err != nil {
-		return errors.Join(err, control.Start())
+		return false, errors.Join(err, control.Start())
 	}
 	defer func() { _ = os.Remove(replacement) }()
 	if err := os.Rename(p.Executable, backup); err != nil {
-		return errors.Join(err, control.Start())
+		return false, errors.Join(err, control.Start())
 	}
 	if err := os.Rename(replacement, p.Executable); err != nil {
-		return errors.Join(err, os.Rename(backup, p.Executable), control.Start())
+		return false, errors.Join(err, os.Rename(backup, p.Executable), control.Start())
 	}
 	failure := control.Start()
 	if failure == nil {
@@ -202,38 +261,39 @@ func execute(ctx context.Context, p Plan, control processControl, healthTimeout 
 	}
 	if failure == nil {
 		if err := record(ctx, p.Database, p.Expected, nil, time.Now()); err != nil {
-			return err
+			return false, err
 		}
 		_ = os.Remove(backup)
-		return nil
+		return true, nil
 	}
 	// Never restore a database while the failed process can still hold or write it.
+	ctx, cancel := context.WithTimeout(context.Background(), workerRecoveryTimeout)
+	defer cancel()
 	if err := control.Stop(ctx); err != nil {
-		return errors.Join(failure, err)
+		return false, errors.Join(failure, err)
 	}
 	if err := os.Remove(p.Executable); err != nil {
-		return errors.Join(failure, err)
+		return false, errors.Join(failure, err)
 	}
 	if err := os.Rename(backup, p.Executable); err != nil {
-		return errors.Join(failure, err)
+		return false, errors.Join(failure, err)
 	}
 	for _, suffix := range []string{"-wal", "-shm", ""} {
 		if err := os.Remove(p.Database + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return errors.Join(failure, err)
+			return false, errors.Join(failure, err)
 		}
 	}
 	if err := copyFile(p.Snapshot, p.Database, 0600); err != nil {
-		return errors.Join(failure, err)
+		return false, errors.Join(failure, err)
 	}
 	// Write after restoration and before restarting the old process. Its DB schema
 	// may predate this updater, so history uses the original update_history columns.
-	if err := record(ctx, p.Database, p.Expected, failure, time.Now()); err != nil {
-		return errors.Join(failure, err)
-	}
+	recordErr := record(ctx, p.Database, p.Expected, failure, time.Now())
 	if err := control.Start(); err != nil {
-		return errors.Join(failure, err)
+		return false, errors.Join(failure, recordErr, err)
 	}
-	return errors.Join(failure, waitHealth(ctx, client, p.HealthURL, p.Previous, p.PreviousInstance, healthTimeout))
+	healthErr := waitHealth(ctx, client, p.HealthURL, p.Previous, p.PreviousInstance, healthTimeout)
+	return recordErr == nil && healthErr == nil, errors.Join(failure, recordErr, healthErr)
 }
 
 func waitHealth(ctx context.Context, client *http.Client, url string, expected Identity, previous string, timeout time.Duration) error {

@@ -9,12 +9,14 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +25,61 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 )
+
+func TestApplyPrunesOnlyCompletedInactiveAttempts(t *testing.T) {
+	f := newFixture(t, newBuild, "windows", "amd64", []byte("new"))
+	e := fixtureEngine(t, f, "windows", "amd64")
+	for _, name := range []string{"update-completed", "update-active", "update-unfinished"} {
+		dir := filepath.Join(e.Staging, name)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "before.db"), []byte("recovery snapshot"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if name != "update-unfinished" {
+			pid := 2147483647
+			if name == "update-active" {
+				pid = os.Getpid()
+			}
+			if err := os.WriteFile(filepath.Join(dir, "completed"), []byte(strconv.Itoa(pid)), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	e.Launch = func(context.Context, string) error { return nil }
+	if err := e.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(e.Staging, "update-completed")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("completed attempt accumulated")
+	}
+	for _, name := range []string{"update-active", "update-unfinished"} {
+		if _, err := os.Stat(filepath.Join(e.Staging, name, "before.db")); err != nil {
+			t.Fatal("pruned active or incomplete recovery data")
+		}
+	}
+}
+
+func TestUnconfirmedWorkerRecoveryRetainsStaging(t *testing.T) {
+	f := newFixture(t, newBuild, "windows", "amd64", []byte("new"))
+	e := fixtureEngine(t, f, "windows", "amd64")
+	var snapshot string
+	e.Launch = func(_ context.Context, path string) error {
+		snapshot = filepath.Join(filepath.Dir(path), "before.db")
+		return ErrWorkerActive
+	}
+	if err := e.Apply(context.Background()); !errors.Is(err, ErrWorkerActive) {
+		t.Fatalf("missing recovery error: %v", err)
+	}
+	if _, err := os.Stat(snapshot); err != nil {
+		t.Fatal("deleted recovery snapshot before worker restoration")
+	}
+	status, err := e.Status(context.Background())
+	if err != nil || status.CanUpdate || !strings.Contains(status.Reason, "incomplete recovery") {
+		t.Fatal("unconfirmed worker did not block retries")
+	}
+}
 
 var oldBuild = Identity{Version: "v1.0.0", Commit: strings.Repeat("a", 40), Channel: "main"}
 var newBuild = Identity{Version: "v1.1.0", Commit: strings.Repeat("b", 40), Channel: "main"}

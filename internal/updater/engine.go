@@ -76,6 +76,13 @@ func (e *Engine) status(ctx context.Context) (Status, *candidate, error) {
 	if reason != "" {
 		return s, nil, nil
 	}
+	if _, err := os.Stat(filepath.Join(e.Staging, "update.lock")); err == nil {
+		s.Reason = "An update worker or incomplete recovery owns staging. Check the worker log before retrying."
+		return s, nil, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		s.Reason = err.Error()
+		return s, nil, err
+	}
 	c, err := e.discover(ctx, cfg.UpdateBranch)
 	if err != nil {
 		s.Reason = err.Error()
@@ -140,6 +147,9 @@ func (e *Engine) Apply(ctx context.Context) error {
 	if err := os.MkdirAll(e.Staging, 0700); err != nil {
 		return err
 	}
+	if err := pruneCompleted(e.Staging); err != nil {
+		return err
+	}
 	lock := filepath.Join(e.Staging, "update.lock")
 	f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
@@ -154,9 +164,9 @@ func (e *Engine) Apply(ctx context.Context) error {
 		_ = os.Remove(lock)
 		return err
 	}
-	launched := false
+	workerOwnsState := false
 	defer func() {
-		if !launched {
+		if !workerOwnsState {
 			_ = os.RemoveAll(dir)
 			_ = os.Remove(lock)
 		}
@@ -173,13 +183,13 @@ func (e *Engine) Apply(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	service, err := currentService()
+	service, userService, err := currentService()
 	if err != nil {
 		return err
 	}
 	p := Plan{Expected: c.Identity, Previous: e.Current, Executable: e.Executable, Next: next,
 		Database: e.DB.Path(), Snapshot: snapshot, Args: e.Args, Directory: cwd, ParentPID: os.Getpid(),
-		HealthURL: e.HealthURL, PreviousInstance: e.InstanceID, Service: service, Lock: lock}
+		HealthURL: e.HealthURL, PreviousInstance: e.InstanceID, Service: service, UserService: userService, Lock: lock}
 	path := filepath.Join(dir, "plan.json")
 	b, err := json.Marshal(p)
 	if err != nil {
@@ -189,9 +199,10 @@ func (e *Engine) Apply(ctx context.Context) error {
 		return err
 	}
 	if err := e.Launch(ctx, path); err != nil {
+		workerOwnsState = errors.Is(err, ErrWorkerActive)
 		return err
 	}
-	launched = true
+	workerOwnsState = true
 	return nil
 }
 

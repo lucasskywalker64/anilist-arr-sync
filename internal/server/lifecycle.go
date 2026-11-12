@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/url"
@@ -73,14 +74,41 @@ func (s *Server) SetUpdater(engine *updater.Engine) { s.updater = engine }
 
 // AutomaticUpdate reads the current preference so channel changes never enable it.
 func (s *Server) AutomaticUpdate(ctx context.Context) error {
-	if s.updater == nil || !s.Config().UpdateAutomatically {
+	return s.applyUpdate(ctx, true)
+}
+
+func (s *Server) updateRestriction() string {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	if s.requiresRestart(*s.cfg) {
+		return "A restart is required before updating to apply pending settings."
+	}
+	return ""
+}
+
+func (s *Server) applyUpdate(ctx context.Context, automatic bool) error {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+	if automatic && (s.updater == nil || !s.Config().UpdateAutomatically) {
 		return nil
 	}
-	status, err := s.updater.Status(ctx)
-	if err != nil || !status.CanUpdate {
+	if s.updatePending {
+		return errors.New("an update handoff is already committed")
+	}
+	if reason := s.updateRestriction(); reason != "" {
+		return errors.New(reason)
+	}
+	if automatic {
+		status, err := s.updater.Status(ctx)
+		if err != nil || !status.CanUpdate {
+			return err
+		}
+	}
+	if err := s.updater.Apply(ctx); err != nil {
 		return err
 	}
-	return s.updater.Apply(ctx)
+	s.updatePending = true
+	return nil
 }
 
 // SetListenerOverrides applies transient CLI settings before Start is called.

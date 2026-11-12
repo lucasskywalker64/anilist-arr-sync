@@ -75,13 +75,13 @@ func fixtureServiceMain(path string) error {
 			HealthURL: "http://" + fixture.Address + "/api/v1/health", InstanceID: strconv.Itoa(os.Getpid()),
 			Config: func() config.Config { return *cfg }, Container: func(string) bool { return false }}
 		engine.Launch = func(ctx context.Context, plan string) error {
-			if err := SpawnWorker(ctx, plan, exe); err != nil {
+			managed, err := SpawnWorker(ctx, plan, exe)
+			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(plan+".go", nil, 0600); err != nil {
-				return err
+			if !managed {
+				stop <- struct{}{}
 			}
-			stop <- struct{}{}
 			return nil
 		}
 		mux := http.NewServeMux()
@@ -322,7 +322,7 @@ func cleanupLiveService(t *testing.T, service *mgr.Service, data string) {
 	t.Helper()
 	// An interrupted attempt may have a worker completing rollback. Wait for that
 	// worker before deleting only the service created by this test.
-	deadline := time.Now().Add(2*time.Minute + 15*time.Second)
+	deadline := time.Now().Add(workerAttemptTimeout + workerRecoveryTimeout + 15*time.Second)
 	for {
 		if _, err := os.Stat(filepath.Join(data, "staging", "update.lock")); errors.Is(err, os.ErrNotExist) {
 			break

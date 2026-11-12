@@ -340,6 +340,12 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 
 // handleUpdateConfig validates, persists, and hot-reloads configuration changes.
 func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+	if s.updatePending {
+		s.writeJSONError(w, http.StatusConflict, "settings cannot change during an update handoff")
+		return
+	}
 	var updates map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
 		s.writeJSONError(w, http.StatusBadRequest, "invalid request body")
@@ -1206,6 +1212,10 @@ func (s *Server) handleGetUpdateStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status, _ := s.updater.Status(r.Context())
+	if reason := s.updateRestriction(); reason != "" {
+		status.CanUpdate = false
+		status.Reason = reason
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(status)
@@ -1217,7 +1227,7 @@ func (s *Server) handleApplyUpdate(w http.ResponseWriter, r *http.Request) {
 		s.writeJSONError(w, http.StatusServiceUnavailable, "update supervisor is unavailable")
 		return
 	}
-	if err := s.updater.Apply(r.Context()); err != nil {
+	if err := s.applyUpdate(r.Context(), false); err != nil {
 		s.writeJSONError(w, http.StatusConflict, err.Error())
 		return
 	}
