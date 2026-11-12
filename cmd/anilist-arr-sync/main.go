@@ -147,7 +147,15 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 			err := r.syncOnce(ctx, out)
 			return errors.Join(err, r.close())
 		}
+		stopTray := func() {}
+		if o.tray {
+			stopTray, err = startTray(r.browserURL, cancel)
+			if err != nil {
+				return errors.Join(err, r.close())
+			}
+		}
 		if err := r.server.Start(); err != nil {
+			stopTray()
 			return failRestart(errors.Join(err, r.close()))
 		}
 		ready()
@@ -159,13 +167,6 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 		r.start()
 		url := r.browserURL()
 		log.Printf("listening at %s", url)
-		stopTray := func() {}
-		if o.tray {
-			stopTray, err = startTray(url, cancel)
-			if err != nil {
-				return errors.Join(err, r.close())
-			}
-		}
 		if r.listenerCfg.LaunchBrowser && !o.noBrowser && out == os.Stdout && isatty.IsTerminal(os.Stdout.Fd()) && !server.IsContainerized(r.listenerCfg.UpdateMechanism) {
 			if err := openBrowser(url); err != nil {
 				log.Printf("browser: %v", err)

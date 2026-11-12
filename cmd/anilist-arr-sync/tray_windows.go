@@ -46,7 +46,7 @@ type trayIcon struct {
 
 // startTray hosts the icon on its own Windows message-loop thread. The same
 // signed executable runs the service, tray, and detached update worker.
-func startTray(url string, quit func()) (func(), error) {
+func startTray(url func() string, quit func()) (func(), error) {
 	type result struct {
 		window uintptr
 		err    error
@@ -66,7 +66,7 @@ func startTray(url string, quit func()) (func(), error) {
 			switch message {
 			case callbackMessage:
 				if lparam == 0x0203 { // WM_LBUTTONDBLCLK
-					_ = openBrowser(url)
+					_ = openBrowser(url())
 				}
 				if lparam == 0x0205 { // WM_RBUTTONUP
 					menu, _, _ := trayUser32.NewProc("CreatePopupMenu").Call()
@@ -80,7 +80,7 @@ func startTray(url string, quit func()) (func(), error) {
 					choice, _, _ := trayUser32.NewProc("TrackPopupMenu").Call(menu, 0x0100|0x0002, uintptr(point.x), uintptr(point.y), 0, hwnd, 0)
 					_, _, _ = trayUser32.NewProc("DestroyMenu").Call(menu)
 					if choice == 1 {
-						_ = openBrowser(url)
+						_ = openBrowser(url())
 					}
 					if choice == 2 {
 						quit()
