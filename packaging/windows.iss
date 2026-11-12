@@ -81,6 +81,20 @@ function QueryServiceStatus(Service: THandle; var Status: TServiceStatus): Boole
   external 'QueryServiceStatus@advapi32.dll stdcall';
 function CloseServiceHandle(Handle: THandle): Boolean;
   external 'CloseServiceHandle@advapi32.dll stdcall';
+function FindWindowEx(Parent, After: THandle; ClassName: String; WindowName: THandle): THandle;
+  external 'FindWindowExW@user32.dll stdcall';
+function GetWindowThreadProcessId(Window: THandle; var ProcessId: LongWord): LongWord;
+  external 'GetWindowThreadProcessId@user32.dll stdcall';
+function OpenProcess(Access: LongWord; Inherit: Boolean; ProcessId: LongWord): THandle;
+  external 'OpenProcess@kernel32.dll stdcall';
+function QueryFullProcessImageName(Process: THandle; Flags: LongWord; FileName: String; var Size: LongWord): Boolean;
+  external 'QueryFullProcessImageNameW@kernel32.dll stdcall';
+function PostMessage(Window: THandle; Message: LongWord; WParam, LParam: THandle): Boolean;
+  external 'PostMessageW@user32.dll stdcall';
+function WaitForSingleObject(Handle: THandle; Timeout: LongWord): LongWord;
+  external 'WaitForSingleObject@kernel32.dll stdcall';
+function CloseHandle(Handle: THandle): Boolean;
+  external 'CloseHandle@kernel32.dll stdcall';
 
 function ServiceName: String;
 begin
@@ -137,10 +151,39 @@ begin
   end;
 end;
 
+procedure StopTray;
+var Window, Process: THandle;
+    ProcessId, Size: LongWord;
+    FileName: String;
+begin
+  Window := FindWindowEx(0, 0, 'AniListArrSyncTray', 0);
+  while Window <> 0 do begin
+    GetWindowThreadProcessId(Window, ProcessId);
+    Process := OpenProcess($00101000, False, ProcessId);
+    if Process <> 0 then begin
+      try
+        Size := 32768;
+        SetLength(FileName, Size);
+        if QueryFullProcessImageName(Process, 0, FileName, Size) then begin
+          SetLength(FileName, Size);
+          if CompareText(FileName, ExpandConstant('{app}\anilist-arr-sync.exe')) = 0 then begin
+            if not PostMessage(Window, $0010, 0, 0) then RaiseException('Cannot close the installed tray application');
+            if WaitForSingleObject(Process, 30000) <> 0 then RaiseException('Timed out closing the installed tray application');
+          end;
+        end;
+      finally
+        CloseHandle(Process);
+      end;
+    end;
+    Window := FindWindowEx(0, Window, 'AniListArrSyncTray', 0);
+  end;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   try
+    StopTray;
     StopService;
   except
     Result := GetExceptionMessage;
@@ -178,6 +221,7 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then begin
+    StopTray;
     StopService;
     RunSC('delete ' + ServiceName, True);
   end;

@@ -256,6 +256,26 @@ func run(args []string) error {
 		return err
 	}
 	switch args[0] {
+	case "config":
+		// Scoop's license field is literal. Render common public package metadata;
+		// signing inputs remain environment references.
+		license := os.Getenv("PACKAGE_LICENSE")
+		if os.Getenv("RELEASE_MODE") == "production" && license == "" {
+			return errors.New("PACKAGE_LICENSE is required for production publishers")
+		}
+		data, err := os.ReadFile(".goreleaser.yaml")
+		if err != nil {
+			return err
+		}
+		literal, err := json.Marshal(license)
+		if err != nil {
+			return err
+		}
+		data = bytes.ReplaceAll(data, []byte("'{{ .Env.PACKAGE_LICENSE }}'"), literal)
+		if err := os.MkdirAll(".release-tools", 0755); err != nil {
+			return err
+		}
+		return os.WriteFile(".release-tools/goreleaser.yaml", data, 0644)
 	case "prepare":
 		if _, err := os.Stat("web/dist/index.html"); err != nil {
 			return errors.New("build the frontend before release compilation")

@@ -54,12 +54,12 @@ func verifyContainers(t *testing.T, id updater.Identity) {
 				t.Fatalf("local container build: %v\n%s", err, out[max(0, len(out)-3000):])
 			}
 			defer func() { _ = exec.Command("docker", "image", "rm", tag).Run() }()
-			out, err := exec.Command("docker", "run", "--detach", "--rm", "--publish", "127.0.0.1::7171", tag).CombinedOutput()
+			out, err := exec.Command("docker", "run", "--detach", "--platform", "linux/"+arch, "--publish", "127.0.0.1::7171", tag).Output()
 			if err != nil {
 				t.Fatalf("container start: %v", err)
 			}
 			container := strings.TrimSpace(string(out))
-			defer func() { _ = exec.Command("docker", "rm", "--force", container).Run() }()
+			defer func() { _ = exec.Command("docker", "rm", "--force", "--volumes", container).Run() }()
 			port, err := exec.Command("docker", "port", container, "7171/tcp").Output()
 			if err != nil {
 				t.Fatal(err)
@@ -77,7 +77,8 @@ func verifyContainers(t *testing.T, id updater.Identity) {
 					}
 				}
 				if time.Now().After(deadline) {
-					t.Fatal("container did not start with writable data volume and exact identity")
+					logs, _ := exec.Command("docker", "logs", "--tail", "10", container).CombinedOutput()
+					t.Fatalf("container did not start with writable data volume and exact identity: %s", logs)
 				}
 				time.Sleep(100 * time.Millisecond)
 			}

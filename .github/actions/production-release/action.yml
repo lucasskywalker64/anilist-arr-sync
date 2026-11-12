@@ -1,0 +1,5 @@
+name: Package, sign, and publish production release
+description: Run the OSS pipeline with the JavaScript action artifact runtime
+runs:
+  using: node24
+  main: index.cjs

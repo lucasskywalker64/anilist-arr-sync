@@ -69,7 +69,10 @@ func TestSnapshot(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			command := exec.Command("goreleaser", "release", "--snapshot", "--clean", "--skip=publish,docker", "--parallelism=1")
+			if err := run([]string{"config"}); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command("goreleaser", "release", "--config", ".release-tools/goreleaser.yaml", "--snapshot", "--clean", "--skip=publish,docker", "--parallelism=1")
 			if out, err := command.CombinedOutput(); err != nil {
 				t.Fatalf("snapshot failed: %v\n%s", err, out[max(0, len(out)-6000):])
 			}
@@ -209,10 +212,14 @@ func verifyManagerReferences(t *testing.T, id updater.Identity) {
 		t.Fatal(err)
 	}
 	var scoop struct {
+		License      string
 		Architecture map[string]struct{ URL, Hash string }
 	}
 	if err := json.Unmarshal(data, &scoop); err != nil {
 		t.Fatal(err)
+	}
+	if scoop.License != "LicenseRef-Fixture" {
+		t.Fatal("Scoop license was not rendered from public package metadata")
 	}
 	aur, err := os.ReadFile("dist/aur/anilist-arr-sync-bin.pkgbuild")
 	if err != nil {

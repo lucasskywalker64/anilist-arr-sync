@@ -82,9 +82,13 @@ public static class FixtureTray {
     }, [IntPtr]::Zero) | Out-Null
     if (!$tray.WaitForExit(30000)) { throw 'Tray window did not drain the runtime on close' }
     if ($tray.ExitCode -ne 0) { throw 'Tray exited with an error' }
+    # Uninstall must also close an active tray itself, before deleting files.
+    $tray = Start-Process -FilePath (Join-Path $app 'anilist-arr-sync.exe') -ArgumentList @('--tray', '--data-dir', "`"$data`"", '--config', "`"$data\config.xml`"") -PassThru -WindowStyle Hidden
+    WaitHealthy
     $uninstaller = Join-Path $app 'unins000.exe'
     $process = Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -PassThru -Wait -WindowStyle Hidden
     if ($process.ExitCode -ne 0) { throw 'Uninstaller failed' }
+    if (!$tray.WaitForExit(30000)) { throw 'Uninstall left the tray runtime running' }
     if (Test-Path -LiteralPath (Join-Path $app 'update-owner')) { throw 'Uninstall retained ownership marker' }
     if (Test-Path -LiteralPath (Join-Path $app 'anilist-arr-sync.exe')) { throw 'Uninstall retained executable' }
     if (Test-Path -LiteralPath $startup) { throw 'Uninstall retained startup shortcut' }

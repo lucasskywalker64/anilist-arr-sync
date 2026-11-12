@@ -75,7 +75,9 @@ jobs:
       - name: Build signed-checksum nightly using OSS snapshot mode
         shell: pwsh
         run: |
-          goreleaser release --snapshot --clean --fail-fast --parallelism=1 --skip=publish,docker,scoop,aur
+          go run ./cmd/release config
+          if ($LASTEXITCODE -ne 0) { throw 'Release configuration failed' }
+          goreleaser release --config .release-tools/goreleaser.yaml --snapshot --clean --fail-fast --parallelism=1 --skip=publish,docker,scoop,aur
           if ($LASTEXITCODE -ne 0) { throw 'Nightly packaging failed' }
           go run ./cmd/release export dist
           if ($LASTEXITCODE -ne 0) { throw 'Final-byte verification failed' }

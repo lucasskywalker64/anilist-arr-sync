@@ -11,6 +11,7 @@ on:
       - 'go.sum'
       - 'web/**'
       - '.github/actions/release-tools/**'
+      - '.github/actions/production-release/**'
       - '.github/workflows/release*.yml'
   workflow_dispatch:
 permissions:
@@ -37,6 +38,8 @@ jobs:
         run: go test ./cmd/release -run '^TestSnapshot$' -count=1 -timeout=30m
       - name: Verify publication failure paths
         run: python -m unittest discover -s packaging -p '*_test.py'
+      - name: Verify production action command boundaries
+        run: node --test packaging/production.test.cjs
       - uses: actions/upload-artifact@v4
         with:
           name: fixture-${{ runner.arch }}

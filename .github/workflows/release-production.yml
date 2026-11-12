@@ -105,12 +105,7 @@ jobs:
             "AniList-Arr-Sync $env:RELEASE_VERSION from commit $env:RELEASE_COMMIT. Windows artifacts have timestamped SignPath signatures. Final checksums are Minisign-signed." | Set-Content .release/notes.md -Encoding utf8
           }
       - name: Build once, wait for SignPath approvals, test installers, hash, sign, and publish
-        shell: pwsh
-        run: |
-          goreleaser release --clean --fail-fast --parallelism=1 --timeout=5h --skip=docker --release-notes .release/notes.md
-          if ($LASTEXITCODE -ne 0) { throw 'Release failed; no unsigned fallback is permitted' }
-          go run ./cmd/release export dist
-          if ($LASTEXITCODE -ne 0) { throw 'Final-byte verification failed' }
+        uses: ./.github/actions/production-release
       - uses: actions/upload-artifact@v4
         with:
           name: production-final
