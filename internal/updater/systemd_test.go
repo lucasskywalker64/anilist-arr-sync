@@ -61,11 +61,20 @@ func TestSystemdStopsAndStartsOriginalUnit(t *testing.T) {
 	if err := p.Start(); err != nil {
 		t.Fatal(err)
 	}
+	for _, state := range []string{"inactive", "failed", "active", "activating", "deactivating", ""} {
+		t.Setenv("ANILIST_ARR_SYNC_SYSTEMCTL_STATE", state)
+		stopped, err := p.Stopped(context.Background())
+		if err != nil || stopped != (state == "inactive" || state == "failed") {
+			t.Fatalf("stopped state %q: %v, %v", state, stopped, err)
+		}
+	}
 	b, err := os.ReadFile(log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(b) != "--user stop -- anilist-arr-sync.service\n--user start -- anilist-arr-sync.service\n" {
+	want := "--user stop -- anilist-arr-sync.service\n--user start -- anilist-arr-sync.service\n" +
+		strings.Repeat("--user show --property=ActiveState --value -- anilist-arr-sync.service\n", 6)
+	if string(b) != want {
 		t.Fatalf("service commands: %s", b)
 	}
 }
@@ -83,6 +92,9 @@ func fixtureSystemctl() bool {
 		os.Exit(2)
 	}
 	if err := f.Close(); err != nil {
+		os.Exit(2)
+	}
+	if _, err := os.Stdout.WriteString(os.Getenv("ANILIST_ARR_SYNC_SYSTEMCTL_STATE") + "\n"); err != nil {
 		os.Exit(2)
 	}
 	return true

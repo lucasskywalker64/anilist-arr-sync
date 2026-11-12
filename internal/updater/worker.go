@@ -113,16 +113,26 @@ func SpawnWorker(ctx context.Context, path, exe string) (bool, error) {
 	}
 	done := make(chan error, 1)
 	go func() { done <- c.Wait() }()
+	exited := func(cause error) (bool, error) {
+		// systemd-run waits for the worker but has its own PID. Require both the
+		// worker's safe-completion acknowledgement and its exit before cleanup.
+		pid := completedWorker(filepath.Dir(path))
+		if pid > 0 {
+			waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if waitProcess(waitCtx, pid) == nil {
+				return false, cause
+			}
+		}
+		return false, errors.Join(cause, ErrWorkerActive)
+	}
 	cancelWorker := func(cause error) (bool, error) {
 		cancelErr := os.WriteFile(path+".cancel", nil, 0600)
 		timer := time.NewTimer(30 * time.Second)
 		defer timer.Stop()
 		select {
 		case err := <-done:
-			if err != nil {
-				return false, errors.Join(cause, cancelErr, err, ErrWorkerActive)
-			}
-			return false, errors.Join(cause, cancelErr, err)
+			return exited(errors.Join(cause, cancelErr, err))
 		case <-timer.C:
 			return false, errors.Join(cause, cancelErr, ErrWorkerActive)
 		}
@@ -143,7 +153,7 @@ func SpawnWorker(ctx context.Context, path, exe string) (bool, error) {
 		}
 		select {
 		case err := <-done:
-			return false, errors.Join(fmt.Errorf("update worker exited before readiness: %v", err), ErrWorkerActive)
+			return exited(fmt.Errorf("update worker exited before readiness: %v", err))
 		case <-ctx.Done():
 			// The worker owns recovery configuration. Ask it to exit cleanly rather
 			// than killing it while the service's recovery actions are disabled.
@@ -163,16 +173,20 @@ func RunWorker(path string) error {
 	if err := json.Unmarshal(b, &p); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), workerAttemptTimeout)
-	defer cancel()
 	control, err := controller(p)
 	if err != nil {
-		return err
+		return errors.Join(err, finishAttempt(path, p))
 	}
+	return runWorker(path, p, control, 30*time.Second, &http.Client{Timeout: 2 * time.Second})
+}
+
+func runWorker(path string, p Plan, control processControl, healthTimeout time.Duration, client *http.Client) (result error) {
+	ctx, cancel := context.WithTimeout(context.Background(), workerAttemptTimeout)
+	defer cancel()
 	releaseLock := true
 	defer func() {
 		if releaseLock {
-			_ = os.Remove(p.Lock)
+			result = errors.Join(result, finishAttempt(path, p))
 		}
 	}()
 	restore := func() error {
@@ -205,19 +219,25 @@ func RunWorker(path string) error {
 		}
 	}
 	defer func() { _ = os.Remove(path + ".go") }()
+	releaseLock = false
+	recoverService := func(cause error) error {
+		recovered, recoveryErr := recoverStoppedService(p, control, healthTimeout, client)
+		releaseLock = recovered
+		return errors.Join(cause, recoveryErr, restore())
+	}
 	if p.Service != "" {
 		if err := control.Stop(ctx); err != nil {
-			return errors.Join(err, restore())
+			return recoverService(err)
 		}
 	}
 	if err := waitProcess(ctx, p.ParentPID); err != nil {
+		if p.Service != "" {
+			return recoverService(err)
+		}
 		return errors.Join(err, restore())
 	}
-	completed, err := execute(ctx, p, control, 30*time.Second, &http.Client{Timeout: 2 * time.Second})
+	completed, err := execute(ctx, p, control, healthTimeout, client)
 	releaseLock = completed
-	if completed {
-		err = errors.Join(err, completeAttempt(path, p))
-	}
 	return err
 }
 
@@ -230,41 +250,48 @@ func execute(ctx context.Context, p Plan, control processControl, healthTimeout 
 		}
 		result = errors.Join(result, err)
 	}()
+	abort := func(cause error) (bool, error) {
+		recoveryCtx, cancel := context.WithTimeout(context.Background(), workerRecoveryTimeout)
+		defer cancel()
+		recovered, err := restartPrevious(recoveryCtx, p, control, healthTimeout, client)
+		return recovered, errors.Join(cause, err)
+	}
 	// Refresh the online preparation snapshot after shutdown so accepted writes
 	// between preparation and shutdown survive rollback. This opens no migrations.
 	if err := os.Remove(p.Snapshot); err != nil {
-		return false, errors.Join(err, control.Start())
+		return abort(err)
 	}
 	db, err := openDatabase(p.Database)
 	if err != nil {
-		return false, errors.Join(err, control.Start())
+		return abort(err)
 	}
 	_, err = db.ExecContext(ctx, `VACUUM INTO ?`, p.Snapshot)
 	err = errors.Join(err, db.Close())
 	if err != nil {
-		return false, errors.Join(err, control.Start())
+		return abort(err)
 	}
 	backup, replacement := p.Executable+".previous", p.Executable+".next"
 	if err := copyFile(p.Next, replacement, 0755); err != nil {
-		return false, errors.Join(err, control.Start())
+		return abort(err)
 	}
 	defer func() { _ = os.Remove(replacement) }()
 	if err := os.Rename(p.Executable, backup); err != nil {
-		return false, errors.Join(err, control.Start())
+		return abort(err)
 	}
 	if err := os.Rename(replacement, p.Executable); err != nil {
-		return false, errors.Join(err, os.Rename(backup, p.Executable), control.Start())
+		if restoreErr := os.Rename(backup, p.Executable); restoreErr != nil {
+			return false, errors.Join(err, restoreErr)
+		}
+		return abort(err)
 	}
 	failure := control.Start()
 	if failure == nil {
 		failure = waitHealth(ctx, client, p.HealthURL, p.Expected, p.PreviousInstance, healthTimeout)
 	}
 	if failure == nil {
-		if err := record(ctx, p.Database, p.Expected, nil, time.Now()); err != nil {
-			return false, err
-		}
+		recordErr := record(ctx, p.Database, p.Expected, nil, time.Now())
 		_ = os.Remove(backup)
-		return true, nil
+		return true, recordErr
 	}
 	// Never restore a database while the failed process can still hold or write it.
 	ctx, cancel := context.WithTimeout(context.Background(), workerRecoveryTimeout)
@@ -294,6 +321,35 @@ func execute(ctx context.Context, p Plan, control processControl, healthTimeout 
 	}
 	healthErr := waitHealth(ctx, client, p.HealthURL, p.Previous, p.PreviousInstance, healthTimeout)
 	return recordErr == nil && healthErr == nil, errors.Join(failure, recordErr, healthErr)
+}
+
+func recoverStoppedService(p Plan, control processControl, healthTimeout time.Duration, client *http.Client) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), workerRecoveryTimeout)
+	defer cancel()
+	service, ok := control.(interface {
+		Stopped(context.Context) (bool, error)
+	})
+	if !ok {
+		return false, errors.New("cannot confirm service stopped")
+	}
+	stopped, err := service.Stopped(ctx)
+	if err != nil || !stopped {
+		return false, errors.Join(errors.New("cannot confirm service stopped"), err)
+	}
+	if p.ParentPID > 0 {
+		if err := waitProcess(ctx, p.ParentPID); err != nil {
+			return false, err
+		}
+	}
+	return restartPrevious(ctx, p, control, healthTimeout, client)
+}
+
+func restartPrevious(ctx context.Context, p Plan, control processControl, healthTimeout time.Duration, client *http.Client) (bool, error) {
+	if err := control.Start(); err != nil {
+		return false, err
+	}
+	err := waitHealth(ctx, client, p.HealthURL, p.Previous, p.PreviousInstance, healthTimeout)
+	return err == nil, err
 }
 
 func waitHealth(ctx context.Context, client *http.Client, url string, expected Identity, previous string, timeout time.Duration) error {

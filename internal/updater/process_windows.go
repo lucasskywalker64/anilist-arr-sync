@@ -120,6 +120,10 @@ func (p *serviceProcess) Restore() error {
 	return errors.Join(err, p.service.SetRecoveryActionsOnNonCrashFailures(p.nonCrash))
 }
 func (p *serviceProcess) Start() error { return p.service.Start() }
+func (p *serviceProcess) Stopped(context.Context) (bool, error) {
+	status, err := p.service.Query()
+	return err == nil && status.State == svc.Stopped, err
+}
 func (p *serviceProcess) Stop(ctx context.Context) error {
 	status, err := p.service.Query()
 	if err != nil {

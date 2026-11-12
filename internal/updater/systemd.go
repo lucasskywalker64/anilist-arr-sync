@@ -66,6 +66,16 @@ func (p *systemdProcess) control(ctx context.Context, action string) error {
 	return nil
 }
 func (p *systemdProcess) Stop(ctx context.Context) error { return p.control(ctx, "stop") }
+func (p *systemdProcess) Stopped(ctx context.Context) (bool, error) {
+	var args []string
+	if p.plan.UserService {
+		args = append(args, "--user")
+	}
+	args = append(args, "show", "--property=ActiveState", "--value", "--", p.plan.Service)
+	b, err := exec.CommandContext(ctx, "systemctl", args...).Output()
+	state := strings.TrimSpace(string(b))
+	return err == nil && (state == "inactive" || state == "failed"), err
+}
 func (p *systemdProcess) Start() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

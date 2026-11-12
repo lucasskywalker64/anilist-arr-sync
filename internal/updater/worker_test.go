@@ -134,6 +134,153 @@ func TestRollbackRestartsWhenHistoryCannotBeRecorded(t *testing.T) {
 	}
 }
 
+func TestHealthyCandidateCompletesWhenSuccessHistoryFails(t *testing.T) {
+	p := fixturePlan(t)
+	db, err := storage.Open(p.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Writer().Exec(`CREATE TRIGGER reject_success_history BEFORE INSERT ON update_history BEGIN SELECT RAISE(FAIL,'fixture success history unavailable'); END`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f := &fixtureControl{plan: p}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": f.health.Version, "commit": f.health.Commit, "instanceId": f.instance})
+	}))
+	defer srv.Close()
+	p.HealthURL = srv.URL
+	completed, err := execute(context.Background(), p, f, 150*time.Millisecond, srv.Client())
+	if f.db != nil {
+		defer func() { _ = f.db.Close() }()
+	}
+	if err == nil || !strings.Contains(err.Error(), "fixture success history unavailable") {
+		t.Fatalf("missing bookkeeping error: %v", err)
+	}
+	if !completed {
+		t.Fatal("healthy candidate left updates blocked after success-history failure")
+	}
+	if f.health != p.Expected {
+		t.Fatal("healthy candidate was rolled back")
+	}
+	b, err := os.ReadFile(p.Executable)
+	if err != nil || string(b) != "new" {
+		t.Fatal("healthy candidate executable was not retained")
+	}
+	if _, err := os.Stat(p.Executable + ".previous"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("completed update retained previous executable")
+	}
+}
+
+func TestSafePreReplacementFailureCompletesAfterRecovery(t *testing.T) {
+	for _, healthy := range []bool{true, false} {
+		t.Run(fmt.Sprintf("previous healthy=%v", healthy), func(t *testing.T) {
+			p := fixturePlan(t)
+			if err := os.Remove(p.Next); err != nil {
+				t.Fatal(err)
+			}
+			f := &fixtureControl{plan: p}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				status := "ok"
+				if !healthy {
+					status = "error"
+				}
+				_ = json.NewEncoder(w).Encode(map[string]string{"status": status, "version": f.health.Version, "commit": f.health.Commit, "instanceId": f.instance})
+			}))
+			defer srv.Close()
+			p.HealthURL = srv.URL
+			completed, err := execute(context.Background(), p, f, 150*time.Millisecond, srv.Client())
+			if err == nil {
+				t.Fatal("missing replacement file was accepted")
+			}
+			if completed != healthy || f.health != p.Previous {
+				t.Fatal("completion did not match verified health of the previous build")
+			}
+			if f.restores != 1 {
+				t.Fatal("service configuration was not restored")
+			}
+		})
+	}
+}
+
+type interruptedService struct {
+	*fixtureControl
+	stopped    bool
+	restoreErr error
+}
+
+func (f *interruptedService) Stop(context.Context) error {
+	return errors.New("fixture stop wait failed")
+}
+func (f *interruptedService) Stopped(context.Context) (bool, error) { return f.stopped, nil }
+func (f *interruptedService) Restore() error {
+	f.restores++
+	return f.restoreErr
+}
+
+func TestInterruptedServiceStopRecovery(t *testing.T) {
+	for _, test := range []struct {
+		name                               string
+		stopped, unhealthy, restoreFailure bool
+	}{
+		{name: "confirmed stopped", stopped: true},
+		{name: "still running"},
+		{name: "unhealthy restart", stopped: true, unhealthy: true},
+		{name: "configuration restore fails", stopped: true, restoreFailure: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p := fixturePlan(t)
+			p.Service = "fixture-service"
+			p.Lock = filepath.Join(p.Directory, "update.lock")
+			path := filepath.Join(p.Directory, "plan.json")
+			for _, file := range []string{p.Lock, path + ".go"} {
+				if err := os.WriteFile(file, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f := &interruptedService{fixtureControl: &fixtureControl{plan: p}, stopped: test.stopped}
+			if test.restoreFailure {
+				f.restoreErr = errors.New("fixture restore failed")
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				status := "ok"
+				if test.unhealthy {
+					status = "error"
+				}
+				_ = json.NewEncoder(w).Encode(map[string]string{"status": status, "version": f.health.Version, "commit": f.health.Commit, "instanceId": f.instance})
+			}))
+			defer srv.Close()
+			p.HealthURL = srv.URL
+			if err := runWorker(path, p, f, 100*time.Millisecond, srv.Client()); err == nil || !strings.Contains(err.Error(), "fixture stop wait failed") {
+				t.Fatalf("missing original stop failure: %v", err)
+			}
+			wantStarts := 0
+			if test.stopped {
+				wantStarts = 1
+			}
+			if f.starts != wantStarts || f.restores != 1 {
+				t.Fatalf("starts=%d, restores=%d", f.starts, f.restores)
+			}
+			safe := test.stopped && !test.unhealthy && !test.restoreFailure
+			_, lockErr := os.Stat(p.Lock)
+			if errors.Is(lockErr, os.ErrNotExist) != safe {
+				t.Fatalf("recovery lock removal does not match confirmed safe state: %v", lockErr)
+			}
+			if (completedWorker(p.Directory) > 0) != safe {
+				t.Fatal("completion proof does not match safe state")
+			}
+			if !safe {
+				if _, err := os.Stat(p.Snapshot); err != nil {
+					t.Fatal("unsafe recovery lost snapshot")
+				}
+			}
+		})
+	}
+}
+
 func fixturePlan(t *testing.T) Plan {
 	t.Helper()
 	dir := t.TempDir()
@@ -267,6 +414,9 @@ func TestMain(m *testing.M) {
 			}
 			os.Exit(0)
 		case "--update-worker":
+			if os.Getenv("ANILIST_ARR_SYNC_CANCELLATION_FIXTURE") == "unconfirmed" {
+				os.Exit(0)
+			}
 			if os.Getenv("ANILIST_ARR_SYNC_CANCELLATION_FIXTURE") == "1" {
 				path := os.Args[2]
 				_ = os.WriteFile(path+".ready", nil, 0600)
@@ -279,6 +429,7 @@ func TestMain(m *testing.M) {
 				time.Sleep(100 * time.Millisecond)
 				_ = os.WriteFile(path+".restored", nil, 0600)
 				_ = os.Remove(path + ".ready")
+				_ = os.WriteFile(filepath.Join(filepath.Dir(path), "completed"), []byte(strconv.Itoa(os.Getpid())), 0600)
 				os.Exit(0)
 			}
 			if err := RunWorker(os.Args[2]); err != nil {
@@ -342,11 +493,39 @@ func TestFailedHandoffWaitsForWorkerRestoration(t *testing.T) {
 	if err == nil {
 		t.Fatal("failed handoff was accepted")
 	}
+	if errors.Is(err, ErrWorkerActive) {
+		t.Fatal("confirmed restored worker left updates blocked")
+	}
 	if _, err := os.Stat(path + ".restored"); err != nil {
 		t.Fatal("handoff returned before worker restored its configuration")
 	}
 	if _, err := os.Stat(path + ".ready"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("worker was still active after cancellation")
+	}
+}
+
+func TestUnacknowledgedWorkerExitKeepsRecovery(t *testing.T) {
+	t.Setenv("ANILIST_ARR_SYNC_CANCELLATION_FIXTURE", "unconfirmed")
+	f := newFixture(t, newBuild, "linux", "amd64", []byte("new"))
+	e := fixtureEngine(t, f, "linux", "amd64")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Launch = func(ctx context.Context, path string) error {
+		_, err := SpawnWorker(ctx, path, self)
+		return err
+	}
+	if err := e.Apply(context.Background()); !errors.Is(err, ErrWorkerActive) {
+		t.Fatalf("unacknowledged exit lost its recovery block: %v", err)
+	}
+	status, err := e.Status(context.Background())
+	if err != nil || status.CanUpdate {
+		t.Fatal("unacknowledged worker exit allowed another update")
+	}
+	entries, err := os.ReadDir(e.Staging)
+	if err != nil || len(entries) == 0 {
+		t.Fatal("unacknowledged worker exit discarded recovery data")
 	}
 }
 

@@ -77,11 +77,19 @@ func TestSettingsCannotRaceCommittedUpdate(t *testing.T) {
 		Platform: "windows", Arch: "amd64", Executable: filepath.Join(dir, "app.exe"), Staging: filepath.Join(dir, "staging"), Config: s.Config, Container: func(string) bool { return false },
 		Launch: func(context.Context, string) error { _ = s.Config(); close(entered); <-relinquish; return nil }}
 	s.SetUpdater(e)
+	settingsEntered := make(chan struct{})
+	handler := s.Handler()
+	observedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && r.URL.Path == "/api/v1/config" {
+			close(settingsEntered)
+		}
+		handler.ServeHTTP(w, r)
+	})
 	request := func(method, path, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		req.Header.Set("X-Api-Key", cfg.APIKey)
 		rec := httptest.NewRecorder()
-		s.Handler().ServeHTTP(rec, req)
+		observedHandler.ServeHTTP(rec, req)
 		return rec
 	}
 	applied := make(chan *httptest.ResponseRecorder, 1)
@@ -93,6 +101,11 @@ func TestSettingsCannotRaceCommittedUpdate(t *testing.T) {
 	}
 	saved := make(chan *httptest.ResponseRecorder, 1)
 	go func() { saved <- request("PUT", "/api/v1/config", `{"port":8181}`) }()
+	select {
+	case <-settingsEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("configuration request did not enter the handler")
+	}
 	select {
 	case rec := <-saved:
 		t.Fatalf("settings changed during handoff: %d", rec.Code)

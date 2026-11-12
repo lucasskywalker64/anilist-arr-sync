@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -14,6 +15,52 @@ import (
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
+
+func TestSafeWorkerExitDoesNotBlockRetries(t *testing.T) {
+	f := newFixture(t, newBuild, "windows", "amd64", []byte("new"))
+	e := fixtureEngine(t, f, "windows", "amd64")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Launch = func(ctx context.Context, path string) error {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var p Plan
+		if err := json.Unmarshal(b, &p); err != nil {
+			return err
+		}
+		p.Service = "AniListArrSync-NonexistentFixtureService"
+		b, err = json.Marshal(p)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, b, 0600); err != nil {
+			return err
+		}
+		_, err = SpawnWorker(ctx, path, self)
+		return err
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		err := e.Apply(context.Background())
+		if err == nil {
+			t.Fatal("missing service update was accepted")
+		}
+		if errors.Is(err, ErrWorkerActive) {
+			t.Fatal("confirmed safe pre-readiness exit blocked future updates")
+		}
+		status, err := e.Status(context.Background())
+		if err != nil || !status.CanUpdate {
+			t.Fatal("safe aborted attempt left a recovery lock")
+		}
+		entries, err := os.ReadDir(e.Staging)
+		if err != nil || len(entries) != 0 {
+			t.Fatal("safe aborted attempt accumulated staging data")
+		}
+	}
+}
 
 type fixtureService struct {
 	control        *fixtureControl
@@ -25,6 +72,16 @@ type fixtureService struct {
 	stops          int
 	pending        bool
 	pendingQueries int
+}
+
+func TestWindowsServiceStoppedState(t *testing.T) {
+	for _, state := range []svc.State{svc.Stopped, svc.Running, svc.StopPending, svc.StartPending} {
+		p := &serviceProcess{service: &fixtureService{state: state}}
+		stopped, err := p.Stopped(context.Background())
+		if err != nil || stopped != (state == svc.Stopped) {
+			t.Fatalf("stopped state %v: %v, %v", state, stopped, err)
+		}
+	}
 }
 
 func (s *fixtureService) RecoveryActions() ([]mgr.RecoveryAction, error)   { return s.actions, nil }
