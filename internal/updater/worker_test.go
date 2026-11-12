@@ -414,6 +414,21 @@ func TestMain(m *testing.M) {
 			}
 			os.Exit(0)
 		case "--update-worker":
+			if os.Getenv("ANILIST_ARR_SYNC_CANCELLATION_FIXTURE") == "exit-after-ready" {
+				path := os.Args[2]
+				if os.WriteFile(path+".ready", nil, 0600) != nil {
+					os.Exit(2)
+				}
+				deadline := time.Now().Add(5 * time.Second)
+				for time.Now().Before(deadline) {
+					if _, err := os.Stat(path + ".go"); err == nil {
+						// Simulate abrupt termination: skip RunWorker's deferred cleanup.
+						os.Exit(1)
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				os.Exit(2)
+			}
 			if os.Getenv("ANILIST_ARR_SYNC_CANCELLATION_FIXTURE") == "unconfirmed" {
 				os.Exit(0)
 			}
@@ -526,6 +541,99 @@ func TestUnacknowledgedWorkerExitKeepsRecovery(t *testing.T) {
 	entries, err := os.ReadDir(e.Staging)
 	if err != nil || len(entries) == 0 {
 		t.Fatal("unacknowledged worker exit discarded recovery data")
+	}
+}
+
+func TestCancellationDuringAcknowledgementWaitsForRestoration(t *testing.T) {
+	t.Setenv("ANILIST_ARR_SYNC_CANCELLATION_FIXTURE", "1")
+	path := filepath.Join(t.TempDir(), "plan.json")
+	if err := os.WriteFile(path, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() {
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			if _, err := os.Stat(path + ".go"); err == nil {
+				cancel()
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+	_, err = SpawnWorker(ctx, path, self)
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrWorkerActive) {
+		t.Fatalf("unacknowledged handoff was not safely cancelled: %v", err)
+	}
+	if _, err := os.Stat(path + ".restored"); err != nil {
+		t.Fatal("cancellation returned before worker restoration")
+	}
+}
+
+func TestAcknowledgementWriteFailureLeavesPreviousBuildRunning(t *testing.T) {
+	p := fixturePlan(t)
+	p.Lock = filepath.Join(p.Directory, "update.lock")
+	path := filepath.Join(p.Directory, "plan.json")
+	for _, file := range []string{p.Lock, path + ".go"} {
+		if err := os.WriteFile(file, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(path+".accepted", 0700); err != nil {
+		t.Fatal(err)
+	}
+	f := &fixtureControl{plan: p}
+	if err := runWorker(path, p, f, time.Second, http.DefaultClient); err == nil {
+		t.Fatal("failed acknowledgement was accepted")
+	}
+	if f.restores != 1 || f.starts != 0 || f.stops != 0 {
+		t.Fatal("acknowledgement failure did not restore configuration before stopping the previous build")
+	}
+	if _, err := os.Stat(p.Lock); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("safe acknowledgement failure retained the recovery lock")
+	}
+}
+
+func TestWorkerExitAfterReadinessDoesNotRequestShutdown(t *testing.T) {
+	t.Setenv("ANILIST_ARR_SYNC_CANCELLATION_FIXTURE", "exit-after-ready")
+	f := newFixture(t, newBuild, "linux", "amd64", []byte("new"))
+	e := fixtureEngine(t, f, "linux", "amd64")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdown := false
+	var attempt string
+	e.Launch = func(ctx context.Context, path string) error {
+		attempt = filepath.Dir(path)
+		managed, err := SpawnWorker(ctx, path, self)
+		if err == nil && !managed {
+			shutdown = true
+		}
+		return err
+	}
+	if err := e.Apply(context.Background()); !errors.Is(err, ErrWorkerActive) {
+		t.Fatalf("worker exit after readiness accepted a handoff: %v", err)
+	}
+	if shutdown {
+		t.Fatal("original application was asked to shut down without a worker")
+	}
+	status, err := e.Status(context.Background())
+	if err != nil || status.CanUpdate {
+		t.Fatal("unconfirmed recovery allowed another update")
+	}
+	if _, err := os.Stat(filepath.Join(attempt, "before.db")); err != nil {
+		t.Fatal("unconfirmed recovery discarded the database snapshot")
 	}
 }
 

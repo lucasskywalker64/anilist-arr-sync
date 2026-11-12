@@ -141,19 +141,32 @@ func SpawnWorker(ctx context.Context, path, exe string) (bool, error) {
 	defer cancel()
 	tick := time.NewTicker(25 * time.Millisecond)
 	defer tick.Stop()
+	handoffRequested := false
 	for {
-		if _, err := os.Stat(path + ".ready"); err == nil {
-			if err := ctx.Err(); err != nil {
-				return cancelWorker(err)
+		if !handoffRequested {
+			if _, err := os.Stat(path + ".ready"); err == nil {
+				if err := ctx.Err(); err != nil {
+					return cancelWorker(err)
+				}
+				if err := os.WriteFile(path+".go", nil, 0600); err != nil {
+					return cancelWorker(err)
+				}
+				handoffRequested = true
 			}
-			if err := os.WriteFile(path+".go", nil, 0600); err != nil {
-				return cancelWorker(err)
+		}
+		if handoffRequested {
+			if _, err := os.Stat(path + ".accepted"); err == nil {
+				select {
+				case err := <-done:
+					return exited(fmt.Errorf("update worker exited during handoff: %v", err))
+				default:
+					return plan.Service != "", nil
+				}
 			}
-			return plan.Service != "", nil
 		}
 		select {
 		case err := <-done:
-			return exited(fmt.Errorf("update worker exited before readiness: %v", err))
+			return exited(fmt.Errorf("update worker exited during handoff: %v", err))
 		case <-ctx.Done():
 			// The worker owns recovery configuration. Ask it to exit cleanly rather
 			// than killing it while the service's recovery actions are disabled.
@@ -204,7 +217,7 @@ func runWorker(path string, p Plan, control processControl, healthTimeout time.D
 	if err := os.WriteFile(path+".ready", nil, 0600); err != nil {
 		return errors.Join(err, restore())
 	}
-	// The parent commits the handoff only after SpawnWorker returns successfully.
+	// Wait for the parent's handoff request, then acknowledge it before shutdown.
 	for {
 		if _, err := os.Stat(path + ".cancel"); err == nil {
 			return restore()
@@ -219,6 +232,10 @@ func runWorker(path string, p Plan, control processControl, healthTimeout time.D
 		}
 	}
 	defer func() { _ = os.Remove(path + ".go") }()
+	if err := os.WriteFile(path+".accepted", nil, 0600); err != nil {
+		return errors.Join(err, restore())
+	}
+	defer func() { _ = os.Remove(path + ".accepted") }()
 	releaseLock = false
 	recoverService := func(cause error) error {
 		recovered, recoveryErr := recoverStoppedService(p, control, healthTimeout, client)
