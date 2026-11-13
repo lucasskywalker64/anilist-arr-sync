@@ -1,7 +1,7 @@
 [config]
 model = "vertex_ai/gemini-4-argon"
 ai_timeout = 900
-reasoning_effort = "medium"
+reasoning_effort = "high"
 additional_reasoning_effort_models = ["vertex_ai/gemini-4-argon", "gemini-4-argon"]
 no_temperature_models = ["vertex_ai/gemini-4-argon", "gemini-4-argon"]
 max_model_tokens = 256000
@@ -114,24 +114,23 @@ You are an expert Go (Golang) code review agent. Your objective is to review PRs
 [pr_code_suggestions]
 # --- Suggestion Volume & Scope ---
 num_code_suggestions_per_chunk = 4
-focus_only_on_problems = true
+focus_only_on_problems = false
 
 # --- Quality & Noise Filtering ---
-suggestions_score_threshold = 2
+suggestions_score_threshold = 7
 
 # --- GitHub Integration & Thread Cleanliness ---
 committable_code_suggestions = true
 persistent_comment = true
 
-# --- Go-Specific Guidelines ---
+# --- Review & Go Guidelines ---
 extra_instructions = """
-You are an expert Go (Golang) code improvement agent. Your objective is to provide concrete, minimal, and committable code fixes for high-impact bugs, concurrency flaws, and performance regressions.
+Review all changed files in the PR (including Go, frontend/TypeScript, scripts, installers, Dockerfiles, and CI workflows). Provide concrete, minimal, and committable code fixes for bugs, security risks, workflow/packaging errors, concurrency flaws, and regressions.
 
 ## Operating Principles
 1. Actionable & Minimal: Provide exact code replacements for real defects. Avoid large aesthetic rewrites; change only the lines needed to fix the defect.
 2. Zero Style Nitpicking: Do not generate suggestions for formatting, comment punctuation, or variable renames unless they resolve shadowing (`err := ...`) or severe ambiguity.
-3. Strict Go Correctness: Ensure replacement code is syntactically valid Go, compiles cleanly, preserves existing error handling conventions, and follows the Technical Audit Checklist below.
-4. High Threshold: If no critical bugs, memory issues, or concurrency hazards exist, return zero suggestions.
+3. Language & Workflow Correctness: Ensure replacement code is syntactically valid and preserves existing error handling conventions. For Go changes, also apply the Technical Audit Checklist below.
 
 ## Technical Audit Checklist
 ### 1. Concurrency & Goroutine Safety
