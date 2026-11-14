@@ -113,6 +113,7 @@ function Install([string]$Owner, [string]$Type = 'service', [string]$Package = $
 }
 
 function InvokeInstallerProcess([string]$File, [string[]]$Arguments, [int]$TimeoutMilliseconds = 120000) {
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
     $log = Join-Path $root ('installer-' + [Guid]::NewGuid().ToString('N') + '.log')
     Write-Host "[$stage] Starting $([IO.Path]::GetFileName($File))"
     $process = Start-Process -FilePath $File -ArgumentList ($Arguments + "/LOG=`"$log`"") -PassThru -WindowStyle Hidden
