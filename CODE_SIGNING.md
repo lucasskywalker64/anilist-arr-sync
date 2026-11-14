@@ -76,11 +76,10 @@ authorize itself or replace a previously trusted key.
 Download the chosen asset together with `checksums.txt` and
 `checksums.txt.minisig` from the same release. With
 [Minisign](https://jedisct1.github.io/minisign/) installed, verify the checksum
-signature first. Replace `TRUSTED_PUBLIC_KEY_LINE` with the independently trusted
-base64 public-key line:
+signature first.
 
 ```sh
-minisign -Vm checksums.txt -P "TRUSTED_PUBLIC_KEY_LINE"
+minisign -Vm checksums.txt -P "RWS1QzwQ1pWbMS3yNehRL++h30MMVtymdWMKtlm3rrwiUBE3Q1KHS79K"
 ```
 
 Continue only after successful verification. Calculate the downloaded file's hash
