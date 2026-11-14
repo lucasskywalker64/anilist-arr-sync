@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from io import BytesIO
+from urllib.error import HTTPError
 
 
 class PublicationBoundary(unittest.TestCase):
@@ -38,6 +39,8 @@ class PublicationBoundary(unittest.TestCase):
                 def runner(args, **kwargs):
                     nonlocal failed
                     calls.append(args)
+                    if any('/releases/tags/nightly-stage-' in value for value in args):
+                        raise AssertionError('pending drafts are not available through the published-tag endpoint')
                     stage = None
                     if args[:3] == ['gh', 'release', 'create']: stage = 'upload'
                     if args[:3] == ['gh', 'release', 'download']: stage = 'download'
@@ -68,7 +71,7 @@ class PublicationBoundary(unittest.TestCase):
                     if args[:3] == ['gh', 'release', 'list']:
                         value = [{'tagName': 'nightly'}]
                     elif '--paginate' in args:
-                        value = [[previous.copy()]]
+                        value = [[previous.copy()], [replacement.copy()]]
                     elif any('/git/matching-refs/' in value for value in args):
                         value = [{'ref': 'refs/tags/' + name, 'object': {'sha': sha}} for name, sha in refs.items()]
                     else:
@@ -98,7 +101,10 @@ class PublicationBoundary(unittest.TestCase):
         calls = []
         def runner(args, **kwargs):
             calls.append(args)
-            value = [[]] if '--paginate' in args else [] if any('/git/matching-refs/' in value for value in args) else {'id': 42}
+            if any('/releases/tags/nightly-stage-' in value for value in args):
+                raise AssertionError('pending drafts are not published tags')
+            stage = next((call[3] for call in calls if call[:3] == ['gh', 'release', 'create']), None)
+            value = [[{'id': 42, 'tag_name': stage, 'draft': True}]] if '--paginate' in args else []
             return subprocess.CompletedProcess(args, 0, stdout=json.dumps(value))
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as temp:
             directory = Path(temp)
@@ -108,6 +114,21 @@ class PublicationBoundary(unittest.TestCase):
         publish = next(index for index, args in enumerate(calls) if 'draft=false' in args)
         self.assertLess(create, publish)
         self.assertFalse(any(args[:3] == ['gh', 'release', 'delete'] for args in calls))
+
+    def test_unexpected_draft_discovery_cannot_mutate_the_previous_nightly(self):
+        for matches, draft in [(0, True), (2, True), (1, False)]:
+            with self.subTest(matches=matches, draft=draft), tempfile.TemporaryDirectory(dir=Path(__file__).parent) as temp:
+                directory = Path(temp)
+                (directory / 'checksums.txt').write_text('0'*64 + '  release.json\n')
+                calls = []
+                def runner(args, **kwargs):
+                    calls.append(args)
+                    stage = next((call[3] for call in calls if call[:3] == ['gh', 'release', 'create']), None)
+                    value = [[{'id': 42, 'tag_name': stage, 'draft': draft}] * matches]
+                    return subprocess.CompletedProcess(args, 0, stdout=json.dumps(value))
+                with self.assertRaises(ValueError):
+                    self.module().publish_nightly(directory, 'fixture', 'a'*40, runner)
+                self.assertFalse(any('PATCH' in call or 'POST' in call or 'DELETE' in call for call in calls))
 
     def test_nightly_skip_uses_signed_manifest_commit(self):
         module = self.module()
@@ -134,6 +155,28 @@ class PublicationBoundary(unittest.TestCase):
             return {'object': {'type': 'commit', 'sha': 'a'*40}} if path.startswith('/git/') else release
         with patch.object(module, 'api', side_effect=api), patch.object(module, 'urlopen', side_effect=download), patch.object(module, 'run'):
             self.assertTrue(module.nightly_guard('a'*40), 'an unchanged commit cannot hide missing release assets')
+
+    def test_missing_nightly_metadata_is_rebuilt_without_trusting_it(self):
+        names = ['release.json', 'checksums.txt', 'checksums.txt.minisig']
+        for missing in names:
+            for failure in ['absent', 404, 403]:
+                with self.subTest(missing=missing, failure=failure):
+                    module = self.module()
+                    release = {'draft': False, 'prerelease': True, 'assets': [
+                        {'name': name, 'browser_download_url': 'https://github.com/' + module.REPOSITORY + '/releases/download/nightly/' + name}
+                        for name in names if failure != 'absent' or name != missing]}
+                    def download(url, **kwargs):
+                        if url.endswith('/' + missing):
+                            error = HTTPError(url, failure, 'fixture download failure', {}, BytesIO())
+                            self.addCleanup(error.close)
+                            raise error
+                        return BytesIO(b'fixture metadata')
+                    with patch.object(module, 'api', return_value=release), patch.object(module, 'urlopen', side_effect=download), patch.object(module, 'run') as verifier:
+                        if failure == 403:
+                            with self.assertRaises(HTTPError): module.nightly_guard('a'*40)
+                        else:
+                            self.assertTrue(module.nightly_guard('a'*40))
+                        verifier.assert_not_called()
 
     def test_nightly_guard_verifies_final_bytes_and_fails_closed_on_bad_metadata(self):
         version = 'v0.1.0-nightly.20261112010101.' + 'a'*40

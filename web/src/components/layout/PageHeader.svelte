@@ -118,6 +118,30 @@
     border-color: rgba(255, 255, 255, 0.4);
   }
 
+  @media (max-width: 700px) {
+    .header {
+      height: auto;
+      min-height: var(--headerHeight);
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 10px 12px;
+    }
+
+    .logoContainer {
+      flex: 1 1 100%;
+      min-width: 0;
+      padding-left: 0;
+    }
+
+    .right {
+      min-width: 0;
+      flex-wrap: wrap;
+      justify-content: flex-start;
+      padding-right: 0;
+      gap: 10px;
+    }
+  }
+
   :global(.spinning) {
     animation: spin 1.5s linear infinite;
   }

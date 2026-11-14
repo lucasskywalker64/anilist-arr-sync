@@ -1,6 +1,9 @@
 param([Parameter(Mandatory)][string]$Binary, [string]$TargetOS, [ValidateSet('amd64', 'arm64')][string]$Arch)
 $ErrorActionPreference = 'Stop'
 if ($TargetOS -ne 'windows') { exit 0 }
+if ($env:RELEASE_MODE -eq 'production' -and $env:PROCESSOR_ARCHITECTURE -ne 'ARM64') {
+    throw 'Production requires the Windows ARM64 runner to execute both installer architectures'
+}
 $Binary = (Resolve-Path -LiteralPath $Binary).Path
 if ($env:RELEASE_MODE -eq 'production') {
     node packaging/signpath.mjs $Binary
@@ -23,9 +26,6 @@ if ($env:RELEASE_MODE -eq 'production') {
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed: $Arch" }
 $installer = Join-Path $output "anilist-arr-sync_$($env:RELEASE_VERSION)_windows_$($Arch)_setup.exe"
 if ($env:RELEASE_MODE -eq 'production') { & "$PSScriptRoot/verify-authenticode.ps1" -Path $installer }
-if ($env:RELEASE_MODE -eq 'production' -and $env:PROCESSOR_ARCHITECTURE -ne 'ARM64') {
-    throw 'Production requires the Windows ARM64 runner to execute both installer architectures'
-}
 if ($env:RELEASE_INSTALL_TEST -eq '1') {
     if ($Arch -ne 'arm64' -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
         $lifecycle = @{ Installer = $installer; Arch = $Arch }

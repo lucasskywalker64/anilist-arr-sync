@@ -43,6 +43,11 @@ jobs:
         run: ./packaging/test-installer-process.ps1
       - name: Build and verify disposable-key snapshot
         run: go test -v ./cmd/release -run '^TestSnapshot$' -count=1 -timeout=30m
+      - name: Verify native Chocolatey installer selection without installation
+        shell: pwsh
+        run: |
+          $arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'amd64' }
+          ./packaging/test-chocolatey.ps1 -ExpectedArchitecture $arch
       - name: Verify publication failure paths
         run: python -m unittest discover -s packaging -p '*_test.py'
       - name: Verify production action command boundaries

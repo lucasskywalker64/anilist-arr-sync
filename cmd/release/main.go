@@ -284,7 +284,7 @@ func run(args []string) error {
 		if _, err := os.Stat("web/dist/index.html"); err != nil {
 			return errors.New("build the frontend before release compilation")
 		}
-		if os.Getenv("RELEASE_MODE") != "fixture" && os.Getenv("RELEASE_SNAPSHOT_TEST") != "1" {
+		if os.Getenv("RELEASE_MODE") != "fixture" {
 			head, err := exec.Command("git", "rev-parse", "HEAD").Output()
 			if err != nil || strings.TrimSpace(string(head)) != id.Commit {
 				return errors.New("release source commit does not match the embedded identity")

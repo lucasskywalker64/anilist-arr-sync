@@ -25,6 +25,9 @@ func TestReleaseSourcesMustMatchCleanCommit(t *testing.T) {
 	if err := os.WriteFile("web/dist/index.html", []byte("fixture frontend"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(".gitignore", []byte("/.release/\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	git := func(args ...string) string {
 		t.Helper()
 		args = append([]string{"-c", "commit.gpgsign=false", "-c", "core.hooksPath=" + filepath.Join(dir, "no-hooks"), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"}, args...)
@@ -35,7 +38,7 @@ func TestReleaseSourcesMustMatchCleanCommit(t *testing.T) {
 		return strings.TrimSpace(string(out))
 	}
 	git("init", "--quiet")
-	git("add", "web")
+	git("add", "web", ".gitignore")
 	git("commit", "--quiet", "-m", "fixture source")
 	head := git("rev-parse", "HEAD")
 	public, _, err := minisign.GenerateKey(rand.Reader)
@@ -43,24 +46,40 @@ func TestReleaseSourcesMustMatchCleanCommit(t *testing.T) {
 		t.Fatal("fixture key generation failed")
 	}
 	t.Setenv("MINISIGN_PUBLIC_KEY", public.String())
-	t.Setenv("RELEASE_MODE", "bootstrap")
-	t.Setenv("RELEASE_VERSION", "v1.2.3-bootstrap.1")
-	t.Setenv("RELEASE_COMMIT", head)
-	t.Setenv("RELEASE_SNAPSHOT_TEST", "")
-	if err := os.WriteFile("web/dist/index.html", []byte("uncommitted change"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := run([]string{"prepare"}); err == nil || !strings.Contains(err.Error(), "clean commit") {
-		t.Fatal("release accepted sources that differ from the public commit")
-	}
-	git("checkout", "--", "web/dist/index.html")
-	t.Setenv("RELEASE_COMMIT", strings.Repeat("a", 40))
-	if err := run([]string{"prepare"}); err == nil || !strings.Contains(err.Error(), "source commit") {
-		t.Fatal("release accepted an incorrect source identity")
-	}
-	t.Setenv("RELEASE_COMMIT", head)
-	if err := run([]string{"prepare"}); err != nil {
-		t.Fatal(err)
+	for _, mode := range []string{"production", "nightly", "bootstrap"} {
+		for _, snapshot := range []string{"", "1"} {
+			t.Run(mode+"/snapshot="+snapshot, func(t *testing.T) {
+				t.Setenv("RELEASE_MODE", mode)
+				t.Setenv("RELEASE_SNAPSHOT_TEST", snapshot)
+				setIdentity := func(commit string) {
+					version := "v1.2.3"
+					switch mode {
+					case "nightly":
+						version += "-nightly.20261112010101." + commit
+					case "bootstrap":
+						version += "-bootstrap.1"
+					}
+					t.Setenv("RELEASE_VERSION", version)
+					t.Setenv("RELEASE_COMMIT", commit)
+				}
+				setIdentity(head)
+				if err := os.WriteFile("web/dist/index.html", []byte("uncommitted change"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := run([]string{"prepare"}); err == nil || !strings.Contains(err.Error(), "clean commit") {
+					t.Fatal("release accepted sources that differ from the public commit")
+				}
+				git("checkout", "--", "web/dist/index.html")
+				setIdentity(strings.Repeat("a", 40))
+				if err := run([]string{"prepare"}); err == nil || !strings.Contains(err.Error(), "source commit") {
+					t.Fatal("release accepted an incorrect source identity")
+				}
+				setIdentity(head)
+				if err := run([]string{"prepare"}); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
 	}
 }
 

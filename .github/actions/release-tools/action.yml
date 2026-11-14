@@ -55,6 +55,7 @@ runs:
         gh release download is-7_1_1 --repo jrsoftware/issrc --pattern innosetup-7.1.1-x64.exe --dir .release-tools
         if ($LASTEXITCODE -ne 0) { throw 'Cannot download Inno Setup' }
         $file = (Resolve-Path .release-tools/innosetup-7.1.1-x64.exe).Path
+        if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne '8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0') { throw 'Unexpected Inno Setup download' }
         if ((Get-AuthenticodeSignature -LiteralPath $file).Status -ne 'Valid') { throw 'Untrusted Inno Setup download' }
         $tool = Start-Process -FilePath $file -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOICONS' -PassThru -Wait -WindowStyle Hidden
         if ($tool.ExitCode -ne 0) { throw 'Inno Setup installation failed' }

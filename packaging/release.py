@@ -47,6 +47,9 @@ def nightly_guard(commit):
     assets = {item['name']: item['browser_download_url'] for item in release['assets']}
     if len(assets) != len(release['assets']):
         raise ValueError('Duplicate nightly assets')
+    metadata = {'release.json', 'checksums.txt', 'checksums.txt.minisig'}
+    if not metadata <= assets.keys():
+        return True
     Path('.release').mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(dir='.release') as temp:
         def download(name, limit):
@@ -58,8 +61,13 @@ def nightly_guard(commit):
             if len(data) > limit:
                 raise ValueError('Nightly asset exceeds limit')
             Path(temp, name).write_bytes(data)
-        for name in ['release.json', 'checksums.txt', 'checksums.txt.minisig']:
-            download(name, 2 * 1024 * 1024)
+        for name in sorted(metadata):
+            try:
+                download(name, 2 * 1024 * 1024)
+            except HTTPError as error:
+                if error.code == 404:
+                    return True
+                raise
         run(['go', 'run', './cmd/release', 'verify-nightly', temp], stdout=subprocess.DEVNULL)
         manifest = json.loads(Path(temp, 'release.json').read_bytes())
         if changed(commit, manifest):
@@ -111,10 +119,13 @@ def publish_nightly(directory, version, commit, command=run):
     with tempfile.TemporaryDirectory(dir=directory.parent) as temp:
         command(['gh', 'release', 'download', stage, '--dir', temp])
         command(['go', 'run', './cmd/release', 'verify', temp])
-    staged = command(['gh', 'api', f'repos/{REPOSITORY}/releases/tags/{stage}'], capture_output=True)
-    release_id = json.loads(staged.stdout)['id']
     releases = command(['gh', 'api', '--paginate', '--slurp', f'repos/{REPOSITORY}/releases?per_page=100'], capture_output=True)
-    previous = next((item for page in json.loads(releases.stdout) for item in page if item['tag_name'] == 'nightly'), None)
+    releases = [item for page in json.loads(releases.stdout) for item in page]
+    staged = [item for item in releases if item['tag_name'] == stage]
+    if len(staged) != 1 or not staged[0]['draft']:
+        raise ValueError('Expected exactly one staged nightly draft')
+    release_id = staged[0]['id']
+    previous = next((item for item in releases if item['tag_name'] == 'nightly'), None)
     references = command(['gh', 'api', f'repos/{REPOSITORY}/git/matching-refs/tags/nightly'], capture_output=True)
     reference = next((item for item in json.loads(references.stdout) if item['ref'] == 'refs/tags/nightly'), None)
     if previous and (previous['draft'] or not previous['prerelease'] or reference is None):
