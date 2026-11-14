@@ -116,7 +116,15 @@ function InvokeInstallerProcess([string]$File, [string[]]$Arguments, [int]$Timeo
     New-Item -ItemType Directory -Path $root -Force | Out-Null
     $log = Join-Path $root ('installer-' + [Guid]::NewGuid().ToString('N') + '.log')
     Write-Host "[$stage] Starting $([IO.Path]::GetFileName($File))"
-    $process = Start-Process -FilePath $File -ArgumentList ($Arguments + "/LOG=`"$log`"") -PassThru -WindowStyle Hidden
+    # Inno's launcher can exit while its temporary uninstaller is still running.
+    # Keep PowerShell's process-tree wait inside a bounded supervisor process.
+    $start = [Diagnostics.ProcessStartInfo]::new((Join-Path $PSHOME 'pwsh.exe'))
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.Environment['ANILIST_FIXTURE_INSTALLER_PATH'] = $File
+    $start.Environment['ANILIST_FIXTURE_INSTALLER_ARGS'] = ConvertTo-Json -InputObject @($Arguments + "/LOG=`"$log`"") -Compress
+    foreach ($argument in @('-NoProfile', '-NonInteractive', '-Command', '$ErrorActionPreference = ''Stop''; $parameters = ConvertFrom-Json -InputObject $env:ANILIST_FIXTURE_INSTALLER_ARGS; $installer = Start-Process -FilePath $env:ANILIST_FIXTURE_INSTALLER_PATH -ArgumentList $parameters -PassThru -Wait -WindowStyle Hidden; exit $installer.ExitCode')) { $start.ArgumentList.Add($argument) }
+    $process = [Diagnostics.Process]::Start($start)
     try {
         if (!$process.WaitForExit($TimeoutMilliseconds)) {
             $process.Kill($true)
