@@ -1,0 +1,76 @@
+name: Release tools and embedded frontend
+description: Install pinned OSS packaging tools, then build the embedded frontend
+runs:
+  using: composite
+  steps:
+    - name: Complete hosted ARM64 desktop setup
+      if: runner.environment == 'github-hosted' && runner.os == 'Windows' && runner.arch == 'ARM64'
+      shell: pwsh
+      run: |
+        # windows-11-arm can leave first-logon privacy setup blocking Explorer.
+        # https://github.com/actions/runner-images/issues/14069
+        $policy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE'
+        New-Item -Path $policy -Force | Out-Null
+        New-ItemProperty -Path $policy -Name DisablePrivacyExperience -Value 1 -PropertyType DWord -Force | Out-Null
+        $session = [Diagnostics.Process]::GetCurrentProcess().SessionId
+        $setup = Get-Process WWAHost -ErrorAction SilentlyContinue | Where-Object SessionId -eq $session
+        Write-Host "Completing desktop setup in session $session ($(@($setup).Count) privacy setup processes)"
+        $setup | Stop-Process -Force
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+        cache: npm
+        cache-dependency-path: web/package-lock.json
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+    - name: Build and typecheck embedded UI
+      shell: pwsh
+      working-directory: web
+      run: |
+        npm ci
+        if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
+        npm run check
+        if ($LASTEXITCODE -ne 0) { throw 'Frontend typecheck failed' }
+        npm run build
+        if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed' }
+    - name: Check audited runtime licenses and notices
+      shell: pwsh
+      run: |
+        python packaging/licenses.py --check
+        if ($LASTEXITCODE -ne 0) { throw 'License notices require an audit and refresh' }
+    - uses: goreleaser/goreleaser-action@v6
+      with:
+        distribution: goreleaser
+        version: v2.20.2
+        install-only: true
+    - name: Install Inno Setup 7.1.1
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh release download is-7_1_1 --repo jrsoftware/issrc --pattern innosetup-7.1.1-x64.exe --dir .release-tools
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot download Inno Setup' }
+        $file = (Resolve-Path .release-tools/innosetup-7.1.1-x64.exe).Path
+        if ((Get-AuthenticodeSignature -LiteralPath $file).Status -ne 'Valid') { throw 'Untrusted Inno Setup download' }
+        $tool = Start-Process -FilePath $file -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOICONS' -PassThru -Wait -WindowStyle Hidden
+        if ($tool.ExitCode -ne 0) { throw 'Inno Setup installation failed' }
+        "${env:ProgramFiles}\Inno Setup 7" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+    - name: Install signing bridge dependencies
+      if: env.RELEASE_MODE == 'production'
+      working-directory: packaging
+      shell: pwsh
+      run: |
+        npm ci --ignore-scripts --no-audit --no-fund
+        if ($LASTEXITCODE -ne 0) { throw 'Signing bridge installation failed' }
+    - name: Install pinned official SignPath connector
+      if: env.RELEASE_MODE == 'production'
+      uses: actions/checkout@v4
+      with:
+        repository: SignPath/github-action-submit-signing-request
+        ref: f6d04783b4569d051e0c80105fe66e82819d0092 # v3
+        path: .release-tools/signpath
+        persist-credentials: false

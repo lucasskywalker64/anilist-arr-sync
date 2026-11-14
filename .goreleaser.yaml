@@ -1,0 +1,105 @@
+version: 2
+project_name: anilist-arr-sync
+
+# One OSS pass. Post-build hooks finish Windows signing/packaging before archives
+# and checksums. External assets live outside dist, which --clean removes.
+before:
+  hooks:
+    - go run ./cmd/release prepare
+    - pwsh -NoProfile -File packaging/resources.ps1
+
+builds:
+  - id: app
+    main: ./cmd/anilist-arr-sync
+    binary: anilist-arr-sync
+    env: [CGO_ENABLED=0]
+    goos: [linux, windows]
+    goarch: [arm64, amd64]
+    ldflags:
+      - >-
+        -s -w
+        -X main.version={{ .Env.RELEASE_VERSION }}
+        -X main.commit={{ .Env.RELEASE_COMMIT }}
+        -X main.date={{ .Date }}
+        -X main.updatePublicKey={{ .Env.MINISIGN_PUBLIC_KEY }}
+    hooks:
+      post:
+        - cmd: 'pwsh -NoProfile -File packaging/windows.ps1 -Binary "{{ .Path }}" -TargetOS {{ .Os }} -Arch {{ .Arch }}'
+
+archives:
+  - id: portable
+    ids: [app]
+    name_template: '{{ .ProjectName }}_{{ .Env.RELEASE_VERSION }}_{{ .Os }}_{{ .Arch }}'
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [none*]
+
+snapshot:
+  version_template: '{{ trimprefix .Env.RELEASE_VERSION "v" }}'
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+  extra_files:
+    - glob: .release/release.json
+    - glob: .release/*_setup.exe
+
+signs:
+  - cmd: go
+    args: [run, ./cmd/release, sign, '${artifact}']
+    signature: '${artifact}.minisig'
+    artifacts: checksum
+
+release:
+  github:
+    owner: lucasskywalker64
+    name: anilist-arr-sync
+  prerelease: auto
+  extra_files:
+    - glob: .release/release.json
+    - glob: .release/*_setup.exe
+
+scoops:
+  - name: anilist-arr-sync
+    ids: [portable]
+    url_template: 'https://github.com/lucasskywalker64/anilist-arr-sync/releases/download/{{ .Env.RELEASE_VERSION }}/{{ .ArtifactName }}'
+    homepage: https://github.com/lucasskywalker64/anilist-arr-sync
+    description: Synchronize AniList with Sonarr and Radarr
+    license: '{{ .Env.PACKAGE_LICENSE }}'
+    skip_upload: '{{ ne .Env.RELEASE_MODE "production" }}'
+    repository:
+      owner: '{{ if eq .Env.RELEASE_MODE "production" }}{{ .Env.SCOOP_BUCKET_OWNER }}{{ else }}lucasskywalker64{{ end }}'
+      name: '{{ if eq .Env.RELEASE_MODE "production" }}{{ .Env.SCOOP_BUCKET_NAME }}{{ else }}anilist-arr-sync{{ end }}'
+      token: '{{ .Env.SCOOP_BUCKET_TOKEN }}'
+    pre_install:
+      - '[IO.File]::WriteAllText((Join-Path $dir ''update-owner''), ''scoop'', [Text.UTF8Encoding]::new($false))'
+
+aurs:
+  - name: anilist-arr-sync-bin
+    ids: [portable]
+    homepage: https://github.com/lucasskywalker64/anilist-arr-sync
+    description: Synchronize AniList with Sonarr and Radarr
+    license: '{{ .Env.PACKAGE_LICENSE }}'
+    skip_upload: '{{ ne .Env.RELEASE_MODE "production" }}'
+    url_template: 'https://github.com/lucasskywalker64/anilist-arr-sync/releases/download/{{ .Env.RELEASE_VERSION }}/{{ .ArtifactName }}'
+    git_url: ssh://aur@aur.archlinux.org/anilist-arr-sync-bin.git
+    private_key: '{{ .Env.AUR_SSH_PRIVATE_KEY }}'
+    package: |-
+      install -Dm755 ./anilist-arr-sync "${pkgdir}/opt/anilist-arr-sync/anilist-arr-sync"
+      printf 'aur\n' > "${pkgdir}/opt/anilist-arr-sync/update-owner"
+      install -dm755 "${pkgdir}/usr/bin"
+      ln -s /opt/anilist-arr-sync/anilist-arr-sync "${pkgdir}/usr/bin/anilist-arr-sync"
+
+# Actions publishes containers on Linux after the signed release gate. This same
+# binary-only Dockerfile and target layout are usable by GoReleaser OSS.
+dockers_v2:
+  - ids: [app]
+    images:
+      - ghcr.io/lucasskywalker64/anilist-arr-sync
+      - '{{ .Env.DOCKERHUB_USERNAME }}/anilist-arr-sync'
+    tags: ['{{ .Env.RELEASE_VERSION }}', latest]
+    platforms: [linux/amd64, linux/arm64]
+    extra_files: [packaging/container-config]
+    disable: '{{ ne .Env.RELEASE_MODE "production" }}'

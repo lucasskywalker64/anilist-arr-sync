@@ -1,0 +1,131 @@
+name: Nightly release
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: nightly-release
+  cancel-in-progress: false
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.guard.outputs.changed }}
+      commit: ${{ steps.identity.outputs.commit }}
+      version: ${{ steps.identity.outputs.version }}
+    env:
+      MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      PUBLIC_SOURCE: ${{ !github.event.repository.private }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Pin exact develop identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PUBLIC_SOURCE" = true || { echo 'Release source must remain publicly accessible' >&2; exit 1; }
+          commit=$(git rev-parse HEAD)
+          base=$(git tag --sort=-version:refname | { grep -m1 -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || true; })
+          base=${base:-v0.0.0}
+          version="$base-nightly.$(date -u +%Y%m%d%H%M%S).$commit"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_COMMIT=$commit" >> "$GITHUB_ENV"
+      - name: Compare authenticated last published nightly
+        id: guard
+        run: |
+          go run ./cmd/release check-key
+          python packaging/release.py nightly-guard
+  build:
+    needs: guard
+    if: needs.guard.outputs.changed == 'true'
+    runs-on: windows-11-arm
+    timeout-minutes: 60
+    env:
+      RELEASE_MODE: nightly
+      PACKAGE_LICENSE: AGPL-3.0-only
+      RELEASE_VERSION: ${{ needs.guard.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.guard.outputs.commit }}
+      RELEASE_INSTALL_TEST: '1'
+      MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.guard.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/release-tools
+      - name: Require all nightly signing and publication inputs
+        shell: pwsh
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          foreach ($name in @('MINISIGN_PUBLIC_KEY', 'MINISIGN_PRIVATE_KEY', 'MINISIGN_PASSWORD')) {
+            if (![Environment]::GetEnvironmentVariable($name)) { throw "Missing $name" }
+          }
+      - name: Build signed-checksum nightly using OSS snapshot mode
+        shell: pwsh
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          go run ./cmd/release config
+          if ($LASTEXITCODE -ne 0) { throw 'Release configuration failed' }
+          goreleaser release --config .release-tools/goreleaser.yaml --snapshot --clean --fail-fast --parallelism=1 --skip=publish,docker,scoop,aur
+          if ($LASTEXITCODE -ne 0) { throw 'Nightly packaging failed' }
+          go run ./cmd/release export dist
+          if ($LASTEXITCODE -ne 0) { throw 'Final-byte verification failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nightly-final
+          path: .release/final/*
+          if-no-files-found: error
+          retention-days: 3
+  containers:
+    needs: [guard, build]
+    uses: ./.github/workflows/release-containers.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      commit: ${{ needs.guard.outputs.commit }}
+      version: ${{ needs.guard.outputs.version }}
+      mode: nightly
+      artifact: nightly-final
+    secrets: inherit
+  publish:
+    needs: [guard, build, containers]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_MODE: nightly
+      RELEASE_VERSION: ${{ needs.guard.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.guard.outputs.commit }}
+      MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.guard.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v4
+        with:
+          name: nightly-final
+          path: .release/final
+      - name: Publish rolling prerelease after container success
+        run: python packaging/release.py publish-nightly

@@ -2,6 +2,7 @@
   import { RotateCw, LogOut } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
   import LifecycleActions from './LifecycleActions.svelte';
+  import { getBaseUrl } from '../../lib/api';
 
   export let instanceName = 'AniList-Arr-Sync';
   export let isSyncing = false;
@@ -17,6 +18,7 @@
   </div>
 
   <div class="right">
+    <a class="licenseLink" href="{getBaseUrl()}/legal" target="_blank" rel="noopener noreferrer">License and source</a>
     <LifecycleActions />
     {#if isSyncing}
       <div class="syncIndicator" title="Sync is running">
@@ -104,6 +106,11 @@
     cursor: pointer;
     font-size: var(--smallFontSize);
     transition: background-color 0.15s ease, border-color 0.15s ease;
+  }
+
+  .licenseLink {
+    color: var(--white);
+    font-size: var(--smallFontSize);
   }
 
   .logoutButton:hover {

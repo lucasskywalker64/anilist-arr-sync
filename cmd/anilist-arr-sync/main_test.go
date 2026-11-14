@@ -14,6 +14,22 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
 )
 
+func TestLicenseIncludesNoticesAndSourceWithoutCreatingConfiguration(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "not-created")
+	var out bytes.Buffer
+	if err := run(t.Context(), []string{"--license", "--data-dir", dir}, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"AGPL-3.0-only", "GNU AFFERO GENERAL PUBLIC LICENSE", "Third-party software notices", "modernc.org/sqlite", "Source:", "SOURCE.md"} {
+		if !strings.Contains(out.String(), text) {
+			t.Errorf("license output is missing %q", text)
+		}
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("license information must not initialize an installation")
+	}
+}
+
 func TestCLIConfiguration(t *testing.T) {
 	dir := t.TempDir()
 	opts, err := parseFlags([]string{"--data-dir", dir, "--port", "9123", "--bind-address", "127.0.0.1", "--no-browser"}, &bytes.Buffer{})

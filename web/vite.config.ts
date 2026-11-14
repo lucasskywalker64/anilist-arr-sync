@@ -9,6 +9,7 @@ export default defineConfig({
     }),
   ],
   base: './',
+  resolve: process.env.VITEST ? { conditions: ['browser'] } : undefined,
   build: {
     outDir: 'dist',
     emptyOutDir: false,

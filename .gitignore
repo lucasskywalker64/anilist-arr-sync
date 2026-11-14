@@ -6,8 +6,17 @@
 *.dylib
 *.test
 *.out
-/devserver
-/devserver.exe
+/anilist-arr-sync
+/.release-tools/
+/.release/
+/dist/
+/cmd/devserver
+/cmd/anilist-arr-sync/resource_windows_*.syso
+/packaging/node_modules/
+/packaging/__pycache__/
+
+# Local editor settings
+/.vscode/
 
 # OS generated files
 .DS_Store
