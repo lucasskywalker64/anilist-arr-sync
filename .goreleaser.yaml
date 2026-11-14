@@ -25,6 +25,7 @@ builds:
     hooks:
       post:
         - cmd: 'pwsh -NoProfile -File packaging/windows.ps1 -Binary "{{ .Path }}" -TargetOS {{ .Os }} -Arch {{ .Arch }}'
+          output: true
 
 archives:
   - id: portable

@@ -109,8 +109,26 @@ function StartTray {
 function Install([string]$Owner, [string]$Type = 'service', [string]$Package = $Installer) {
     $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/TYPE=$Type", "/SERVICENAME=$service", "/DIR=`"$app`"", "/DATADIR=`"$data`"", "/GROUP=`"$group`"")
     if ($Owner) { $arguments += "/UPDATEOWNER=$Owner" }
-    $process = Start-Process -FilePath $Package -ArgumentList $arguments -PassThru -Wait -WindowStyle Hidden
-    if ($process.ExitCode -ne 0) { throw "Installer failed with exit code $($process.ExitCode)" }
+    InvokeInstallerProcess $Package $arguments
+}
+
+function InvokeInstallerProcess([string]$File, [string[]]$Arguments, [int]$TimeoutMilliseconds = 120000) {
+    $log = Join-Path $root ('installer-' + [Guid]::NewGuid().ToString('N') + '.log')
+    Write-Host "[$stage] Starting $([IO.Path]::GetFileName($File))"
+    $process = Start-Process -FilePath $File -ArgumentList ($Arguments + "/LOG=`"$log`"") -PassThru -WindowStyle Hidden
+    try {
+        if (!$process.WaitForExit($TimeoutMilliseconds)) {
+            $process.Kill($true)
+            throw "[$stage] Installer process timed out after $TimeoutMilliseconds ms"
+        }
+        if ($process.ExitCode -ne 0) { throw "[$stage] Installer process failed with exit code $($process.ExitCode)" }
+        Write-Host "[$stage] Completed"
+    } catch {
+        if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log | Select-Object -Last 40 | ForEach-Object { Write-Host $_ } }
+        throw
+    } finally {
+        $process.Dispose()
+    }
 }
 
 function AssertInstalledArchitecture([string]$Expected) {
@@ -206,8 +224,7 @@ try {
     WaitHealthy
     $stage = 'uninstall with active tray'
     $uninstaller = Join-Path $app 'unins000.exe'
-    $process = Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -PassThru -Wait -WindowStyle Hidden
-    if ($process.ExitCode -ne 0) { throw 'Uninstaller failed' }
+    InvokeInstallerProcess $uninstaller @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
     if (!$tray.WaitForExit(30000)) { throw 'Uninstall left the tray runtime running' }
     if (Test-Path -LiteralPath (Join-Path $app 'update-owner')) { throw 'Uninstall retained ownership marker' }
     if (Test-Path -LiteralPath (Join-Path $app 'anilist-arr-sync.exe')) { throw 'Uninstall retained executable' }
@@ -236,7 +253,8 @@ try {
         & sc.exe delete $service | Out-Null
     }
     if (Test-Path -LiteralPath (Join-Path $app 'unins000.exe')) {
-        Start-Process -FilePath (Join-Path $app 'unins000.exe') -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -WindowStyle Hidden
+        $stage = 'cleanup uninstall'
+        InvokeInstallerProcess (Join-Path $app 'unins000.exe') @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
     }
     # Delete only the uniquely created fixture tree beneath this workspace.
     $resolved = [IO.Path]::GetFullPath($root)

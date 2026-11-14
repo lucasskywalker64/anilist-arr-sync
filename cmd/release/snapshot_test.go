@@ -73,9 +73,10 @@ func TestSnapshot(t *testing.T) {
 			if err := run([]string{"config"}); err != nil {
 				t.Fatal(err)
 			}
-			command := exec.Command("goreleaser", "release", "--config", ".release-tools/goreleaser.yaml", "--snapshot", "--clean", "--skip=publish,docker", "--parallelism=1")
-			if out, err := command.CombinedOutput(); err != nil {
-				t.Fatalf("snapshot failed: %v\n%s", err, out[max(0, len(out)-6000):])
+			command := exec.Command("goreleaser", "release", "--config", ".release-tools/goreleaser.yaml", "--snapshot", "--clean", "--skip=publish,docker", "--parallelism=1", "--timeout=8m")
+			command.Stdout, command.Stderr = os.Stdout, os.Stderr
+			if err := command.Run(); err != nil {
+				t.Fatalf("snapshot failed: %v", err)
 			}
 			if err := run([]string{"verify", "dist"}); err != nil {
 				t.Fatal(err)
