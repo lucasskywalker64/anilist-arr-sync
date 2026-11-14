@@ -35,23 +35,12 @@ jobs:
       commit: ${{ steps.identity.outputs.commit }}
     env:
       MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
-      MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
-      MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
-      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
       SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
       SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
       SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
       SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
       SCOOP_BUCKET_REPOSITORY: ${{ vars.SCOOP_BUCKET_REPOSITORY }}
-      PACKAGE_LICENSE: ${{ vars.PACKAGE_LICENSE }}
-      SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
-      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
-      CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
-      GITHUB_TOKEN: ${{ github.token }}
-      GH_TOKEN: ${{ github.token }}
+      PACKAGE_LICENSE: AGPL-3.0-only
       RELEASE_INSTALL_TEST: '1'
     steps:
       - uses: actions/checkout@v4
@@ -66,8 +55,19 @@ jobs:
           EVENT: ${{ github.event_name }}
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap_tag || github.ref_name }}
           BOOTSTRAP: ${{ inputs.bootstrap }}
+          PUBLIC_SOURCE: ${{ !github.event.repository.private }}
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:PUBLIC_SOURCE -ne 'true') { throw 'Release source must remain publicly accessible' }
           $mode = 'production'
           if ($env:EVENT -eq 'workflow_dispatch') {
             if ($env:BOOTSTRAP -ne 'true' -or $env:TAG -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-bootstrap\.[1-9][0-9]*$') { throw 'Select bootstrap explicitly with a bootstrap prerelease tag' }
@@ -94,6 +94,8 @@ jobs:
       - uses: ./.github/actions/release-tools
       - name: Enforce one-time bootstrap exception
         if: env.RELEASE_MODE == 'bootstrap'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python packaging/release.py bootstrap-guard
       - name: Write release notes
         shell: pwsh
@@ -104,8 +106,18 @@ jobs:
           } else {
             "AniList-Arr-Sync $env:RELEASE_VERSION from commit $env:RELEASE_COMMIT. Windows artifacts have timestamped SignPath signatures. Final checksums are Minisign-signed." | Set-Content .release/notes.md -Encoding utf8
           }
+          "`nLicense: AGPL-3.0-only. No warranty.`n`n[Exact application source](https://github.com/lucasskywalker64/anilist-arr-sync/archive/$env:RELEASE_COMMIT.tar.gz). [Dependency source and build instructions](https://github.com/lucasskywalker64/anilist-arr-sync/blob/$env:RELEASE_COMMIT/SOURCE.md)." | Add-Content .release/notes.md -Encoding utf8
+          "`n[Code signing policy](https://github.com/lucasskywalker64/anilist-arr-sync/blob/$env:RELEASE_COMMIT/CODE_SIGNING.md) | [Privacy policy](https://github.com/lucasskywalker64/anilist-arr-sync/blob/$env:RELEASE_COMMIT/PRIVACY.md)" | Add-Content .release/notes.md -Encoding utf8
       - name: Build once, wait for SignPath approvals, test installers, hash, sign, and publish
         uses: ./.github/actions/production-release
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
       - uses: actions/upload-artifact@v4
         with:
           name: production-final
@@ -136,10 +148,7 @@ jobs:
       RELEASE_VERSION: ${{ needs.release.outputs.version }}
       RELEASE_COMMIT: ${{ needs.release.outputs.commit }}
       MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
-      PACKAGE_LICENSE: ${{ vars.PACKAGE_LICENSE }}
-      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
-      CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
-      GH_TOKEN: ${{ github.token }}
+      PACKAGE_LICENSE: AGPL-3.0-only
     steps:
       - uses: actions/checkout@v4
         with:
@@ -154,27 +163,42 @@ jobs:
           path: .release/final
       - name: Verify published bytes and generate installer-based manifests
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if (!$env:WINGET_TOKEN -or !$env:CHOCOLATEY_API_KEY) { throw 'WinGet and Chocolatey credentials are required' }
           gh release download $env:RELEASE_VERSION --dir .release/published
           if ($LASTEXITCODE -ne 0) { throw 'Cannot download published release' }
           go run ./cmd/release verify .release/published
           if ($LASTEXITCODE -ne 0) { throw 'Published bytes failed verification' }
           python packaging/manifests.py .release/published
           if ($LASTEXITCODE -ne 0) { throw 'Manifest generation failed' }
-      - name: Submit WinGet manifests
+      - name: Install and run WinGet manifest validator
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          Install-Module Microsoft.WinGet.Client -RequiredVersion 1.29.380 -Scope CurrentUser -Repository PSGallery -Force
+          Repair-WinGetPackageManager -Version 1.29.380 -Force
+          $env:PATH += ";$env:LOCALAPPDATA\Microsoft\WindowsApps"
+          winget validate --manifest .release/winget --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { throw 'Invalid WinGet manifests' }
           gh release download v1.28.1.0 --repo microsoft/winget-create --pattern wingetcreate.exe --dir .release-tools
           if ($LASTEXITCODE -ne 0) { throw 'Cannot download WinGet manifest tool' }
           if ((Get-AuthenticodeSignature .release-tools/wingetcreate.exe).Status -ne 'Valid') { throw 'Untrusted WinGet tool' }
-          & .release-tools/wingetcreate.exe validate .release/winget
-          if ($LASTEXITCODE -ne 0) { throw 'Invalid WinGet manifests' }
+      - name: Submit WinGet manifests
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if (!$env:WINGET_TOKEN) { throw 'WinGet credentials are required' }
           & .release-tools/wingetcreate.exe submit .release/winget --token $env:WINGET_TOKEN
           if ($LASTEXITCODE -ne 0) { throw 'WinGet submission failed' }
       - name: Pack and submit Chocolatey
         shell: pwsh
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
         run: |
+          if (!$env:CHOCOLATEY_API_KEY) { throw 'Chocolatey credentials are required' }
           choco pack .release/chocolatey/anilist-arr-sync.nuspec --outputdirectory .release/chocolatey --no-progress
           if ($LASTEXITCODE -ne 0) { throw 'Chocolatey packaging failed' }
           $package = (Get-ChildItem .release/chocolatey/*.nupkg).FullName

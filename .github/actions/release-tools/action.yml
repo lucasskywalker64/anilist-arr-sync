@@ -37,6 +37,11 @@ runs:
         if ($LASTEXITCODE -ne 0) { throw 'Frontend typecheck failed' }
         npm run build
         if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed' }
+    - name: Check audited runtime licenses and notices
+      shell: pwsh
+      run: |
+        python packaging/licenses.py --check
+        if ($LASTEXITCODE -ne 0) { throw 'License notices require an audit and refresh' }
     - uses: goreleaser/goreleaser-action@v6
       with:
         distribution: goreleaser

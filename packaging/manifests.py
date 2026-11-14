@@ -19,7 +19,7 @@ def generate(directory, output=Path('.release')):
     common = f'PackageIdentifier: {identifier}\nPackageVersion: {version[1:]}\n'
     winget = output / 'winget'
     winget.mkdir(parents=True, exist_ok=True)
-    (winget / f'{identifier}.yaml').write_text(common + 'DefaultLocale: en-US\nManifestType: version\nManifestVersion: 1.9.0\n', encoding='utf-8')
+    (winget / f'{identifier}.yaml').write_text('# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.9.0.schema.json\n' + common + 'DefaultLocale: en-US\nManifestType: version\nManifestVersion: 1.9.0\n', encoding='utf-8')
     locale = common + '''PackageLocale: en-US
 Publisher: AniList-Arr-Sync contributors
 PackageName: AniList-Arr-Sync
@@ -29,7 +29,7 @@ ManifestType: defaultLocale
 ManifestVersion: 1.9.0
 '''
     locale += 'License: ' + json.dumps(os.environ['PACKAGE_LICENSE']) + '\n'
-    (winget / f'{identifier}.locale.en-US.yaml').write_text(locale, encoding='utf-8')
+    (winget / f'{identifier}.locale.en-US.yaml').write_text('# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json\n' + locale, encoding='utf-8')
     installers = common + '''InstallerType: inno
 Scope: machine
 UpgradeBehavior: install
@@ -40,14 +40,17 @@ Installers:
     for arch, file in artifacts.items():
         installers += f'- Architecture: {"x64" if arch == "amd64" else "arm64"}\n  InstallerUrl: {base + file}\n  InstallerSha256: {sums[file]}\n'
     installers += 'ManifestType: installer\nManifestVersion: 1.9.0\n'
-    (winget / f'{identifier}.installer.yaml').write_text(installers, encoding='utf-8')
+    (winget / f'{identifier}.installer.yaml').write_text('# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json\n' + installers, encoding='utf-8')
     chocolatey = output / 'chocolatey'
     tools = chocolatey / 'tools'
     tools.mkdir(parents=True, exist_ok=True)
+    (tools / 'LICENSE').write_bytes(Path(__file__).resolve().parents[1].joinpath('LICENSE').read_bytes())
     (chocolatey / 'anilist-arr-sync.nuspec').write_text(f'''<?xml version="1.0"?>
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd"><metadata>
 <id>anilist-arr-sync</id><version>{version[1:]}</version><title>AniList-Arr-Sync</title>
 <authors>AniList-Arr-Sync contributors</authors><projectUrl>https://github.com/lucasskywalker64/anilist-arr-sync</projectUrl>
+<licenseUrl>https://github.com/lucasskywalker64/anilist-arr-sync/blob/{manifest['commit']}/LICENSE</licenseUrl>
+<copyright>Copyright (C) 2026 AniList-Arr-Sync contributors</copyright><projectSourceUrl>https://github.com/lucasskywalker64/anilist-arr-sync/tree/{manifest['commit']}</projectSourceUrl>
 <requireLicenseAcceptance>false</requireLicenseAcceptance><description>Synchronize AniList with Sonarr and Radarr.</description>
 <tags>anilist sonarr radarr</tags></metadata><files><file src="tools/**" target="tools" /></files></package>
 ''', encoding='utf-8')

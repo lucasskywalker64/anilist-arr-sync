@@ -18,6 +18,7 @@ jobs:
     env:
       MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
       GH_TOKEN: ${{ github.token }}
+      PUBLIC_SOURCE: ${{ !github.event.repository.private }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,6 +33,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$PUBLIC_SOURCE" = true || { echo 'Release source must remain publicly accessible' >&2; exit 1; }
           commit=$(git rev-parse HEAD)
           base=$(git tag --sort=-version:refname | { grep -m1 -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || true; })
           base=${base:-v0.0.0}
@@ -51,14 +53,11 @@ jobs:
     timeout-minutes: 60
     env:
       RELEASE_MODE: nightly
+      PACKAGE_LICENSE: AGPL-3.0-only
       RELEASE_VERSION: ${{ needs.guard.outputs.version }}
       RELEASE_COMMIT: ${{ needs.guard.outputs.commit }}
       RELEASE_INSTALL_TEST: '1'
       MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
-      MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
-      MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,12 +67,18 @@ jobs:
       - uses: ./.github/actions/release-tools
       - name: Require all nightly signing and publication inputs
         shell: pwsh
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: |
-          foreach ($name in @('MINISIGN_PUBLIC_KEY', 'MINISIGN_PRIVATE_KEY', 'MINISIGN_PASSWORD', 'DOCKERHUB_USERNAME', 'DOCKERHUB_TOKEN')) {
+          foreach ($name in @('MINISIGN_PUBLIC_KEY', 'MINISIGN_PRIVATE_KEY', 'MINISIGN_PASSWORD')) {
             if (![Environment]::GetEnvironmentVariable($name)) { throw "Missing $name" }
           }
       - name: Build signed-checksum nightly using OSS snapshot mode
         shell: pwsh
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: |
           go run ./cmd/release config
           if ($LASTEXITCODE -ne 0) { throw 'Release configuration failed' }

@@ -14,6 +14,21 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/updater"
 )
 
+func TestContainerArtifacts(t *testing.T) {
+	if os.Getenv("RELEASE_CONTAINER_TEST") != "1" {
+		t.Skip("set RELEASE_CONTAINER_TEST=1 with verified release artifacts and Docker available")
+	}
+	t.Chdir(filepath.Join("..", ".."))
+	id, err := identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"verify", ".release/final"}); err != nil {
+		t.Fatal(err)
+	}
+	verifyContainers(t, id)
+}
+
 // These images are local, uniquely named, and removed. No login or push occurs.
 func verifyContainers(t *testing.T, id updater.Identity) {
 	t.Helper()

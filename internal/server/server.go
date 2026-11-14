@@ -456,6 +456,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) registerRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /legal", s.handleLegal)
+	mux.HandleFunc("GET /legal/license", s.handleLicense)
+	mux.HandleFunc("GET /legal/notices", s.handleNotices)
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	mux.HandleFunc("GET /api/v1/system/status", s.handleSystemStatus)
 	mux.HandleFunc("POST /api/v1/system/restart", s.handleRestart)

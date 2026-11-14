@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -31,6 +32,31 @@ func newTestServerWithUI(t *testing.T, urlBase string, mockFS fstest.MapFS, auth
 		s.SetWebFS(mockFS)
 	}
 	return s
+}
+
+func TestLicenseAndExactSourceArePublicWithURLBase(t *testing.T) {
+	for _, base := range []string{"", "/nested"} {
+		t.Run(base, func(t *testing.T) {
+			s := newTestServerWithUI(t, base, nil, "Forms")
+			s.SetBuildCommit(strings.Repeat("a", 40))
+			for path, texts := range map[string][]string{
+				"/legal":         {"AGPL-3.0-only", "/archive/" + strings.Repeat("a", 40) + ".tar.gz", "/blob/" + strings.Repeat("a", 40) + "/SOURCE.md", base + "/legal/license", "no warranty"},
+				"/legal/license": {"GNU AFFERO GENERAL PUBLIC LICENSE", "Remote Network Interaction"},
+				"/legal/notices": {"Third-party software notices", "musl", "lucide-svelte", "svelte@", "proxy.golang.org"},
+			} {
+				rec := httptest.NewRecorder()
+				s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://localhost"+base+path, nil))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("%s: status %d", path, rec.Code)
+				}
+				for _, text := range texts {
+					if !strings.Contains(rec.Body.String(), text) {
+						t.Errorf("%s: missing %q", path, text)
+					}
+				}
+			}
+		})
+	}
 }
 
 func TestEmbeddedSPA_DeliveryAndRouting(t *testing.T) {
@@ -303,51 +329,53 @@ func TestEmbeddedSPA_SonarrThemeTokenVerification(t *testing.T) {
 		t.Fatalf("failed to open web dist: %v", err)
 	}
 
-	// Verify required Sonarr dark theme CSS tokens and dimensions in theme.css or built CSS assets
-	requiredTokens := []string{
-		"#202020", // pageBackground
-		"#2a2a2a", // pageHeaderBackgroundColor / sidebarBackgroundColor / cardCenterBackgroundColor
-		"#262626", // toolbarBackgroundColor
-		"#35c5f4", // sonarrBlue / themeBlue
-		"#2193b5", // themeAlternateBlue
-		"#5d9cec", // primaryColor / infoColor
-		"#dde6e9", // inputBorderColor
-		"#333333", // cardBackgroundColor / sidebarActiveBackgroundColor
-		"#909293", // helpTextColor
-		"210px",   // sidebarWidth
-		"60px",    // headerHeight / toolbarHeight / toolbarButtonWidth
-		"250px",   // formLabelLargeWidth
-		"35px",    // input height
+	requiredTokens := map[string]string{
+		"--pageBackground":            "#202020",
+		"--pageHeaderBackgroundColor": "#2a2a2a",
+		"--toolbarBackgroundColor":    "#262626",
+		"--sonarrBlue":                "#35c5f4",
+		"--themeAlternateBlue":        "#2193b5",
+		"--primaryColor":              "#5d9cec",
+		"--inputBorderColor":          "#dde6e9",
+		"--cardBackgroundColor":       "#333333",
+		"--helpTextColor":             "#909293",
+		"--sidebarWidth":              "210px",
+		"--headerHeight":              "60px",
+		"--formLabelLargeWidth":       "250px",
+		"--inputHeight":               "35px",
 	}
 
-	// Look in dist for CSS files
+	// Obsolete assets must not satisfy checks for the current entry page.
+	index, err := fs.ReadFile(dist, "index.html")
+	if err != nil {
+		t.Fatalf("failed to read frontend entry page (run npm run build first): %v", err)
+	}
+	stylesheets := regexp.MustCompile(`href=["']([^"']+\.css)["']`).FindAllStringSubmatch(string(index), -1)
+	if len(stylesheets) == 0 {
+		t.Fatal("no CSS referenced by the frontend entry page (run npm run build first)")
+	}
 	var combinedCSS bytes.Buffer
-	var foundCSS bool
-	_ = fs.WalkDir(dist, ".", func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil || d.IsDir() {
-			return nil
+	for _, stylesheet := range stylesheets {
+		data, err := fs.ReadFile(dist, strings.TrimPrefix(stylesheet[1], "./"))
+		if err != nil {
+			t.Fatalf("failed to read stylesheet %q: %v", stylesheet[1], err)
 		}
-		if strings.HasSuffix(path, ".css") {
-			if f, openErr := dist.Open(path); openErr == nil {
-				defer func() { _ = f.Close() }()
-				data, _ := io.ReadAll(f)
-				combinedCSS.Write(data)
-				combinedCSS.WriteByte('\n')
-				foundCSS = true
-			}
+		combinedCSS.Write(data)
+		combinedCSS.WriteByte('\n')
+	}
+
+	// Minifiers may shorten equivalent six-digit colors to three digits.
+	cssContent := regexp.MustCompile(`#[0-9a-fA-F]+\b`).ReplaceAllStringFunc(combinedCSS.String(), func(color string) string {
+		if len(color) == 4 {
+			color = string([]byte{'#', color[1], color[1], color[2], color[2], color[3], color[3]})
 		}
-		return nil
+		return strings.ToLower(color)
 	})
 
-	// If no CSS files in dist yet (before frontend build), fail test per requirements.
-	if !foundCSS {
-		t.Fatal("no CSS files found in dist (run npm run build first)")
-	}
-
-	cssContent := combinedCSS.String()
-	for _, token := range requiredTokens {
-		if !strings.Contains(cssContent, token) {
-			t.Errorf("expected Sonarr dark theme token %q in CSS, but was not found", token)
+	for property, value := range requiredTokens {
+		declaration := regexp.MustCompile(regexp.QuoteMeta(property) + `:\s*` + regexp.QuoteMeta(value) + `\s*[;}]`)
+		if !declaration.MatchString(cssContent) {
+			t.Errorf("expected Sonarr dark theme declaration %s: %s in CSS, but was not found", property, value)
 		}
 	}
 }

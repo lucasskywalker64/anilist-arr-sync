@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"aead.dev/minisign"
+	licensing "github.com/lucasskywalker64/anilist-arr-sync"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/updater"
 )
 
@@ -263,6 +264,9 @@ func run(args []string) error {
 		if os.Getenv("RELEASE_MODE") == "production" && license == "" {
 			return errors.New("PACKAGE_LICENSE is required for production publishers")
 		}
+		if os.Getenv("RELEASE_MODE") == "production" && license != licensing.Identifier {
+			return errors.New("PACKAGE_LICENSE must match the application's AGPL-3.0-only license")
+		}
 		data, err := os.ReadFile(".goreleaser.yaml")
 		if err != nil {
 			return err
@@ -279,6 +283,16 @@ func run(args []string) error {
 	case "prepare":
 		if _, err := os.Stat("web/dist/index.html"); err != nil {
 			return errors.New("build the frontend before release compilation")
+		}
+		if os.Getenv("RELEASE_MODE") != "fixture" && os.Getenv("RELEASE_SNAPSHOT_TEST") != "1" {
+			head, err := exec.Command("git", "rev-parse", "HEAD").Output()
+			if err != nil || strings.TrimSpace(string(head)) != id.Commit {
+				return errors.New("release source commit does not match the embedded identity")
+			}
+			status, err := exec.Command("git", "status", "--porcelain", "--untracked-files=normal").Output()
+			if err != nil || len(bytes.TrimSpace(status)) != 0 {
+				return errors.New("release source must be a clean commit so the source offer matches the binaries")
+			}
 		}
 		if err := os.MkdirAll(".release", 0755); err != nil {
 			return err

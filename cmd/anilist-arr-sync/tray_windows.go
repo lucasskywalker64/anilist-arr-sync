@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"runtime"
 	"unsafe"
 
@@ -61,8 +62,20 @@ func startTray(url func() string, quit func()) (func(), error) {
 		defWindow := trayUser32.NewProc("DefWindowProcW")
 		destroy := trayUser32.NewProc("DestroyWindow")
 		notify := trayShell32.NewProc("Shell_NotifyIconW")
+		taskbarName, _ := windows.UTF16PtrFromString("TaskbarCreated")
+		taskbarCreated, _, err := trayUser32.NewProc("RegisterWindowMessageW").Call(uintptr(unsafe.Pointer(taskbarName)))
+		if taskbarCreated == 0 {
+			ready <- result{err: fmt.Errorf("register taskbar recreation notification: %w", err)}
+			return
+		}
 		var icon trayIcon
 		callback := windows.NewCallback(func(hwnd uintptr, message uint32, wparam, lparam uintptr) uintptr {
+			if uintptr(message) == taskbarCreated {
+				if ok, _, err := notify.Call(0, uintptr(unsafe.Pointer(&icon))); ok == 0 {
+					log.Printf("restore tray icon: %v", err)
+				}
+				return 0
+			}
 			switch message {
 			case callbackMessage:
 				if lparam == 0x0203 { // WM_LBUTTONDBLCLK

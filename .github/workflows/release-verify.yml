@@ -4,6 +4,10 @@ on:
     paths:
       - '.goreleaser.yaml'
       - 'Dockerfile'
+      - 'LICENSE'
+      - 'SOURCE.md'
+      - 'THIRD_PARTY_NOTICES.txt'
+      - 'license.go'
       - 'packaging/**'
       - 'cmd/**'
       - '**/*.go'
@@ -46,3 +50,44 @@ jobs:
           path: .release/final/*
           if-no-files-found: error
           retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fixture-trust-${{ runner.arch }}
+          path: .release/fixture-public-key.txt
+          if-no-files-found: error
+          retention-days: 3
+  containers:
+    needs: snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v4
+        with:
+          name: fixture-ARM64
+          path: .release/final
+      - uses: actions/download-artifact@v4
+        with:
+          name: fixture-trust-ARM64
+          path: .release
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Load disposable fixture verification inputs
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          identity = json.loads(Path('.release/final/release.json').read_text())
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('MINISIGN_PUBLIC_KEY=' + Path('.release/fixture-public-key.txt').read_text().strip() + '\n')
+              output.write('RELEASE_MODE=bootstrap\nRELEASE_VERSION=' + identity['version'] + '\nRELEASE_COMMIT=' + identity['commit'] + '\n')
+          PY
+      - name: Verify both container architectures without publication
+        env:
+          RELEASE_CONTAINER_TEST: '1'
+        run: go test ./cmd/release -run '^TestContainerArtifacts$' -count=1 -timeout=15m

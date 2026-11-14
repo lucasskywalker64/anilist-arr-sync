@@ -5,11 +5,6 @@ import { api } from '../../lib/api';
 import type { StagedAction } from '../../lib/types';
 import StagedPreview from './StagedPreview.svelte';
 
-vi.mock('svelte', async (importOriginal) => ({
-  ...await importOriginal<typeof import('svelte')>(),
-  onMount: (await vi.importActual<typeof import('svelte')>('svelte/internal')).onMount,
-}));
-
 vi.mock('../../lib/api', () => ({
   api: { getStaged: vi.fn(), applyStaged: vi.fn() },
 }));

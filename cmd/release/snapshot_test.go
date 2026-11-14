@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"aead.dev/minisign"
+	licensing "github.com/lucasskywalker64/anilist-arr-sync"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/storage"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/updater"
@@ -45,7 +46,7 @@ func TestSnapshot(t *testing.T) {
 	t.Setenv("MINISIGN_PASSWORD", "disposable-fixture-password")
 	t.Setenv("RELEASE_MODE", "fixture")
 	t.Setenv("RELEASE_VERSION", "v0.0.1")
-	t.Setenv("PACKAGE_LICENSE", "LicenseRef-Fixture")
+	t.Setenv("PACKAGE_LICENSE", licensing.Identifier)
 	commit, err := exec.Command("git", "rev-parse", "HEAD").Output()
 	if err != nil {
 		t.Fatal(err)
@@ -104,6 +105,11 @@ func TestSnapshot(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+	// Only the disposable public verification input leaves this test process.
+	// CI uses it to authenticate these same artifacts in the Linux container job.
+	if err := os.WriteFile(".release/fixture-public-key.txt", []byte(public.String()), 0644); err != nil {
+		t.Fatal("cannot export fixture verification input")
 	}
 }
 
@@ -218,8 +224,12 @@ func verifyManagerReferences(t *testing.T, id updater.Identity) {
 	if err := json.Unmarshal(data, &scoop); err != nil {
 		t.Fatal(err)
 	}
-	if scoop.License != "LicenseRef-Fixture" {
+	if scoop.License != licensing.Identifier {
 		t.Fatal("Scoop license was not rendered from public package metadata")
+	}
+	packageLicense, err := os.ReadFile(".release/chocolatey/tools/LICENSE")
+	if err != nil || string(packageLicense) != licensing.License {
+		t.Fatal("Chocolatey package must carry the complete application license")
 	}
 	aur, err := os.ReadFile("dist/aur/anilist-arr-sync-bin.pkgbuild")
 	if err != nil {
@@ -289,6 +299,10 @@ func verifyNativeHealth(t *testing.T, id updater.Identity) {
 	if err := os.WriteFile(exe, data, 0700); err != nil {
 		t.Fatal(err)
 	}
+	license, err := exec.Command(exe, "--license").Output()
+	if err != nil || !bytes.Contains(license, []byte(licensing.Identifier)) || !bytes.Contains(license, []byte("/archive/"+id.Commit+".tar.gz")) || !bytes.Contains(license, []byte("Third-party software notices")) {
+		t.Fatal("packaged executable lost its license, dependency notices, or exact source offer")
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -326,5 +340,14 @@ func verifyNativeHealth(t *testing.T, id updater.Identity) {
 	_ = response.Body.Close()
 	if response.StatusCode != 200 || !bytes.Contains(body, []byte("/assets/")) {
 		t.Fatal("packaged frontend is missing")
+	}
+	response, err = client.Get(base + "/legal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != 200 || !bytes.Contains(body, []byte("/archive/"+id.Commit+".tar.gz")) {
+		t.Fatal("packaged web source offer does not identify the running build")
 	}
 }

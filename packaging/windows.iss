@@ -12,10 +12,12 @@
   #define NumericVersion Copy(ReleaseVersion, 2)
 #endif
 [Setup]
-AppId=AniList-Arr-Sync-{#Arch}
+AppId=AniList-Arr-Sync
 AppName=AniList-Arr-Sync
 AppVersion={#ReleaseVersion}
 AppPublisher=AniList-Arr-Sync contributors
+AppCopyright=Copyright (C) 2026 AniList-Arr-Sync contributors
+LicenseFile=..\LICENSE
 AppPublisherURL=https://github.com/lucasskywalker64/anilist-arr-sync
 VersionInfoProductName=AniList-Arr-Sync
 VersionInfoVersion={#NumericVersion}.0
@@ -52,6 +54,7 @@ Name: "{code:DataDir}"
 
 [Files]
 Source: "{#Binary}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop
@@ -180,9 +183,31 @@ begin
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
+var Window: THandle;
+    ProcessId: LongWord;
+    Command: String;
+    Code: Integer;
 begin
   Result := '';
   try
+    if WizardIsComponentSelected('desktop') then begin
+      { User Startup and the data ACL must belong to the actual desktop user.
+        Refuse credential-based elevation instead of configuring the admin's
+        profile. Service installation does not depend on a desktop account. }
+      Window := FindWindowEx(0, 0, 'Shell_TrayWnd', 0);
+      if Window = 0 then RaiseException('Cannot identify the signed-in desktop account. Use Windows service mode.');
+      GetWindowThreadProcessId(Window, ProcessId);
+      Command := '$ErrorActionPreference=''Stop''; ' +
+        '$process=Get-CimInstance Win32_Process -Filter ''ProcessId=' + IntToStr(ProcessId) + '''; ' +
+        '$owner=Invoke-CimMethod -InputObject $process -MethodName GetOwner; ' +
+        'if ($owner.ReturnValue -ne 0) { exit 1 }; ' +
+        '$account=[Security.Principal.NTAccount]::new($owner.Domain,$owner.User); ' +
+        '$sid=$account.Translate([Security.Principal.SecurityIdentifier]).Value; ' +
+        'if ($sid -ne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) { exit 1 }';
+      if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+        '-NoProfile -NonInteractive -Command "' + Command + '"', '', SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
+        RaiseException('Desktop mode requires the signed-in desktop account to be an administrator. Use Windows service mode when elevating with another account.');
+    end;
     StopTray;
     StopService;
   except

@@ -1056,7 +1056,8 @@
             </FormGroup>
             <FormGroup label="Quality Profile" forId={`${service.kind}-settings-profile`} isDirty={isFieldDirty(service.profile)}>
               {#if options?.qualityProfiles?.length}
-                <select id={`${service.kind}-settings-profile`} class="formInput" bind:value={formConfig[service.profile]}>
+                <select id={`${service.kind}-settings-profile`} class="formInput"
+                  bind:value={() => formConfig[service.profile], (value: number | undefined) => (formConfig[service.profile] = value)}>
                   {#if !options.qualityProfiles.some(profile => profile.id === formConfig[service.profile])}
                     <option value={formConfig[service.profile]}>Current ID ({formConfig[service.profile] ?? 'unset'})</option>
                   {/if}
@@ -1069,7 +1070,8 @@
             </FormGroup>
             <FormGroup label="Root Folder" forId={`${service.kind}-settings-folder`} isDirty={isFieldDirty(service.folder)}>
               {#if options?.rootFolders?.length}
-                <select id={`${service.kind}-settings-folder`} class="formInput" bind:value={formConfig[service.folder]}>
+                <select id={`${service.kind}-settings-folder`} class="formInput"
+                  bind:value={() => formConfig[service.folder], (value: string | undefined) => (formConfig[service.folder] = value)}>
                   {#if !options.rootFolders.some(folder => folder.path === formConfig[service.folder])}
                     <option value={formConfig[service.folder]}>{formConfig[service.folder] || 'Current folder (unset)'}</option>
                   {/if}

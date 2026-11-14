@@ -1,6 +1,7 @@
 {
   "name": "release-signing-bridge",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "dependencies": {
     "@actions/artifact": "6.3.1"
