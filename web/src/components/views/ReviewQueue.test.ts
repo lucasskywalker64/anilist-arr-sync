@@ -5,11 +5,6 @@ import { api } from '../../lib/api';
 import ReviewQueue from './ReviewQueue.svelte';
 import type { ReviewItem, ReviewPreparation } from '../../lib/types';
 
-vi.mock('svelte', async (importOriginal) => ({
-  ...await importOriginal<typeof import('svelte')>(),
-  onMount: (await vi.importActual<typeof import('svelte')>('svelte/internal')).onMount,
-}));
-
 vi.mock('../../lib/api', () => ({
   api: { getReviewQueue: vi.fn(), prepareReview: vi.fn(), getReviewPreparation: vi.fn(), cancelReviewPreparation: vi.fn().mockResolvedValue({status:'CANCELLED'}), lookupReviewMovie: vi.fn(), resolveReview: vi.fn() },
 }));

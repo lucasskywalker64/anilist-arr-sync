@@ -2,12 +2,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import App from './App.svelte';
 
-// Vitest resolves Svelte's SSR entry point, where onMount is a no-op.
-vi.mock('svelte', async (importOriginal) => ({
-  ...await importOriginal<typeof import('svelte')>(),
-  onMount: (await vi.importActual<typeof import('svelte')>('svelte/internal')).onMount,
-}));
-
 let component: App | undefined;
 afterEach(() => {
   component?.$destroy();

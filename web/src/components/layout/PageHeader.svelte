@@ -2,6 +2,7 @@
   import { RotateCw, LogOut } from 'lucide-svelte';
   import { createEventDispatcher } from 'svelte';
   import LifecycleActions from './LifecycleActions.svelte';
+  import { getBaseUrl } from '../../lib/api';
 
   export let instanceName = 'AniList-Arr-Sync';
   export let isSyncing = false;
@@ -17,6 +18,7 @@
   </div>
 
   <div class="right">
+    <a class="licenseLink" href="{getBaseUrl()}/legal" target="_blank" rel="noopener noreferrer">License and source</a>
     <LifecycleActions />
     {#if isSyncing}
       <div class="syncIndicator" title="Sync is running">
@@ -106,9 +108,38 @@
     transition: background-color 0.15s ease, border-color 0.15s ease;
   }
 
+  .licenseLink {
+    color: var(--white);
+    font-size: var(--smallFontSize);
+  }
+
   .logoutButton:hover {
     background-color: rgba(255, 255, 255, 0.1);
     border-color: rgba(255, 255, 255, 0.4);
+  }
+
+  @media (max-width: 700px) {
+    .header {
+      height: auto;
+      min-height: var(--headerHeight);
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 10px 12px;
+    }
+
+    .logoContainer {
+      flex: 1 1 100%;
+      min-width: 0;
+      padding-left: 0;
+    }
+
+    .right {
+      min-width: 0;
+      flex-wrap: wrap;
+      justify-content: flex-start;
+      padding-right: 0;
+      gap: 10px;
+    }
   }
 
   :global(.spinning) {

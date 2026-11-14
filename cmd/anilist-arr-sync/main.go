@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	licensing "github.com/lucasskywalker64/anilist-arr-sync"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/server"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/updater"
 	"github.com/mattn/go-isatty"
@@ -28,10 +29,11 @@ var (
 )
 
 type options struct {
-	configPath, dataDir, bindAddress string
-	port                             int
-	sync, noBrowser, showVersion     bool
-	portSet, bindSet                 bool
+	configPath, dataDir, bindAddress   string
+	port                               int
+	sync, noBrowser, showVersion, tray bool
+	showLicense                        bool
+	portSet, bindSet                   bool
 }
 
 func parseFlags(args []string, out io.Writer) (options, error) {
@@ -45,6 +47,8 @@ func parseFlags(args []string, out io.Writer) (options, error) {
 	fs.BoolVar(&o.sync, "sync", false, "Run one sync and exit")
 	fs.BoolVar(&o.noBrowser, "no-browser", false, "Suppress browser launch")
 	fs.BoolVar(&o.showVersion, "version", false, "Print build version")
+	fs.BoolVar(&o.showLicense, "license", false, "Print license, third-party notices, and source links")
+	fs.BoolVar(&o.tray, "tray", false, "Run with a Windows notification-area icon")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -104,6 +108,12 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 		_, err := fmt.Fprintf(out, "anilist-arr-sync %s (commit %s, built %s)\n", version, commit, date)
 		return err
 	}
+	if o.showLicense {
+		_, err := io.WriteString(out, licensing.Information(commit))
+		return err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	paths, err := resolvePaths(o, runtime.GOOS, server.IsContainerized(""))
 	if err != nil {
 		return err
@@ -144,7 +154,15 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 			err := r.syncOnce(ctx, out)
 			return errors.Join(err, r.close())
 		}
+		stopTray := func() {}
+		if o.tray {
+			stopTray, err = startTray(r.browserURL, cancel)
+			if err != nil {
+				return failRestart(errors.Join(err, r.close()))
+			}
+		}
 		if err := r.server.Start(); err != nil {
+			stopTray()
 			return failRestart(errors.Join(err, r.close()))
 		}
 		ready()
@@ -175,6 +193,7 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 			}
 		}()
 		action := r.server.WaitLifecycle()
+		stopTray()
 		close(stopWatching)
 		if handoff != nil {
 			handoff.Close()

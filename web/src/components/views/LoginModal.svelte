@@ -2,7 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   import Button from '../common/Button.svelte';
   import Alert from '../common/Alert.svelte';
-  import { api } from '../../lib/api';
+  import { api, getBaseUrl } from '../../lib/api';
 
   export let isSetup = false;
 
@@ -122,6 +122,7 @@
         {/if}
       </div>
     </form>
+    <p class="toggleMode"><a href="{getBaseUrl()}/legal" target="_blank" rel="noopener noreferrer">License and source</a></p>
   </div>
 </div>
 

@@ -5,10 +5,6 @@ import { api } from '../../lib/api';
 import OverridesManager from './OverridesManager.svelte';
 import type { OverrideItem } from '../../lib/types';
 
-vi.mock('svelte', async (original) => ({
-  ...await original<typeof import('svelte')>(),
-  onMount: (await vi.importActual<typeof import('svelte')>('svelte/internal')).onMount,
-}));
 vi.mock('../../lib/api', () => ({ api: { getOverrides: vi.fn(), createOverride: vi.fn() } }));
 let component: OverridesManager | undefined;
 afterEach(() => { component?.$destroy(); document.body.replaceChildren(); vi.resetAllMocks(); });

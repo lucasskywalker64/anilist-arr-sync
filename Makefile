@@ -1,28 +1,40 @@
-.PHONY: all build test test-race lint frontend-install frontend-build frontend-test clean
+.PHONY: all build test test-race lint frontend-install frontend-build frontend-check frontend-test licenses clean
 
-all: build
+PYTHON ?= python
+
+all: build test-race lint
 
 web/node_modules/.package-lock.json: web/package.json web/package-lock.json
-	cd web && npm ci
-	@touch web/node_modules/.package-lock.json
+	npm ci --prefix web
 
-frontend-install: web/node_modules/.package-lock.json
+frontend-install:
+	npm ci --prefix web
 
 frontend-build: web/node_modules/.package-lock.json
-	cd web && npm run build
+	npm run build --prefix web
+
+frontend-check: web/node_modules/.package-lock.json
+	npm run check --prefix web
 
 frontend-test: web/node_modules/.package-lock.json
-	cd web && npm test
+	npm test --prefix web
 
-build: frontend-build
-	go build -v ./...
+licenses: web/node_modules/.package-lock.json
+	$(PYTHON) packaging/licenses.py --check
 
-test: frontend-build
-	go test -v ./...
+build: frontend-build licenses
+	go build ./cmd/anilist-arr-sync
 
-test-race: frontend-build
-	go test -v -race ./...
+test: frontend-build licenses frontend-test
+	go test ./...
 
-lint: frontend-build
+test-race: frontend-build licenses frontend-test
+	go test -race ./...
+
+lint: frontend-build frontend-check licenses
 	go vet ./...
-	golangci-lint run
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run
+
+clean:
+	go clean ./cmd/anilist-arr-sync
+	$(PYTHON) -c "from pathlib import Path; import shutil; output = Path('web/dist'); assert output.resolve() == Path.cwd().resolve() / 'web/dist'; [shutil.rmtree(p) if p.is_dir() else p.unlink() for p in output.glob('*') if p.name != '.gitkeep']"
