@@ -55,7 +55,8 @@ Installers:
 <tags>anilist sonarr radarr</tags></metadata><files><file src="tools/**" target="tools" /></files></package>
 ''', encoding='utf-8')
     install = "$ErrorActionPreference = 'Stop'\n"
-    install += "$arm = ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') -or ($env:PROCESSOR_ARCHITEW6432 -eq 'ARM64')\n"
+    install += "$nativeArch = (Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment' -Name PROCESSOR_ARCHITECTURE -ErrorAction SilentlyContinue).PROCESSOR_ARCHITECTURE\n"
+    install += "$arm = ($nativeArch -eq 'ARM64') -or ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') -or ($env:PROCESSOR_ARCHITEW6432 -eq 'ARM64')\n"
     install += "if ($arm) {\n"
     for index, (arch, file) in enumerate(reversed(list(artifacts.items()))):
         if index:

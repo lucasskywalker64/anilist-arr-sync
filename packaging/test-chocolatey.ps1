@@ -23,11 +23,43 @@ try {
 $ErrorActionPreference = 'Stop'
 function Install-ChocolateyPackage {
     param($PackageName, $FileType, $SilentArgs, $Url, $Checksum, $ChecksumType, $ValidExitCodes)
-    if ($Url -notmatch ('_windows_' + $env:ANILIST_FIXTURE_ARCH + '_setup\.exe$')) { throw "Wrong native installer: $Url" }
+    if ($Url -notmatch ('_windows_' + $env:ANILIST_FIXTURE_ARCH + '_setup\.exe$')) { throw "Wrong native installer for $env:ANILIST_FIXTURE_ARCH (process $env:PROCESSOR_ARCHITECTURE, WOW64 $env:PROCESSOR_ARCHITEW6432): $Url" }
     if ($Checksum -notmatch '^[0-9a-f]{64}$' -or $ChecksumType -ne 'sha256') { throw 'Installer checksum handoff changed' }
     if (!$SilentArgs.Contains('/UPDATEOWNER=chocolatey') -or !$SilentArgs.Contains('/TYPE=service')) { throw 'Installer ownership handoff changed' }
     Set-Content -LiteralPath (Join-Path $PSScriptRoot 'selection-passed') -Value $env:ANILIST_FIXTURE_ARCH
 }
+$nativeExpected = $env:ANILIST_FIXTURE_ARCH
+$processArch = $env:PROCESSOR_ARCHITECTURE
+$wow64Arch = $env:PROCESSOR_ARCHITEW6432
+try {
+    # Replay native OS versus emulated-process reports at the registry boundary.
+    # The final invocation below uses the real registry and Chocolatey context.
+    function Get-ItemProperty {
+        param($Path, $Name, $ErrorAction)
+        if ($Path -ne 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -or $Name -ne 'PROCESSOR_ARCHITECTURE') { throw 'Unexpected fixture registry query' }
+        [PSCustomObject]@{ PROCESSOR_ARCHITECTURE = $script:fixtureNative }
+    }
+    foreach ($case in @(
+        @{ Native = 'ARM64'; Process = 'AMD64'; Wow64 = ''; Expected = 'arm64' },
+        @{ Native = 'ARM64'; Process = 'x86'; Wow64 = ''; Expected = 'arm64' },
+        @{ Native = 'AMD64'; Process = 'AMD64'; Wow64 = ''; Expected = 'amd64' },
+        @{ Native = 'AMD64'; Process = 'x86'; Wow64 = 'AMD64'; Expected = 'amd64' },
+        @{ Native = ''; Process = 'ARM64'; Wow64 = ''; Expected = 'arm64' },
+        @{ Native = ''; Process = 'x86'; Wow64 = 'ARM64'; Expected = 'arm64' }
+    )) {
+        $script:fixtureNative = $case.Native
+        $env:PROCESSOR_ARCHITECTURE = $case.Process
+        $env:PROCESSOR_ARCHITEW6432 = $case.Wow64
+        $env:ANILIST_FIXTURE_ARCH = $case.Expected
+        . (Join-Path $PSScriptRoot 'generated-install.ps1')
+    }
+} finally {
+    Remove-Item Function:Get-ItemProperty
+    $env:PROCESSOR_ARCHITECTURE = $processArch
+    $env:PROCESSOR_ARCHITEW6432 = $wow64Arch
+    $env:ANILIST_FIXTURE_ARCH = $nativeExpected
+}
+Remove-Item -LiteralPath (Join-Path $PSScriptRoot 'selection-passed')
 . (Join-Path $PSScriptRoot 'generated-install.ps1')
 '@
     $env:ChocolateyInstall = (Resolve-Path "$fixture/distribution").Path
