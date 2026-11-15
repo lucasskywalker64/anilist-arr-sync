@@ -1,0 +1,169 @@
+name: Label and Move Linked Issue on Dev Merge
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - develop
+
+permissions:
+  issues: write
+  pull-requests: read
+
+jobs:
+  update_issue:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label Issue and Move in Project
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECT_PAT || secrets.GH_PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const prNumber = context.payload.pull_request.number;
+            const issueNumbers = new Set();
+
+            // 1. Check native GraphQL closing references
+            try {
+              const query = `
+                query($owner: String!, $repo: String!, $prNumber: Int!) {
+                  repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $prNumber) {
+                      closingIssuesReferences(first: 20) {
+                        nodes {
+                          number
+                        }
+                      }
+                    }
+                  }
+                }
+              `;
+              const result = await github.graphql(query, { owner, repo, prNumber });
+              const nodes = result?.repository?.pullRequest?.closingIssuesReferences?.nodes || [];
+              for (const node of nodes) {
+                if (node.number) {
+                  issueNumbers.add(node.number);
+                }
+              }
+            } catch (err) {
+              console.log(`Failed to query closingIssuesReferences: ${err.message}`);
+            }
+
+            // 2. Scan PR title and body for closing keywords (Closes #123, Fixes #123, Resolves #123)
+            const keywordRegex = /(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+(?:https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/|#)(\d+)/gi;
+            const prText = `${context.payload.pull_request.title || ''}\n${context.payload.pull_request.body || ''}`;
+            let match;
+            while ((match = keywordRegex.exec(prText)) !== null) {
+              issueNumbers.add(parseInt(match[1], 10));
+            }
+
+            // 3. Fallback: Scan PR commit messages if no issues found yet
+            if (issueNumbers.size === 0) {
+              try {
+                const commits = await github.rest.pulls.listCommits({
+                  owner,
+                  repo,
+                  pull_number: prNumber,
+                  per_page: 100
+                });
+                for (const item of commits.data) {
+                  while ((match = keywordRegex.exec(item.commit.message)) !== null) {
+                    issueNumbers.add(parseInt(match[1], 10));
+                  }
+                }
+              } catch (err) {
+                console.log(`Failed to inspect commits: ${err.message}`);
+              }
+            }
+
+            if (issueNumbers.size === 0) {
+              console.log('No linked issues found.');
+              return;
+            }
+
+            console.log(`Found linked issues: ${Array.from(issueNumbers).join(', ')}`);
+
+            // 4. Label issues and move cards in ProjectV2
+            for (const issueNumber of issueNumbers) {
+              // Apply label
+              try {
+                await github.rest.issues.addLabels({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  labels: ['status: fixed-in-dev']
+                });
+                console.log(`Labeled issue #${issueNumber} with status: fixed-in-dev`);
+              } catch (err) {
+                console.error(`Failed to label issue #${issueNumber}: ${err.message}`);
+              }
+
+              // Update project card if project permissions and board exist
+              try {
+                const projectQuery = `
+                  query($owner: String!, $repo: String!, $issueNumber: Int!) {
+                    repository(owner: $owner, name: $repo) {
+                      issue(number: $issueNumber) {
+                        projectItems(first: 10) {
+                          nodes {
+                            id
+                            project {
+                              id
+                              field(name: "Status") {
+                                ... on ProjectV2SingleSelectField {
+                                  id
+                                  options {
+                                    id
+                                    name
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                `;
+                const projResult = await github.graphql(projectQuery, { owner, repo, issueNumber });
+                const projectItems = projResult?.repository?.issue?.projectItems?.nodes || [];
+
+                for (const item of projectItems) {
+                  const statusField = item.project?.field;
+                  if (!statusField || !statusField.options) continue;
+
+                  const devOption = statusField.options.find(opt =>
+                    opt.name.trim().toLowerCase() === 'merged to dev' ||
+                    opt.name.trim().toLowerCase() === 'fixed in dev'
+                  );
+
+                  if (devOption) {
+                    const updateMutation = `
+                      mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                        updateProjectV2ItemFieldValue(
+                          input: {
+                            projectId: $projectId
+                            itemId: $itemId
+                            fieldId: $fieldId
+                            value: { singleSelectOptionId: $optionId }
+                          }
+                        ) {
+                          projectV2Item { id }
+                        }
+                      }
+                    `;
+                    await github.graphql(updateMutation, {
+                      projectId: item.project.id,
+                      itemId: item.id,
+                      fieldId: statusField.id,
+                      optionId: devOption.id
+                    });
+                    console.log(`Moved issue #${issueNumber} card to "${devOption.name}".`);
+                  }
+                }
+              } catch (err) {
+                console.log(`Project card update skipped for issue #${issueNumber}: ${err.message}`);
+              }
+            }

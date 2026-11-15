@@ -1,0 +1,288 @@
+package server
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/config"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/orchestrator"
+	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
+)
+
+func TestReviewPreparationLifecycle(t *testing.T) {
+	for _, tc := range []struct{ existing, confirm, cancelEarly, adopted, failDelete, uncertainAdd, commandLost, sceneMetadata bool }{{}, {existing: true}, {confirm: true}, {cancelEarly: true}, {adopted: true}, {failDelete: true}, {uncertainAdd: true}, {commandLost: true}, {sceneMetadata: true}} {
+		existing := tc.existing
+		name := map[bool]string{false: "new", true: "existing"}[existing]
+		if tc.confirm {
+			name += "/confirm"
+		}
+		if tc.cancelEarly {
+			name += "/cancel-during-refresh"
+		}
+		if tc.adopted {
+			name += "/adopted"
+		}
+		if tc.failDelete {
+			name += "/retry-cleanup"
+		}
+		if tc.uncertainAdd {
+			name += "/late-add"
+		}
+		if tc.commandLost {
+			name += "/lost-refresh-history"
+		}
+		if tc.sceneMetadata {
+			name += "/scene-metadata"
+		}
+		t.Run(name, func(t *testing.T) {
+			db := newTestStorage(t)
+			if err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `INSERT INTO review_queue(id,anilist_id,media_type,title_romaji,candidates_json,reason,status) VALUES(1,100,'SERIES','Anime Part 2','[]','UNMAPPED','PENDING')`)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			ready := existing
+			commandAvailable := true
+			added := existing
+			deleted := false
+			failDelete := tc.failDelete
+			var ownershipTag servarr.Tag
+			series := servarr.Series{ID: 10, TVDBID: 123, Title: "Anime", Path: "/anime/Anime", QualityProfileID: 1, Seasons: []servarr.Season{{SeasonNumber: 1}}}
+			series.Monitored = existing
+			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/api/v3/series/lookup":
+					result := series
+					if !added {
+						result.ID = 0
+					}
+					_ = json.NewEncoder(w).Encode([]servarr.Series{result})
+				case r.URL.Path == "/api/v3/tag" && r.Method == http.MethodGet:
+					tags := []servarr.Tag{{ID: 1, Label: "anilist-sync"}}
+					if ownershipTag.ID > 0 {
+						tags = append(tags, ownershipTag)
+					}
+					_ = json.NewEncoder(w).Encode(tags)
+				case r.URL.Path == "/api/v3/tag" && r.Method == http.MethodPost:
+					var tag servarr.Tag
+					_ = json.NewDecoder(r.Body).Decode(&tag)
+					tag.ID = 99
+					ownershipTag = tag
+					_ = json.NewEncoder(w).Encode(tag)
+				case r.URL.Path == "/api/v3/tag/99" && r.Method == http.MethodDelete:
+					ownershipTag = servarr.Tag{}
+					w.WriteHeader(http.StatusOK)
+				case r.URL.Path == "/api/v3/series" && r.Method == http.MethodPost:
+					var req servarr.AddSeriesRequest
+					_ = json.NewDecoder(r.Body).Decode(&req)
+					if req.Monitored || req.AddOptions == nil || req.AddOptions.Monitor != "none" || req.AddOptions.SearchForMissingEpisodes || req.AddOptions.SearchForCutoffUnmetEpisodes {
+						t.Errorf("unsafe add: %+v", req)
+					}
+					series.Tags = req.Tags
+					added = true
+					series.AddOptions = req.AddOptions
+					if tc.uncertainAdd {
+						added = false
+						http.Error(w, "response lost", http.StatusBadGateway)
+						return
+					}
+					_ = json.NewEncoder(w).Encode(series)
+				case r.URL.Path == "/api/v3/series/editor" && r.Method == http.MethodPut:
+					var body struct {
+						SeriesIDs, Tags []int
+						ApplyTags       string
+					}
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					if !slices.Equal(body.SeriesIDs, []int{10}) || !slices.Equal(body.Tags, []int{99}) || body.ApplyTags != "remove" {
+						t.Errorf("unexpected tag edit: %+v", body)
+					}
+					series.Tags = slices.DeleteFunc(series.Tags, func(id int) bool { return id == 99 })
+				case r.URL.Path == "/api/v3/series/10" && r.Method == http.MethodDelete:
+					if failDelete {
+						http.Error(w, "try again", http.StatusBadRequest)
+						return
+					}
+					if existing {
+						t.Error("deleted pre-existing series")
+					}
+					if r.URL.Query().Get("deleteFiles") != "false" || r.URL.Query().Get("addImportListExclusion") != "false" {
+						t.Error("unsafe deletion flags")
+					}
+					deleted = true
+					added = false
+				case r.URL.Path == "/api/v3/series/10":
+					result := series
+					if ready {
+						result.AddOptions = nil
+						if tc.sceneMetadata {
+							// Sonarr's XEM refresh derives this from available scene mappings.
+							result.UseSceneNumbering = true
+						}
+					}
+					_ = json.NewEncoder(w).Encode(result)
+				case r.URL.Path == "/api/v3/command" || r.URL.Path == "/api/v3/command/7":
+					if !commandAvailable {
+						if r.URL.Path == "/api/v3/command" {
+							_, _ = w.Write([]byte(`[]`))
+						} else {
+							http.NotFound(w, r)
+						}
+						return
+					}
+					status := "started"
+					if ready {
+						status = "completed"
+					}
+					cmd := map[string]any{"id": 7, "name": "RefreshSeries", "status": status, "body": map[string]any{"seriesIds": []int{10}, "isNewSeries": true}}
+					if r.URL.Path == "/api/v3/command" {
+						_ = json.NewEncoder(w).Encode([]any{cmd})
+					} else {
+						_ = json.NewEncoder(w).Encode(cmd)
+					}
+				case r.URL.Path == "/api/v3/episode":
+					_ = json.NewEncoder(w).Encode([]servarr.Episode{{ID: 101, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 1}, {ID: 113, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 13, Title: "Part 2 premiere"}})
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer remote.Close()
+			cfg := config.NewDefault()
+			cfg.APIKey = "key"
+			cfg.AuthenticationRequired = "DisabledForLocalAddresses"
+			cfg.SonarrURL = remote.URL
+			cfg.SonarrAPIKey = "key"
+			cfg.SonarrRootFolderPath = "/anime"
+			client, _ := servarr.NewSonarrClient(remote.URL, "key")
+			orch := orchestrator.New(db, cfg, nil, client, nil)
+			handler := NewServer(cfg, "", db, orch, nil).Handler()
+			request := func(method, path, body string) *httptest.ResponseRecorder {
+				req := httptest.NewRequest(method, path, strings.NewReader(body))
+				req.RemoteAddr = "127.0.0.1:1234"
+				req.Header.Set("X-Api-Key", "key")
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+				return rec
+			}
+			rec := request(http.MethodPost, "/api/v1/review/1/prepare", `{"targetId":123}`)
+			if tc.uncertainAdd {
+				if rec.Code == 200 {
+					t.Fatal("expected an uncertain add response")
+				}
+				// A lost response remains uncertain even after the normal cleanup timeout.
+				if err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+					_, err := tx.ExecContext(ctx, `UPDATE review_preparations SET add_started_at=datetime('now','-1 day')`)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				rec = request(http.MethodDelete, "/api/v1/review/1/preparation", "")
+				if !strings.Contains(rec.Body.String(), `"status":"CANCELLING"`) || ownershipTag.ID != 99 {
+					t.Fatalf("lost lease before add settled: %s", rec.Body.String())
+				}
+				added, ready = true, true
+				rec = request(http.MethodGet, "/api/v1/review/1/preparation", "")
+				if !strings.Contains(rec.Body.String(), `"status":"RETAINED"`) || deleted {
+					t.Fatalf("could not prove original settings: %s", rec.Body.String())
+				}
+				return
+			}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("prepare %d: %s", rec.Code, rec.Body.String())
+			}
+			if tc.sceneMetadata {
+				// Preserve compatibility with pending leases that included this metadata field.
+				if err := db.Write(context.Background(), func(ctx context.Context, tx *sql.Tx) error {
+					_, err := tx.ExecContext(ctx, `UPDATE review_preparations SET baseline=json_set(baseline,'$.SceneNumbering',json('false')) WHERE review_id=1`)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !existing && !strings.Contains(rec.Body.String(), `"status":"WAITING"`) {
+				t.Fatalf("not waiting: %s", rec.Body.String())
+			}
+			if tc.cancelEarly {
+				rec = request(http.MethodDelete, "/api/v1/review/1/preparation", "")
+				if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"status":"CANCELLING"`) || deleted {
+					t.Fatalf("cancel during refresh: %d %s", rec.Code, rec.Body.String())
+				}
+				ready = true
+				restarted := orchestrator.New(db, cfg, nil, client, nil)
+				if err := restarted.MaintainReviewPreparations(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if !deleted {
+					t.Fatal("restart lost cleanup ownership")
+				}
+				return
+			}
+			ready = true
+			if tc.commandLost {
+				commandAvailable = false
+				rec = request(http.MethodGet, "/api/v1/review/1/preparation", "")
+				if !strings.Contains(rec.Body.String(), `"status":"ERROR"`) {
+					t.Fatalf("missing command should offer recovery: %s", rec.Body.String())
+				}
+				rec = request(http.MethodDelete, "/api/v1/review/1/preparation", "")
+				if !strings.Contains(rec.Body.String(), `"status":"RETAINED"`) || deleted {
+					t.Fatalf("unverified refresh should retain series: %s", rec.Body.String())
+				}
+				rec = request(http.MethodPost, "/api/v1/review/1/prepare", `{"targetId":123}`)
+				if !strings.Contains(rec.Body.String(), `"status":"READY"`) {
+					t.Fatalf("could not reload retained series: %s", rec.Body.String())
+				}
+				return
+			}
+			rec = request(http.MethodGet, "/api/v1/review/1/preparation", "")
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"READY"`) || !strings.Contains(rec.Body.String(), "Part 2 premiere") {
+				t.Fatalf("poll: %d %s", rec.Code, rec.Body.String())
+			}
+			if tc.confirm {
+				commandAvailable = false
+				rec = request(http.MethodPost, "/api/v1/review/1/resolve", `{"mediaType":"SERIES","tvdbId":123,"seasons":"1","episodeNumbers":[13]}`)
+				if rec.Code != 200 {
+					t.Fatalf("confirm: %d %s", rec.Code, rec.Body.String())
+				}
+				rec = request(http.MethodGet, "/api/v1/overrides", "")
+				if !strings.Contains(rec.Body.String(), `"episodeNumbers":[13]`) {
+					t.Fatalf("lost episode mapping: %s", rec.Body.String())
+				}
+			}
+			if tc.adopted {
+				series.SeasonFolder = !series.SeasonFolder
+			}
+			rec = request(http.MethodDelete, "/api/v1/review/1/preparation", "")
+			if tc.failDelete {
+				if rec.Code == 200 {
+					t.Fatal("cleanup failure was hidden")
+				}
+				failDelete = false
+				restarted := orchestrator.New(db, cfg, nil, client, nil)
+				if err := restarted.MaintainReviewPreparations(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if !deleted {
+					t.Fatal("failed deletion was not retried")
+				}
+				return
+			}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("cancel: %d %s", rec.Code, rec.Body.String())
+			}
+			if deleted == (existing || tc.confirm || tc.adopted) {
+				t.Fatalf("deleted=%v, pre-existing=%v, response=%s", deleted, existing, rec.Body.String())
+			}
+			if existing && !series.Monitored {
+				t.Fatal("changed pre-existing monitoring")
+			}
+		})
+	}
+}

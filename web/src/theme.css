@@ -1,0 +1,221 @@
+:root {
+  /* Core Brand & Status Colors */
+  --sonarrBlue: #35c5f4;
+  --themeBlue: #35c5f4;
+  --themeAlternateBlue: #2193b5;
+  --themeRed: #c4273c;
+  --primaryColor: #5d9cec;
+  --selectedColor: #f9be03;
+  --successColor: #00853d;
+  --dangerColor: #f05050;
+  --warningColor: #ffa500;
+  --infoColor: #5d9cec;
+  --purple: #7a43b6;
+  --pink: #ff69b4;
+
+  /* Neutrals & Text */
+  --black: #000;
+  --white: #fff;
+  --offWhite: #f5f7fa;
+  --darkGray: #888;
+  --mediumGray: #999;
+  --gray: #adadad;
+  --lightGray: #ddd;
+  --textColor: #ccc;
+  --defaultColor: #ccc;
+  --disabledColor: #999;
+  --dimColor: #555;
+  --helpTextColor: #909293;
+
+  /* Typography */
+  --defaultFontFamily: Roboto, "open sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --monoSpaceFontFamily: "Ubuntu Mono", Menlo, Monaco, Consolas, "Courier New", monospace;
+  --extraSmallFontSize: 11px;
+  --smallFontSize: 12px;
+  --defaultFontSize: 14px;
+  --intermediateFontSize: 15px;
+  --largeFontSize: 16px;
+  --lineHeight: 1.528571429; /* 20/14 */
+
+  /* Layout Surfaces */
+  --themeDarkColor: #494949;
+  --themeLightColor: #595959;
+  --pageBackground: #202020;
+  --pageFooterBackground: rgba(0, 0, 0, 0.25);
+  --pageHeaderBackgroundColor: #2a2a2a;
+
+  /* Sidebar */
+  --sidebarColor: #e1e2e3;
+  --sidebarBackgroundColor: #2a2a2a;
+  --sidebarActiveBackgroundColor: #333333;
+
+  /* Toolbar */
+  --toolbarColor: #e1e2e3;
+  --toolbarBackgroundColor: #262626;
+  --toolbarMenuItemBackgroundColor: #333;
+  --toolbarMenuItemHoverBackgroundColor: #414141;
+  --toolbarLabelColor: #e1e2e3;
+  --toobarButtonHoverColor: #35c5f4;
+  --toobarButtonSelectedColor: #35c5f4;
+
+  /* Borders & Inputs */
+  --borderColor: #858585;
+  --inputBackgroundColor: #333;
+  --inputReadOnlyBackgroundColor: #222;
+  --inputBorderColor: #dde6e9;
+  --inputBoxShadowColor: rgba(0, 0, 0, 0.075);
+  --inputFocusBorderColor: #66afe9;
+  --inputFocusBoxShadowColor: rgba(102, 175, 233, 0.6);
+  --inputErrorBorderColor: #f05050;
+  --inputErrorBoxShadowColor: rgba(240, 80, 80, 0.6);
+  --inputWarningBorderColor: #ffa500;
+  --inputWarningBoxShadowColor: rgba(255, 165, 0, 0.6);
+  --inputHoverBackgroundColor: rgba(255, 255, 255, 0.20);
+  --inputSelectedBackgroundColor: rgba(255, 255, 255, 0.05);
+  --advancedFormLabelColor: #ff902b;
+  --disabledCheckInputColor: #ddd;
+  --disabledInputColor: #808080;
+
+  /* Buttons */
+  --defaultButtonTextColor: #eee;
+  --defaultBackgroundColor: #333;
+  --defaultBorderColor: #393f45;
+  --defaultHoverBackgroundColor: #444;
+  --defaultHoverBorderColor: #5a6265;
+
+  --primaryBackgroundColor: #5d9cec;
+  --primaryBorderColor: #5899eb;
+  --primaryHoverBackgroundColor: #4b91ea;
+  --primaryHoverBorderColor: #3483e7;
+
+  --successBackgroundColor: #27c24c;
+  --successBorderColor: #26be4a;
+  --successHoverBackgroundColor: #24b145;
+  --successHoverBorderColor: #1f9c3d;
+
+  --warningBackgroundColor: #ff902b;
+  --warningBorderColor: #ff8d26;
+  --warningHoverBackgroundColor: #ff8517;
+  --warningHoverBorderColor: #fc7800;
+
+  --dangerBackgroundColor: #f05050;
+  --dangerBorderColor: #f04b4b;
+  --dangerHoverBackgroundColor: #ee3d3d;
+  --dangerHoverBorderColor: #ec2626;
+
+  --iconButtonDisabledColor: #7a7a7a;
+  --iconButtonHoverColor: #666;
+  --iconButtonHoverLightColor: #ccc;
+
+  /* Labels & Links */
+  --inverseLabelColor: #ddd;
+  --inverseLabelTextColor: #333;
+  --disabledLabelColor: #838383;
+  --infoTextColor: #fff;
+  --defaultLinkHoverColor: #fff;
+  --linkColor: #5d9cec;
+  --linkHoverColor: #1b72e2;
+
+  /* Cards, Modals, Tables, Popovers */
+  --cardBackgroundColor: #333333;
+  --cardShadowColor: #111;
+  --cardAlternateBackgroundColor: #333333;
+  --cardCenterBackgroundColor: #2a2a2a;
+  --addSeriesBackgroundColor: #2a2a2a;
+  --seriesBackgroundColor: #2a2a2a;
+  --seasonBackgroundColor: #424242;
+  --modalBackdropBackgroundColor: rgba(0, 0, 0, 0.6);
+  --modalBackgroundColor: #2a2a2a;
+  --modalCloseButtonHoverColor: #888;
+  --tableRowHoverBackgroundColor: rgba(255, 255, 255, 0.08);
+  --scrollbarBackgroundColor: #707070;
+  --scrollbarHoverBackgroundColor: #606060;
+  --progressBarBackgroundColor: #727070;
+
+  /* Alerts */
+  --alertDangerBorderColor: #a94442;
+  --alertDangerBackgroundColor: rgba(255, 0, 0, 0.1);
+  --alertDangerColor: #ccc;
+  --alertInfoBorderColor: #31708f;
+  --alertInfoBackgroundColor: rgba(0, 0, 255, 0.1);
+  --alertInfoColor: #ccc;
+  --alertSuccessBorderColor: #3c763d;
+  --alertSuccessBackgroundColor: rgba(0, 255, 0, 0.1);
+  --alertSuccessColor: #ccc;
+  --alertWarningBorderColor: #8a6d3b;
+  --alertWarningBackgroundColor: rgba(255, 255, 0, 0.1);
+  --alertWarningColor: #ccc;
+
+  /* Dimensions */
+  --pageContentBodyPadding: 20px;
+  --pageContentBodyPaddingSmallScreen: 10px;
+  --headerHeight: 60px;
+  --sidebarWidth: 210px;
+  --toolbarHeight: 60px;
+  --toolbarButtonWidth: 60px;
+  --toolbarSeparatorMargin: 20px;
+  --formGroupExtraSmallWidth: 550px;
+  --formGroupSmallWidth: 650px;
+  --formGroupMediumWidth: 800px;
+  --formGroupLargeWidth: 1200px;
+  --formLabelSmallWidth: 150px;
+  --formLabelLargeWidth: 250px;
+  --formLabelRightMarginWidth: 20px;
+  --inputHeight: 35px;
+  --modalBodyPadding: 30px;
+}
+
+/* Scaffolding & Global Reset */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  background-color: var(--pageBackground);
+  color: var(--textColor);
+  font-family: var(--defaultFontFamily);
+  font-size: var(--defaultFontSize);
+  line-height: var(--lineHeight);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button, input, optgroup, select, textarea {
+  margin: 0;
+  font-size: inherit;
+  font-family: inherit;
+  line-height: var(--lineHeight);
+}
+
+a {
+  color: var(--linkColor);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--linkHoverColor);
+  text-decoration: underline;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbarBackgroundColor);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbarHoverBackgroundColor);
+}

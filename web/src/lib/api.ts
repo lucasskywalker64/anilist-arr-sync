@@ -1,0 +1,548 @@
+import type {
+  ReviewItem,
+  OverrideItem,
+  StagedAction,
+  SyncStatus,
+  SyncReport,
+  SyncHistoryItem,
+  AppConfig,
+  UpdateConfigResponse,
+  BackupItem,
+  UpdateStatus,
+  NotificationItem,
+  CurrentUser,
+  Candidate,
+  MappingResolution,
+  ReviewPreparation,
+  IgnoredItem,
+  LibraryItem,
+  LibraryStats,
+  FilesystemResponse,
+  AniListProfile,
+  ServarrConnectionOptions,
+} from './types';
+
+import { writable } from 'svelte/store';
+
+let cachedCsrfToken = '';
+let cachedApiKey = '';
+let apiKeyCleared = false;
+if (typeof localStorage !== 'undefined') {
+  cachedApiKey = localStorage.getItem('anilist_arr_sync_apikey') || '';
+}
+
+export const apiKeyStore = writable<string>(cachedApiKey);
+
+export function getCsrfToken(): string {
+  if (cachedCsrfToken) return cachedCsrfToken;
+  if (typeof document !== 'undefined') {
+    const match = document.cookie.match(/(^|;)\s*anilist_sync_csrf=([^;]+)/);
+    if (match) {
+      cachedCsrfToken = decodeURIComponent(match[2]);
+      return cachedCsrfToken;
+    }
+  }
+  return '';
+}
+
+export function setCsrfToken(token: string) {
+  cachedCsrfToken = token;
+}
+
+export function getApiKey(): string {
+  if (cachedApiKey) return cachedApiKey;
+  if (apiKeyCleared) return '';
+  if (typeof window !== 'undefined' && window.AniListArrSync?.apiKey) {
+    return window.AniListArrSync.apiKey;
+  }
+  return '';
+}
+
+export function setApiKey(key: string) {
+  cachedApiKey = key;
+  apiKeyCleared = key === '';
+  apiKeyStore.set(key);
+  if (typeof window !== 'undefined' && window.AniListArrSync && key === '') {
+    window.AniListArrSync.apiKey = '';
+  }
+  if (typeof localStorage !== 'undefined') {
+    if (key) {
+      localStorage.setItem('anilist_arr_sync_apikey', key);
+    } else {
+      localStorage.removeItem('anilist_arr_sync_apikey');
+    }
+  }
+}
+
+export function getBaseUrl(): string {
+  if (typeof window !== 'undefined' && window.AniListArrSync?.urlBase) {
+    const base = window.AniListArrSync.urlBase.trim();
+    if (base === '/' || base === '') return '';
+    return base.endsWith('/') ? base.slice(0, -1) : base;
+  }
+  return '';
+}
+
+async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  const baseUrl = getBaseUrl();
+  const url = `${baseUrl}${endpoint}`;
+
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...(options.headers as Record<string, string>),
+  };
+
+  const apiKey = getApiKey();
+  if (apiKey) {
+    headers['X-Api-Key'] = apiKey;
+  }
+
+  const method = (options.method || 'GET').toUpperCase();
+  if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
+    headers['X-Requested-With'] = 'XMLHttpRequest';
+    const csrf = getCsrfToken();
+    if (csrf) {
+      headers['X-CSRF-Token'] = csrf;
+    }
+    if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
+      headers['Content-Type'] = 'application/json';
+    }
+  }
+
+  const res = await fetch(url, {
+    ...options,
+    method,
+    headers,
+  });
+
+  if (!res.ok) {
+    let errorMessage = `Request failed with status ${res.status}`;
+    let setupRequired: boolean | undefined = undefined;
+    let applied: number[] | undefined;
+    let failedId: number | undefined;
+    try {
+      const errData = await res.json();
+      if (errData && errData.error) {
+        errorMessage = errData.error;
+      }
+      if (errData && typeof errData.setupRequired === 'boolean') {
+        setupRequired = errData.setupRequired;
+      }
+      if (Array.isArray(errData?.applied)) {
+        applied = errData.applied;
+      }
+      if (typeof errData?.failedId === 'number') {
+        failedId = errData.failedId;
+      }
+    } catch {
+      // not JSON
+    }
+    const error = new Error(errorMessage) as Error & { status: number; setupRequired?: boolean; applied?: number[]; failedId?: number };
+    error.status = res.status;
+    if (setupRequired !== undefined) {
+      error.setupRequired = setupRequired;
+    }
+    if (applied !== undefined) {
+      error.applied = applied;
+    }
+    if (failedId !== undefined) {
+      error.failedId = failedId;
+    }
+    throw error;
+  }
+
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    return (await res.json()) as T;
+  }
+  return {} as T;
+}
+
+// A healthy response from the previous boot does not mean restart has finished.
+export async function waitForRestart(previousInstance: string, reconnectUrl: string, signal?: AbortSignal, statusUrl = ''): Promise<void> {
+  const deadline = Date.now() + 60000;
+  while (!signal?.aborted && Date.now() < deadline) {
+    let health: { status?: string; instanceId?: string } | undefined;
+    try {
+      const response = await fetch(statusUrl || `${reconnectUrl}api/v1/health`, {
+        cache: 'no-store', credentials: 'omit',
+        signal: AbortSignal.any([AbortSignal.timeout(Math.min(3000, deadline - Date.now())), ...(signal ? [signal] : [])]),
+      });
+      if (response.ok) health = await response.json();
+    } catch {
+      // Listener downtime, proxy errors, and request timeouts are expected here.
+    }
+    if (health?.status === 'failed') throw new Error('Restart failed. Check the server log.');
+    if (health?.status === (statusUrl ? 'ready' : 'ok') && health.instanceId && health.instanceId !== previousInstance) return;
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  if (!signal?.aborted) throw new Error('Timed out waiting for the application to restart.');
+  throw new DOMException('Restart polling cancelled', 'AbortError');
+}
+
+export const api = {
+  // System Health & Version
+  async getHealth(): Promise<{ status: string; version: string; instanceId: string }> {
+    return request('/api/v1/health');
+  },
+
+  async getSystemStatus(): Promise<{ isContainerized: boolean; instanceId: string; version: string; os: string; architecture: string }> {
+    return request('/api/v1/system/status');
+  },
+
+  async restart(): Promise<{ restarting: boolean; instanceId: string; reconnectUrl: string; statusUrl?: string }> {
+    return request('/api/v1/system/restart', { method: 'POST' });
+  },
+
+  async shutdown(): Promise<{ shuttingDown: boolean }> {
+    return request('/api/v1/system/shutdown', { method: 'POST' });
+  },
+
+  // Auth
+  async getUser(): Promise<CurrentUser> {
+    const user = await request<CurrentUser>('/api/v1/auth/user');
+    if (user.csrfToken) {
+      setCsrfToken(user.csrfToken);
+    }
+    return user;
+  },
+
+  async login(credentials: { username: string; password: string }): Promise<{ status: string; username: string; csrfToken?: string }> {
+    const res = await request<{ status: string; username: string; csrfToken?: string }>('/api/v1/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(credentials),
+    });
+    if (res.csrfToken) {
+      setCsrfToken(res.csrfToken);
+    }
+    return res;
+  },
+
+  async setup(credentials: { username: string; password: string }): Promise<{ status: string; username: string; csrfToken?: string }> {
+    const res = await request<{ status: string; username: string; csrfToken?: string }>('/api/v1/auth/setup', {
+      method: 'POST',
+      body: JSON.stringify(credentials),
+    });
+    if (res.csrfToken) {
+      setCsrfToken(res.csrfToken);
+    }
+    return res;
+  },
+
+  async logout(): Promise<{ status: string }> {
+    return request('/api/v1/auth/logout', { method: 'POST' });
+  },
+
+  // Sync
+  async getSyncStatus(): Promise<SyncStatus> {
+    const res = await request<{ running: boolean; lastReport?: SyncReport | null }>('/api/v1/sync/status');
+    return {
+      isSyncing: !!res.running,
+      lastSync: res.lastReport || null,
+    };
+  },
+
+  async startSync(dryRun = false): Promise<{ status: string }> {
+    return request(`/api/v1/sync/start${dryRun ? '?dryRun=true' : ''}`, { method: 'POST' });
+  },
+
+  async getSyncHistory(): Promise<SyncHistoryItem[]> {
+    return request('/api/v1/sync/history');
+  },
+
+  // Review Queue
+  async getReviewQueue(): Promise<ReviewItem[]> {
+    const items = await request<ReviewItem[]>('/api/v1/review');
+    return (items || []).map((item) => {
+      let candidates: Candidate[] = [];
+      if (item.candidatesJson) {
+        try {
+          candidates = JSON.parse(item.candidatesJson);
+        } catch {
+          candidates = [];
+        }
+      }
+      return {
+        ...item,
+        candidates,
+      };
+    });
+  },
+
+  async resolveReview(id: number, resolution: MappingResolution): Promise<{ status: string }> {
+    return request(`/api/v1/review/${id}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify(resolution),
+    });
+  },
+
+  async prepareReview(id: number, targetId: number): Promise<ReviewPreparation> {
+    return request(`/api/v1/review/${id}/prepare`, { method: 'POST', body: JSON.stringify({ targetId }) });
+  },
+
+  async getReviewPreparation(id: number): Promise<ReviewPreparation> {
+    return request(`/api/v1/review/${id}/preparation`);
+  },
+
+  async cancelReviewPreparation(id: number): Promise<ReviewPreparation> {
+    return request(`/api/v1/review/${id}/preparation`, { method: 'DELETE' });
+  },
+
+  async lookupReviewMovie(id: number): Promise<{ tmdbId: number; title: string; year?: number; overview?: string }> {
+    return request(`/api/v1/radarr/lookup/${id}`);
+  },
+
+  async ignoreReview(id: number): Promise<{ status: string }> {
+    return request(`/api/v1/review/${id}/ignore`, {
+      method: 'POST',
+    });
+  },
+
+  // Ignored Titles (Blocklist)
+  async getIgnored(): Promise<IgnoredItem[]> {
+    return request('/api/v1/ignored');
+  },
+
+  async deleteIgnored(anilistId: number): Promise<{ status: string; anilistId: number }> {
+    return request(`/api/v1/ignored/${anilistId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  // Library
+  async getLibrary(params?: {
+    status?: string;
+    service?: string;
+    monitored?: string;
+    search?: string;
+    sort?: string;
+    order?: string;
+  }): Promise<LibraryItem[]> {
+    const searchParams = new URLSearchParams();
+    if (params) {
+      if (params.status && params.status !== 'all') searchParams.set('status', params.status);
+      if (params.service && params.service !== 'all') searchParams.set('service', params.service);
+      if (params.monitored && params.monitored !== 'all') searchParams.set('monitored', params.monitored);
+      if (params.search) searchParams.set('search', params.search);
+      if (params.sort) searchParams.set('sort', params.sort);
+      if (params.order) searchParams.set('order', params.order);
+    }
+    const qs = searchParams.toString();
+    return request<LibraryItem[]>(`/api/v1/library${qs ? `?${qs}` : ''}`);
+  },
+
+  async getLibraryStats(): Promise<LibraryStats> {
+    return request<LibraryStats>('/api/v1/library/stats');
+  },
+
+  // Overrides
+  async getOverrides(): Promise<OverrideItem[]> {
+    return request('/api/v1/overrides');
+  },
+
+  async createOverride(override: Partial<OverrideItem>): Promise<{ status: string; id?: number }> {
+    return request('/api/v1/overrides', {
+      method: 'POST',
+      body: JSON.stringify(override),
+    });
+  },
+
+  async deleteOverride(id: number): Promise<{ status: string }> {
+    return request(`/api/v1/overrides/${id}`, {
+      method: 'DELETE',
+    });
+  },
+
+  // Staged Actions
+  async getStaged(): Promise<StagedAction[]> {
+    const items = await request<StagedAction[]>('/api/v1/staged');
+    return (items || []).map((item) => ({
+      ...item,
+      service: item.service || item.targetService || '',
+      payload: item.payload ?? item.payloadJson ?? '',
+    }));
+  },
+
+  async applyStaged(ids: number[]): Promise<{ status: string; applied?: number[]; appliedCount: number }> {
+    const res = await request<{ status: string; applied?: number[]; appliedCount?: number }>('/api/v1/staged/apply', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+    return {
+      status: res.status,
+      applied: res.applied,
+      appliedCount: res.appliedCount ?? (Array.isArray(res.applied) ? res.applied.length : ids.length),
+    };
+  },
+
+  async rejectStaged(ids: number[]): Promise<{ status: string; rejected?: number[]; rejectedCount: number }> {
+    const res = await request<{ status: string; rejected?: number[]; rejectedCount?: number }>('/api/v1/staged/reject', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+    return {
+      status: res.status,
+      rejected: res.rejected,
+      rejectedCount: res.rejectedCount ?? (Array.isArray(res.rejected) ? res.rejected.length : ids.length),
+    };
+  },
+
+  // Config
+  async getConfig(): Promise<AppConfig> {
+    return request('/api/v1/config');
+  },
+
+  async testAniList(username: string): Promise<AniListProfile> {
+    return request('/api/v1/anilist/test', { method: 'POST', body: JSON.stringify({ username }) });
+  },
+
+  async testServarr(type: 'sonarr' | 'radarr', baseUrl: string, apiKey: string): Promise<ServarrConnectionOptions> {
+    return request('/api/v1/servarr/test', { method: 'POST', body: JSON.stringify({ type, baseUrl, apiKey }) });
+  },
+
+  async updateConfig(config: Partial<AppConfig>): Promise<UpdateConfigResponse> {
+    return request('/api/v1/config', {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    });
+  },
+
+  // Backups
+  async getBackups(): Promise<BackupItem[]> {
+    return request('/api/v1/backups');
+  },
+
+  async createBackup(): Promise<BackupItem> {
+    return request('/api/v1/backups', {
+      method: 'POST',
+    });
+  },
+
+  async restoreBackup(filename: string): Promise<{ status: string }> {
+    return request('/api/v1/backups/restore', {
+      method: 'POST',
+      body: JSON.stringify({ filename }),
+    });
+  },
+
+  // Updates
+  async getUpdateStatus(): Promise<UpdateStatus> {
+    return request('/api/v1/update/status');
+  },
+
+  async applyUpdate(): Promise<{ status: string }> {
+    return request('/api/v1/update/apply', {
+      method: 'POST',
+    });
+  },
+
+  // Notifications
+  async getNotifications(): Promise<NotificationItem[]> {
+    const list = await request<any[]>('/api/v1/notifications');
+    return (list || []).map((item) => {
+      let settings: Record<string, unknown> = {};
+      if (item.configJson) {
+        try {
+          settings = JSON.parse(item.configJson);
+          if (settings.url && !settings.webhookUrl) {
+            settings.webhookUrl = settings.url;
+          }
+        } catch {}
+      } else if (item.settings) {
+        settings = item.settings;
+      }
+      const provider = (item.provider || item.type || 'DISCORD').toUpperCase();
+      return {
+        ...item,
+        type: provider as 'DISCORD' | 'WEBHOOK',
+        provider,
+        onAdded: item.onAdded ?? true,
+        onReview: item.onReview ?? true,
+        onError: item.onError ?? true,
+        onComplete: item.onComplete ?? false,
+        onUpdate: item.onUpdate ?? true,
+        onSyncStart: item.onAdded ?? item.onSyncStart ?? true,
+        onSyncSuccess: item.onComplete ?? item.onSyncSuccess ?? false,
+        onSyncFailure: item.onError ?? item.onSyncFailure ?? true,
+        onReviewQueueNeeded: item.onReview ?? item.onReviewQueueNeeded ?? true,
+        settings,
+      };
+    });
+  },
+
+  async createNotification(notif: Partial<NotificationItem>): Promise<{ status: string; id?: number }> {
+    const provider = (notif.provider || notif.type || 'DISCORD').toUpperCase();
+    const webhookUrl = (notif.settings?.webhookUrl || notif.settings?.url || '') as string;
+    const payload = {
+      name: notif.name,
+      provider,
+      type: provider,
+      configJson: notif.configJson || JSON.stringify({ url: webhookUrl }),
+      settings: notif.settings || { webhookUrl },
+      url: webhookUrl,
+      onAdded: notif.onAdded ?? notif.onSyncStart ?? true,
+      onReview: notif.onReview ?? notif.onReviewQueueNeeded ?? true,
+      onError: notif.onError ?? notif.onSyncFailure ?? true,
+      onComplete: notif.onComplete ?? notif.onSyncSuccess ?? false,
+      onUpdate: notif.onUpdate ?? true,
+    };
+    return request('/api/v1/notifications', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async updateNotification(id: number, notif: Partial<NotificationItem>): Promise<{ status: string }> {
+    const provider = (notif.provider || notif.type || 'DISCORD').toUpperCase();
+    const webhookUrl = (notif.settings?.webhookUrl || notif.settings?.url || '') as string;
+    const payload = {
+      name: notif.name,
+      provider,
+      type: provider,
+      configJson: notif.configJson || JSON.stringify({ url: webhookUrl }),
+      settings: notif.settings || { webhookUrl },
+      url: webhookUrl,
+      onAdded: notif.onAdded ?? notif.onSyncStart,
+      onReview: notif.onReview ?? notif.onReviewQueueNeeded,
+      onError: notif.onError ?? notif.onSyncFailure,
+      onComplete: notif.onComplete ?? notif.onSyncSuccess,
+      onUpdate: notif.onUpdate,
+    };
+    return request(`/api/v1/notifications/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async deleteNotification(id: number): Promise<{ status: string }> {
+    return request(`/api/v1/notifications/${id}`, {
+      method: 'DELETE',
+    });
+  },
+
+  async testNotificationPayload(payload: { type: string; settings: Record<string, unknown> }): Promise<{ status: string; message?: string }> {
+    const provider = (payload.type || 'DISCORD').toUpperCase();
+    const webhookUrl = (payload.settings?.webhookUrl || payload.settings?.url || '') as string;
+    return request('/api/v1/notifications/test', {
+      method: 'POST',
+      body: JSON.stringify({
+        provider,
+        type: provider,
+        configJson: JSON.stringify({ url: webhookUrl }),
+        settings: payload.settings,
+        url: webhookUrl,
+      }),
+    });
+  },
+
+  async testNotificationConnection(id: number): Promise<{ status: string; message?: string }> {
+    return request(`/api/v1/notifications/${id}/test`, {
+      method: 'POST',
+    });
+  },
+
+  async getFilesystem(path?: string): Promise<FilesystemResponse> {
+    const query = path ? `?path=${encodeURIComponent(path)}` : '';
+    return request(`/api/v1/filesystem${query}`);
+  },
+};
