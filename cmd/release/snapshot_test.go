@@ -60,7 +60,7 @@ func TestSnapshot(t *testing.T) {
 			t.Setenv("RELEASE_MODE", mode)
 			version := "v0.0.1"
 			if mode == "nightly" {
-				version += "-nightly.20261112010101." + os.Getenv("RELEASE_COMMIT")
+				version += "-nightly.20261116.123"
 			}
 			if mode == "bootstrap" {
 				version += "-bootstrap.1"

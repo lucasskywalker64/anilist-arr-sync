@@ -26,7 +26,7 @@ class PublicationBoundary(unittest.TestCase):
             calls.append(args)
             raise subprocess.CalledProcessError(1, args)
         with self.assertRaises(subprocess.CalledProcessError):
-            self.module().publish_nightly(Path('.release/final'), 'v0.1.0-nightly.20261112010101.aaaaaaaaaaaa', 'a'*40, runner)
+            self.module().publish_nightly(Path('.release/final'), 'v0.1.0-nightly.20261116.123', 'a'*40, runner)
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][:4], ['go', 'run', './cmd/release', 'verify'])
 
@@ -103,9 +103,9 @@ class PublicationBoundary(unittest.TestCase):
                     return subprocess.CompletedProcess(args, 0, stdout=json.dumps(value))
                 if failure:
                     with self.assertRaises(subprocess.CalledProcessError):
-                        self.module().publish_nightly(directory, 'v0.1.0-nightly.20261112010101.'+'a'*40, 'a'*40, runner)
+                        self.module().publish_nightly(directory, 'v0.1.0-nightly.20261116.123', 'a'*40, runner)
                 else:
-                    self.module().publish_nightly(directory, 'v0.1.0-nightly.20261112010101.'+'a'*40, 'a'*40, runner)
+                    self.module().publish_nightly(directory, 'v0.1.0-nightly.20261116.123', 'a'*40, runner)
                 mutations = [args for args in calls if args[:3] == ['gh', 'release', 'delete'] or 'PATCH' in args]
                 if failure in ['upload', 'download', 'remote verify']:
                     self.assertEqual(mutations, [])
@@ -257,7 +257,7 @@ class PublicationBoundary(unittest.TestCase):
     def test_unchanged_nightly_with_missing_installer_is_rebuilt(self):
         module = self.module()
         metadata = {
-            'release.json': json.dumps({'version': 'v0.1.0-nightly.20261112010101.' + 'a'*40, 'commit': 'a'*40, 'channel': 'develop'}).encode(),
+            'release.json': json.dumps({'version': 'v0.1.0-nightly.20261116.123', 'commit': 'a'*40, 'channel': 'develop'}).encode(),
             'checksums.txt': b'fixture authenticated checksums',
             'checksums.txt.minisig': b'fixture signature',
         }
@@ -305,7 +305,7 @@ class PublicationBoundary(unittest.TestCase):
                         module.nightly_guard('a'*40)
 
     def test_nightly_guard_verifies_final_bytes_and_fails_closed_on_bad_metadata(self):
-        version = 'v0.1.0-nightly.20261112010101.' + 'a'*40
+        version = 'v0.1.0-nightly.20261116.123'
         installer = f'anilist-arr-sync_{version}_windows_arm64_setup.exe'
         files = {'release.json': json.dumps({'version': version, 'commit': 'a'*40, 'channel': 'develop'}).encode(),
                  'checksums.txt': b'fixture authenticated checksums', 'checksums.txt.minisig': b'fixture signature'}

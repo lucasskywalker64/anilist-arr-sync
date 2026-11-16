@@ -27,8 +27,7 @@ import (
 
 var targets = []struct{ os, arch string }{{"linux", "amd64"}, {"linux", "arm64"}, {"windows", "amd64"}, {"windows", "arm64"}}
 var stable = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
-var nightly = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]+\.[0-9a-f]+$`)
-var shortNightly = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[1-9][0-9]*$`)
+var nightly = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[1-9][0-9]*$`)
 var bootstrap = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+-bootstrap\.[0-9]+$`)
 var sha = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
@@ -49,7 +48,7 @@ func identity() (updater.Identity, error) {
 		valid = bootstrap.MatchString(id.Version)
 	case "nightly":
 		id.Channel = "develop"
-		valid = shortNightly.MatchString(id.Version) || (nightly.MatchString(id.Version) && strings.HasSuffix(id.Version, "."+id.Commit))
+		valid = nightly.MatchString(id.Version)
 	case "fixture":
 		valid = stable.MatchString(id.Version)
 	}

@@ -33,7 +33,7 @@ func (i Identity) Key() string { return i.Channel + ":" + i.Version + ":" + i.Co
 
 var stableVersion = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 var commitSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
-var nightlyVersion = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]+\.[0-9a-f]+$`)
+var nightlyVersion = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[1-9][0-9]*$`)
 
 // ArchiveName defines the filenames shared with the release producer.
 func ArchiveName(version, platform, arch string) (string, error) {
