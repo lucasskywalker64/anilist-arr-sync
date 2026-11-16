@@ -37,7 +37,7 @@ jobs:
           commit=$(git rev-parse HEAD)
           base=$(git tag --sort=-version:refname | { grep -m1 -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || true; })
           base=${base:-v0.0.0}
-          version="$base-nightly.$(date -u +%Y%m%d%H%M%S).$commit"
+          version="$base-nightly.$(date -u +%Y%m%d).$GITHUB_RUN_NUMBER"
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "RELEASE_COMMIT=$commit" >> "$GITHUB_ENV"

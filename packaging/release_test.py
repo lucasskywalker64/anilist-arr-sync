@@ -1,8 +1,12 @@
 import importlib.util
+from contextlib import chdir
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
+import textwrap
 import unittest
 from unittest.mock import patch
 from io import BytesIO
@@ -25,6 +29,26 @@ class PublicationBoundary(unittest.TestCase):
             self.module().publish_nightly(Path('.release/final'), 'v0.1.0-nightly.20261112010101.aaaaaaaaaaaa', 'a'*40, runner)
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][:4], ['go', 'run', './cmd/release', 'verify'])
+
+    def test_workflow_versions_use_utc_date_and_reuse_run_number_on_reruns(self):
+        workflow = Path(__file__).resolve().parents[1] / '.github/workflows/release-nightly.yml'
+        step = workflow.read_text().split('        id: identity\n', 1)[1]
+        script = textwrap.dedent(step.split('        run: |\n', 1)[1].split('      - name:', 1)[0])
+        bash = str(Path(shutil.which('git')).resolve().parents[1] / 'bin/bash.exe') if os.name == 'nt' else 'bash'
+        fixtures = ('git() { if [ "$1" = rev-parse ]; then printf "%040d" 0; else echo v0.1.0; fi; }\n'
+                    'date() { test "$*" = "-u +%Y%m%d" && printf %s "$FIXTURE_DATE"; }\n')
+        with tempfile.TemporaryDirectory() as temp:
+            output, environment = Path(temp, 'output'), Path(temp, 'environment')
+            for day, attempt, expected in [('20261116', '1', 'v0.1.0-nightly.20261116.123'),
+                                           ('20261116', '2', 'v0.1.0-nightly.20261116.123'),
+                                           ('20261117', '3', 'v0.1.0-nightly.20261117.123')]:
+                with self.subTest(day=day, attempt=attempt):
+                    output.write_text('')
+                    subprocess.run([bash, '-c', fixtures + script], check=True, capture_output=True,
+                                   env={**os.environ, 'PUBLIC_SOURCE': 'true', 'FIXTURE_DATE': day,
+                                        'GITHUB_RUN_NUMBER': '123', 'GITHUB_RUN_ATTEMPT': attempt,
+                                        'GITHUB_OUTPUT': output.as_posix(), 'GITHUB_ENV': environment.as_posix()})
+                    self.assertIn('version=' + expected + '\n', output.read_text())
 
     def test_uploaded_bytes_verified_before_rolling_release_replacement(self):
         for failure in [None, 'upload', 'download', 'remote verify', 'promotion', 'reference', 'promotion response lost']:
@@ -109,7 +133,10 @@ class PublicationBoundary(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as temp:
             directory = Path(temp)
             (directory / 'checksums.txt').write_text('0'*64 + '  release.json\n')
-            self.module().publish_nightly(directory, 'fixture', 'a'*40, runner)
+            self.module().publish_nightly(directory, 'v0.1.0-nightly.20261116.123', 'a'*40, runner)
+        upload = next(args for args in calls if args[:3] == ['gh', 'release', 'create'])
+        self.assertEqual(upload[upload.index('--title') + 1], 'Nightly 2026-11-16')
+        self.assertIn('/archive/' + 'a'*40 + '.tar.gz', upload[upload.index('--notes') + 1])
         create = next(index for index, args in enumerate(calls) if 'ref=refs/tags/nightly' in args)
         publish = next(index for index, args in enumerate(calls) if 'draft=false' in args)
         self.assertLess(create, publish)
@@ -127,7 +154,7 @@ class PublicationBoundary(unittest.TestCase):
                     value = [[{'id': 42, 'tag_name': stage, 'draft': draft}] * matches]
                     return subprocess.CompletedProcess(args, 0, stdout=json.dumps(value))
                 with self.assertRaises(ValueError):
-                    self.module().publish_nightly(directory, 'fixture', 'a'*40, runner)
+                    self.module().publish_nightly(directory, 'v0.1.0-nightly.20261116.123', 'a'*40, runner)
                 self.assertFalse(any('PATCH' in call or 'POST' in call or 'DELETE' in call for call in calls))
 
     def test_nightly_skip_uses_signed_manifest_commit(self):
@@ -137,6 +164,95 @@ class PublicationBoundary(unittest.TestCase):
         self.assertTrue(module.changed('a'*40, None))
         with self.assertRaises(ValueError):
             module.changed('a'*40, {'commit': 'a'*40, 'channel': 'main'})
+
+    def git(self, *args):
+        result = subprocess.run(['git', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=',
+                                 '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                                 *args], check=True, capture_output=True, text=True)
+        return result.stdout.strip()
+
+    def commit(self):
+        self.git('add', '--force', '-A')
+        self.git('commit', '--quiet', '-m', 'fixture')
+        return self.git('rev-parse', 'HEAD')
+
+    def test_nightly_compares_input_trees_against_the_published_baseline(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as temp, chdir(temp):
+            self.git('init', '--quiet')
+            Path('app.go').write_text('package app\n')
+            Path('README.md').write_text('original docs')
+            baseline = self.commit()
+            manifest = {'commit': baseline, 'channel': 'develop'}
+            Path('README.md').write_text('updated docs')
+            self.assertFalse(module.changed(self.commit(), manifest))
+            Path('app.go').write_text('package changed\n')
+            self.assertTrue(module.changed(self.commit(), manifest))
+            Path('README.md').write_text('more docs after an application change')
+            self.assertTrue(module.changed(self.commit(), manifest))
+            Path('app.go').write_text('package app\n')
+            self.assertFalse(module.changed(self.commit(), manifest))
+            self.assertTrue(module.changed(self.git('rev-parse', 'HEAD'), {'commit': 'f'*40, 'channel': 'develop'}))
+
+    def test_nightly_classifies_added_modified_and_deleted_build_inputs(self):
+        module = self.module()
+        cases = {
+            'README.md': False, 'docs/release-contract.md': False, 'AGENTS.md': False,
+            '.agents/skills/example/SKILL.md': False, 'internal/server/AGENTS.md': False,
+            'internal/server/api_test.go': False, 'internal/server/testdata/response.json': False,
+            'web/src/App.test.ts': False, 'web/src/App.spec.ts': False,
+            'packaging/release_test.py': False, 'packaging/production.test.cjs': False,
+            'packaging/test-installer.ps1': False, 'packaging/README.md': False,
+            '.github/workflows/release-verify.yml': False,
+            'license.go': True, 'cmd/anilist-arr-sync/main.go': True,
+            'internal/server/api.go': True, 'internal/storage/migrations/001.sql': True,
+            'web/src/App.svelte': True, 'web/src/theme.css': True,
+            'web/public/help.md': True, 'web/public/example.test.json': True,
+            'web/dist/help.md': True, 'web/embed.go': True,
+            'go.mod': True, 'go.sum': True, 'web/package.json': True,
+            'web/package-lock.json': True, 'web/vite.config.ts': True,
+            'LICENSE': True, 'THIRD_PARTY_NOTICES.txt': True,
+            '.goreleaser.yaml': True, 'Dockerfile': True,
+            'packaging/windows.iss': True, 'packaging/windows.ps1': True,
+            'packaging/resources.ps1': True, 'packaging/release.py': True,
+            'packaging/container-config/README.md': True,
+            '.github/actions/release-tools/action.yml': True,
+            '.github/workflows/release-nightly.yml': True,
+            '.github/workflows/release-containers.yml': True,
+        }
+        with tempfile.TemporaryDirectory() as temp, chdir(temp):
+            self.git('init', '--quiet')
+            self.git('commit', '--quiet', '--allow-empty', '-m', 'baseline')
+            for name, expected in cases.items():
+                with self.subTest(path=name):
+                    baseline = self.git('rev-parse', 'HEAD')
+                    path = Path(name)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text('original')
+                    added = self.commit()
+                    self.assertEqual(module.changed(added, {'commit': baseline, 'channel': 'develop'}), expected, 'addition')
+                    path.write_text('modified')
+                    modified = self.commit()
+                    self.assertEqual(module.changed(modified, {'commit': added, 'channel': 'develop'}), expected, 'modification')
+                    path.unlink()
+                    deleted = self.commit()
+                    self.assertEqual(module.changed(deleted, {'commit': modified, 'channel': 'develop'}), expected, 'deletion')
+
+    def test_nightly_renames_check_both_source_and_destination(self):
+        module = self.module()
+        with tempfile.TemporaryDirectory() as temp, chdir(temp):
+            self.git('init', '--quiet')
+            Path('internal').mkdir()
+            Path('docs').mkdir()
+            Path('internal/app.go').write_text('package app\n')
+            baseline = self.commit()
+            self.git('mv', 'internal/app.go', 'docs/example.md')
+            moved_out = self.commit()
+            self.assertTrue(module.changed(moved_out, {'commit': baseline, 'channel': 'develop'}))
+            self.git('mv', 'docs/example.md', 'internal/app.go')
+            moved_in = self.commit()
+            self.assertTrue(module.changed(moved_in, {'commit': moved_out, 'channel': 'develop'}))
+            self.assertFalse(module.changed(moved_in, {'commit': baseline, 'channel': 'develop'}))
 
     def test_unchanged_nightly_with_missing_installer_is_rebuilt(self):
         module = self.module()
@@ -153,8 +269,8 @@ class PublicationBoundary(unittest.TestCase):
             return BytesIO(metadata[url.rsplit('/', 1)[1]])
         def api(path):
             return {'object': {'type': 'commit', 'sha': 'a'*40}} if path.startswith('/git/') else release
-        with patch.object(module, 'api', side_effect=api), patch.object(module, 'urlopen', side_effect=download), patch.object(module, 'run'):
-            self.assertTrue(module.nightly_guard('a'*40), 'an unchanged commit cannot hide missing release assets')
+        with patch.object(module, 'api', side_effect=api), patch.object(module, 'urlopen', side_effect=download), patch.object(module, 'run', return_value=subprocess.CompletedProcess([], 0, stdout='README.md\0')):
+            self.assertTrue(module.nightly_guard('b'*40), 'unchanged application inputs cannot hide missing release assets')
 
     def test_missing_nightly_metadata_is_rebuilt_without_trusting_it(self):
         names = ['release.json', 'checksums.txt', 'checksums.txt.minisig']
@@ -178,6 +294,16 @@ class PublicationBoundary(unittest.TestCase):
                             self.assertTrue(module.nightly_guard('a'*40))
                         verifier.assert_not_called()
 
+    def test_nightly_api_authentication_and_unexpected_failures_propagate(self):
+        module = self.module()
+        for code in [403, 500]:
+            with self.subTest(code=code):
+                error = HTTPError('https://api.github.com/fixture', code, 'fixture failure', {}, BytesIO())
+                self.addCleanup(error.close)
+                with patch.dict(os.environ, {'GH_TOKEN': 'fixture'}), patch.object(module, 'urlopen', side_effect=error):
+                    with self.assertRaises(HTTPError):
+                        module.nightly_guard('a'*40)
+
     def test_nightly_guard_verifies_final_bytes_and_fails_closed_on_bad_metadata(self):
         version = 'v0.1.0-nightly.20261112010101.' + 'a'*40
         installer = f'anilist-arr-sync_{version}_windows_arm64_setup.exe'
@@ -198,6 +324,8 @@ class PublicationBoundary(unittest.TestCase):
                     name = url.rsplit('/', 1)[1]
                     return BytesIO(b'tampered' if failure == 'artifact' and name == installer else files[name])
                 def verify(args, **kwargs):
+                    if args[0] == 'git':
+                        return subprocess.CompletedProcess(args, 0, stdout='README.md\0')
                     if args[3] == 'verify-nightly' and failure == 'signature':
                         raise subprocess.CalledProcessError(1, args)
                     if args[3] == 'verify':
@@ -206,10 +334,10 @@ class PublicationBoundary(unittest.TestCase):
                             raise subprocess.CalledProcessError(1, args)
                 with patch.object(module, 'api', side_effect=api), patch.object(module, 'urlopen', side_effect=download), patch.object(module, 'run', side_effect=verify) as verifier:
                     if failure == 'signature':
-                        with self.assertRaises(subprocess.CalledProcessError): module.nightly_guard('a'*40)
+                        with self.assertRaises(subprocess.CalledProcessError): module.nightly_guard('b'*40)
                     else:
-                        self.assertEqual(module.nightly_guard('a'*40), failure is not None)
-                    self.assertEqual(verifier.call_count, 1 if failure in ['signature', 'tag'] else 2)
+                        self.assertEqual(module.nightly_guard('b'*40), failure is not None)
+                    self.assertEqual(verifier.call_count, 1 if failure == 'signature' else 2 if failure == 'tag' else 3)
 
 
 if __name__ == '__main__':

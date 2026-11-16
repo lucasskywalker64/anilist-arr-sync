@@ -357,6 +357,24 @@ func TestChannelIsolationAndNightlyCooldown(t *testing.T) {
 	}
 }
 
+func TestNightlyVersionCompatibility(t *testing.T) {
+	for _, version := range []string{"v1.2.0-nightly.20261116.123", "v1.2.0-nightly.20261111010000.bbbbbbb", "v1.2.0-nightly.20261111010000." + newBuild.Commit} {
+		t.Run(version, func(t *testing.T) {
+			id := Identity{Version: version, Commit: newBuild.Commit, Channel: "develop"}
+			f := newFixture(t, id, "linux", "amd64", []byte("new"))
+			e := fixtureEngine(t, f, "linux", "amd64")
+			status, err := e.Status(context.Background())
+			if err != nil || !status.CanUpdate || status.LatestVersion != version || status.LatestCommit != id.Commit {
+				t.Fatalf("nightly compatibility: %+v, %v", status, err)
+			}
+			f.assets["release.json"] = []byte(`{"version":"` + version + `","commit":"` + strings.Repeat("c", 40) + `","channel":"develop"}`)
+			if _, err := e.Status(context.Background()); err == nil {
+				t.Fatal("accepted a manifest changed after signing")
+			}
+		})
+	}
+}
+
 func TestInstallationRestrictions(t *testing.T) {
 	for _, owner := range []string{"scoop", "aur", "winget", "chocolatey", "another-manager", "", "unreadable", "legacy-package", "docker"} {
 		t.Run(owner, func(t *testing.T) {
