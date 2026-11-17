@@ -86,12 +86,14 @@ jobs:
           Measure-Probe 'native_copy_2000_files_ms' { [RunnerProbe]::CopyFiles($data, (Join-Path $probeRoot ([Guid]::NewGuid().ToString('N')))) }
           foreach ($tar in @($windowsTar, $gitTar)) {
               $label = if ($tar -eq $windowsTar) { 'windows_tar_extract_ms' } else { 'git_tar_extract_ms' }
-              $tarOptions = if ($tar -eq $gitTar) { @('--force-local') } else { @() }
               Measure-Probe $label {
-                  $target = Join-Path $probeRoot ([Guid]::NewGuid().ToString('N'))
-                  New-Item -ItemType Directory -Path $target | Out-Null
-                  & $tar @tarOptions -xf $archive -C $target
-                  if ($LASTEXITCODE -ne 0) { throw 'Archive extraction failed' }
+                  $target = [Guid]::NewGuid().ToString('N')
+                  New-Item -ItemType Directory -Path (Join-Path $probeRoot $target) | Out-Null
+                  Push-Location $probeRoot
+                  try {
+                      & $tar -xf data.tar -C $target
+                      if ($LASTEXITCODE -ne 0) { throw 'Archive extraction failed' }
+                  } finally { Pop-Location }
               }
           }
           Measure-Probe 'git_start_ms' { & $git --version; if ($LASTEXITCODE -ne 0) { throw 'Git failed' } }
