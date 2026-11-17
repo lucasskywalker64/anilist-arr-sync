@@ -29,15 +29,25 @@ runs:
         if ($module -notmatch '(?m)^go ([0-9]+\.[0-9]+\.[0-9]+)\s*$') { throw 'Expected an exact Go version in go.mod' }
         $version = $Matches[1]
         $architecture = $env:RUNNER_ARCH.ToLowerInvariant()
+        $path = Join-Path $env:RUNNER_TOOL_CACHE "go/$version/$architecture"
+        # setup-go installs on D: and links from C: on hosted Windows runners
+        # with both drives. Cache the payload as well as the tool-cache links.
+        $physicalPath = $path
+        if ($env:RUNNER_ENVIRONMENT -eq 'github-hosted' -and $path.StartsWith('C:', [StringComparison]::OrdinalIgnoreCase) -and (Test-Path 'D:\')) {
+          $physicalPath = 'D:' + $path.Substring(2)
+        }
         "version=$version" >> $env:GITHUB_OUTPUT
-        "path=$(Join-Path $env:RUNNER_TOOL_CACHE "go/$version/$architecture")" >> $env:GITHUB_OUTPUT
+        "path=$path" >> $env:GITHUB_OUTPUT
+        "physical-path=$physicalPath" >> $env:GITHUB_OUTPUT
     - name: Restore Go toolchain
       uses: actions/cache@v4
       with:
         path: |
           ${{ steps.go-toolchain.outputs.path }}
           ${{ steps.go-toolchain.outputs.path }}.complete
-        key: release-go-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-toolchain.outputs.version }}
+          ${{ steps.go-toolchain.outputs.physical-path }}
+          ${{ steps.go-toolchain.outputs.physical-path }}.complete
+        key: release-go-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-toolchain.outputs.version }}
     - uses: actions/setup-go@v5
       id: go
       with:
