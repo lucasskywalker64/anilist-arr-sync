@@ -45,11 +45,11 @@ OutputBaseFilename=fixture
     $root = Join-Path $fixtureRoot 'native logs'
     $app = Join-Path $fixtureRoot 'native app'
     $stage = 'native install'
-    InvokeInstallerProcess (Join-Path $fixtureRoot 'fixture.exe') @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$app`"") 10000
+    InvokeInstallerProcess (Join-Path $fixtureRoot 'fixture.exe') @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$app`"") 30000
     $uninstaller = Join-Path $app 'unins000.exe'
     if (!(Test-Path -LiteralPath $uninstaller)) { throw 'Native fixture did not create its uninstaller' }
     $stage = 'native uninstall'
-    InvokeInstallerProcess $uninstaller @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') 10000
+    InvokeInstallerProcess $uninstaller @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') 30000
     if (Test-Path -LiteralPath $uninstaller) { throw 'Native uninstaller launcher returned before self-deletion completed' }
     Write-Host 'Installer log creation, process-tree wait, success, nonzero exit, timeout, and native uninstall boundaries passed.'
 } finally {

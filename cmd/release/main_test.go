@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
@@ -55,7 +56,7 @@ func TestReleaseSourcesMustMatchCleanCommit(t *testing.T) {
 					version := "v1.2.3"
 					switch mode {
 					case "nightly":
-						version += "-nightly.20261112010101." + commit
+						version += "-nightly.20261116.123"
 					case "bootstrap":
 						version += "-bootstrap.1"
 					}
@@ -137,6 +138,35 @@ func TestFinalArtifactsFailClosed(t *testing.T) {
 				t.Fatalf("verification for %s: %v", damage, err)
 			}
 		})
+	}
+}
+
+func TestNightlyManifestSourceIntegrity(t *testing.T) {
+	public, private, err := minisign.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MINISIGN_PUBLIC_KEY", public.String())
+	commit := strings.Repeat("a", 40)
+	dir := t.TempDir()
+	manifest, _ := json.Marshal(updater.Identity{Version: "v1.2.3-nightly.20261116.123", Commit: commit, Channel: "develop"})
+	checksums := []byte(fmt.Sprintf("%x  release.json\n", sha256.Sum256(manifest)))
+	for name, data := range map[string][]byte{
+		"release.json": manifest, "checksums.txt": checksums,
+		"checksums.txt.minisig": minisign.Sign(private, checksums),
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := run([]string{"verify-nightly", dir}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "release.json"), bytes.ReplaceAll(manifest, []byte(commit), []byte(strings.Repeat("b", 40))), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"verify-nightly", dir}); err == nil {
+		t.Fatal("accepted a source commit changed after signing")
 	}
 }
 

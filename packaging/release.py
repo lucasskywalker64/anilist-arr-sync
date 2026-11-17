@@ -1,5 +1,6 @@
 """GitHub publication boundary. Signing and verification run before mutations."""
 import argparse
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,15 @@ from urllib.request import Request, urlopen
 
 
 REPOSITORY = 'lucasskywalker64/anilist-arr-sync'
+
+# Audited against go:embed, the release-tools action, GoReleaser hooks, and Dockerfile.
+NIGHTLY_INPUT_FILES = {
+    'go.mod', 'go.sum', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', 'Dockerfile',
+    '.goreleaser.yaml', 'Makefile', '.github/workflows/release-nightly.yml',
+    '.github/workflows/release-containers.yml',
+}
+NIGHTLY_INPUT_TREES = ('cmd/', 'internal/', 'web/', 'packaging/', '.github/actions/release-tools/')
+NIGHTLY_SHIPPED_TREES = ('web/public/', 'web/dist/', 'packaging/container-config/')
 
 
 def run(args, **kwargs):
@@ -30,12 +40,34 @@ def api(path):
         raise
 
 
+def nightly_input(path):
+    if path in NIGHTLY_INPUT_FILES or path.startswith(NIGHTLY_SHIPPED_TREES):
+        return True
+    if path.startswith('internal/storage/migrations/') and path.endswith('.sql'):
+        return True
+    name = path.rsplit('/', 1)[-1]
+    if (name.endswith(('.md', '_test.go', '_test.py')) or
+            {'tests', 'testdata', '__tests__'} & set(path.split('/')[:-1])):
+        return False
+    if not name.endswith('.go') and (name.startswith('test-') or '.test.' in name or '.spec.' in name):
+        return False
+    return path.startswith(NIGHTLY_INPUT_TREES) or ('/' not in path and path.endswith('.go'))
+
+
 def changed(commit, manifest):
     if manifest is None:
         return True
     if manifest.get('channel') != 'develop' or not re.fullmatch('[0-9a-f]{40}', manifest.get('commit', '')):
         raise ValueError('Invalid previous nightly identity')
-    return commit != manifest['commit']
+    if commit == manifest['commit']:
+        return False
+    try:
+        paths = run(['git', 'diff', '--no-ext-diff', '--name-only', '--no-renames', '-z',
+                     manifest['commit'], commit, '--'], capture_output=True).stdout
+    except subprocess.CalledProcessError:
+        # Missing history must never hide a potentially necessary build.
+        return True
+    return any(nightly_input(path) for path in paths.split('\0') if path)
 
 
 def nightly_guard(commit):
@@ -113,8 +145,9 @@ def publish_nightly(directory, version, commit, command=run):
              f'[Dependency source and build instructions](https://github.com/{REPOSITORY}/blob/{commit}/SOURCE.md).\n\n'
              f'[Code signing policy](https://github.com/{REPOSITORY}/blob/{commit}/CODE_SIGNING.md) | '
              f'[Privacy policy](https://github.com/{REPOSITORY}/blob/{commit}/PRIVACY.md)')
+    day = datetime.strptime(version.split('-nightly.')[1][:8], '%Y%m%d')
     command(['gh', 'release', 'create', stage, '--draft', '--prerelease', '--target', commit,
-             '--title', version, '--notes', notes, *files])
+             '--title', 'Nightly ' + day.strftime('%Y-%m-%d'), '--notes', notes, *files])
     # Re-download and authenticate the actual uploaded bytes while still draft.
     with tempfile.TemporaryDirectory(dir=directory.parent) as temp:
         command(['gh', 'release', 'download', stage, '--dir', temp])

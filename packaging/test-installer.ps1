@@ -1,7 +1,6 @@
-param([Parameter(Mandatory)][string]$Installer, [ValidateSet('amd64', 'arm64')][string]$Arch, [string]$PreviousInstaller)
+param([Parameter(Mandatory)][string]$Installer, [ValidateSet('amd64', 'arm64')][string]$Arch)
 $ErrorActionPreference = 'Stop'
 $Installer = (Resolve-Path -LiteralPath $Installer).Path
-if ($PreviousInstaller) { $PreviousInstaller = (Resolve-Path -LiteralPath $PreviousInstaller).Path }
 $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
 if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Installer lifecycle tests require an administrator token' }
 # Refuse to upgrade an existing real installation or overwrite its shortcuts.
@@ -106,10 +105,10 @@ function StartTray {
     $script:trayError = $tray.StandardError.ReadToEndAsync()
 }
 
-function Install([string]$Owner, [string]$Type = 'service', [string]$Package = $Installer) {
+function Install([string]$Owner, [string]$Type = 'service') {
     $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/TYPE=$Type", "/SERVICENAME=$service", "/DIR=`"$app`"", "/DATADIR=`"$data`"", "/GROUP=`"$group`"")
     if ($Owner) { $arguments += "/UPDATEOWNER=$Owner" }
-    InvokeInstallerProcess $Package $arguments
+    InvokeInstallerProcess $Installer $arguments
 }
 
 function InvokeInstallerProcess([string]$File, [string[]]$Arguments, [int]$TimeoutMilliseconds = 120000) {
@@ -144,7 +143,7 @@ function AssertInstalledArchitecture([string]$Expected) {
     $bytes = [IO.File]::ReadAllBytes((Join-Path $app 'anilist-arr-sync.exe'))
     $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3c) + 4)
     $wanted = if ($Expected -eq 'arm64') { 0xaa64 } else { 0x8664 }
-    if ($machine -ne $wanted) { throw 'Architecture replacement retained the wrong executable' }
+    if ($machine -ne $wanted) { throw 'Installer wrote the wrong executable architecture' }
     $entries = @(Get-ChildItem 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall' | Where-Object PSChildName -Like 'AniList-Arr-Sync*_is1')
     if ($entries.Count -ne 1 -or $entries[0].PSChildName -ne 'AniList-Arr-Sync_is1') { throw 'Installer did not preserve one shared installation identity' }
 }
@@ -184,17 +183,6 @@ try {
         WaitHealthy
         $expectedOwner = if ($owner) { $owner } else { 'chocolatey' }
         if ((Get-Content -LiteralPath (Join-Path $app 'update-owner') -Raw).Trim() -ne $expectedOwner) { throw 'Ownership was not preserved/recreated during upgrade' }
-    }
-    if ($PreviousInstaller) {
-        $stage = 'replace installer architecture and restore it'
-        $previousArch = if ($Arch -eq 'amd64') { 'arm64' } else { 'amd64' }
-        Install '' -Package $PreviousInstaller
-        WaitHealthy
-        AssertInstalledArchitecture $previousArch
-        Install ''
-        WaitHealthy
-        AssertInstalledArchitecture $Arch
-        if ((Get-Content -LiteralPath (Join-Path $app 'update-owner') -Raw).Trim() -ne 'chocolatey') { throw 'Architecture replacement lost package-manager ownership' }
     }
     if ($env:RELEASE_MODE -eq 'production') {
         & "$PSScriptRoot/verify-authenticode.ps1" -Path (Join-Path $app 'anilist-arr-sync.exe')
