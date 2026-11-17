@@ -31,7 +31,7 @@ runs:
         $architecture = $env:RUNNER_ARCH.ToLowerInvariant()
         $path = Join-Path $env:RUNNER_TOOL_CACHE "go/$version/$architecture"
         # setup-go installs on D: and links from C: on hosted Windows runners
-        # with both drives. Cache the payload as well as the tool-cache links.
+        # with both drives. Cache the payload and recreate links after restore.
         $physicalPath = $path
         if ($env:RUNNER_ENVIRONMENT -eq 'github-hosted' -and $path.StartsWith('C:', [StringComparison]::OrdinalIgnoreCase) -and (Test-Path 'D:\')) {
           $physicalPath = 'D:' + $path.Substring(2)
@@ -40,14 +40,28 @@ runs:
         "path=$path" >> $env:GITHUB_OUTPUT
         "physical-path=$physicalPath" >> $env:GITHUB_OUTPUT
     - name: Restore Go toolchain
+      id: toolchain-cache
       uses: actions/cache@v4
       with:
         path: |
-          ${{ steps.go-toolchain.outputs.path }}
-          ${{ steps.go-toolchain.outputs.path }}.complete
           ${{ steps.go-toolchain.outputs.physical-path }}
           ${{ steps.go-toolchain.outputs.physical-path }}.complete
-        key: release-go-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-toolchain.outputs.version }}
+        key: release-go-toolchain-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-toolchain.outputs.version }}
+    - name: Register restored Go toolchain
+      if: steps.toolchain-cache.outputs.cache-hit == 'true'
+      shell: pwsh
+      env:
+        GO_CACHE_LOGICAL: ${{ steps.go-toolchain.outputs.path }}
+        GO_CACHE_PHYSICAL: ${{ steps.go-toolchain.outputs.physical-path }}
+      run: |
+        if ($env:GO_CACHE_LOGICAL -ne $env:GO_CACHE_PHYSICAL) {
+          if (!(Test-Path -LiteralPath $env:GO_CACHE_LOGICAL)) {
+            New-Item -ItemType Junction -Path $env:GO_CACHE_LOGICAL -Target $env:GO_CACHE_PHYSICAL | Out-Null
+          }
+          if (!(Test-Path -LiteralPath "$env:GO_CACHE_LOGICAL.complete")) {
+            New-Item -ItemType File -Path "$env:GO_CACHE_LOGICAL.complete" | Out-Null
+          }
+        }
     - uses: actions/setup-go@v5
       id: go
       with:
