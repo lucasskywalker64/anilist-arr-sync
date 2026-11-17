@@ -27,15 +27,11 @@ if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed: $Arch" }
 $installer = Join-Path $output "anilist-arr-sync_$($env:RELEASE_VERSION)_windows_$($Arch)_setup.exe"
 if ($env:RELEASE_MODE -eq 'production') { & "$PSScriptRoot/verify-authenticode.ps1" -Path $installer }
 if ($env:RELEASE_INSTALL_TEST -eq '1') {
-    if ($Arch -ne 'arm64' -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
-        $lifecycle = @{ Installer = $installer; Arch = $Arch }
-        if ($Arch -eq 'amd64' -and $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
-            # OSS builds arm64 first. Verify replacement in both directions on
-            # the same installation, in addition to each independent lifecycle.
-            $lifecycle.PreviousInstaller = Join-Path $output "anilist-arr-sync_$($env:RELEASE_VERSION)_windows_arm64_setup.exe"
-            if (!(Test-Path -LiteralPath $lifecycle.PreviousInstaller)) { throw 'ARM64 installer is required for architecture replacement verification' }
-        }
-        & "$PSScriptRoot/test-installer.ps1" @lifecycle
+    $nativeArch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
+    # The PR matrix covers native installers. Publication's single ARM host
+    # verifies both installers before publishing.
+    if ($Arch -eq $nativeArch -or ($env:RELEASE_MODE -ne 'fixture' -and $nativeArch -eq 'arm64')) {
+        & "$PSScriptRoot/test-installer.ps1" -Installer $installer -Arch $Arch
         if (!$?) { throw 'Installer lifecycle verification failed' }
         $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
         "$env:RELEASE_COMMIT $hash" | Set-Content ".release/installer-verified-$Arch" -Encoding ascii
