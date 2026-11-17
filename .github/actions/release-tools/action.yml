@@ -21,6 +21,23 @@ runs:
         $setup = Get-Process WWAHost -ErrorAction SilentlyContinue | Where-Object SessionId -eq $session
         Write-Host "Completing desktop setup in session $session ($(@($setup).Count) privacy setup processes)"
         $setup | Stop-Process -Force
+    - name: Locate pinned Go toolchain
+      id: go-toolchain
+      shell: pwsh
+      run: |
+        $module = Get-Content go.mod -Raw
+        if ($module -notmatch '(?m)^go ([0-9]+\.[0-9]+\.[0-9]+)\s*$') { throw 'Expected an exact Go version in go.mod' }
+        $version = $Matches[1]
+        $architecture = $env:RUNNER_ARCH.ToLowerInvariant()
+        "version=$version" >> $env:GITHUB_OUTPUT
+        "path=$(Join-Path $env:RUNNER_TOOL_CACHE "go/$version/$architecture")" >> $env:GITHUB_OUTPUT
+    - name: Restore Go toolchain
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ steps.go-toolchain.outputs.path }}
+          ${{ steps.go-toolchain.outputs.path }}.complete
+        key: release-go-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-toolchain.outputs.version }}
     - uses: actions/setup-go@v5
       id: go
       with:

@@ -21,6 +21,18 @@ on:
 permissions:
   contents: read
 jobs:
+  publication:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify publication failure paths
+        run: python -m unittest discover -s packaging -p '*_test.py'
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -80,8 +92,6 @@ jobs:
         run: |
           $arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'amd64' }
           ./packaging/test-chocolatey.ps1 -ExpectedArchitecture $arch
-      - name: Verify publication failure paths
-        run: python -m unittest discover -s packaging -p '*_test.py'
       - name: Verify production action command boundaries
         run: node --test packaging/production.test.cjs
       - uses: actions/upload-artifact@v4
