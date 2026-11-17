@@ -8,8 +8,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// GUI builds never allocate a console. CLI launches can reuse their parent's
-// console, while retaining any inherited pipes or redirected files.
+// Reuse a calling terminal, preserving redirected streams. An argument-free
+// desktop launch gets its own console so it remains visible and can be closed.
 func prepareConsole(cancel context.CancelFunc) func() {
 	streams := []struct {
 		file   **os.File
@@ -29,8 +29,11 @@ func prepareConsole(cancel context.CancelFunc) func() {
 	}
 	api := windows.NewLazySystemDLL("kernel32.dll")
 	attached, _, _ := api.NewProc("AttachConsole").Call(uintptr(^uint32(0)))
+	if attached == 0 && len(os.Args) == 1 {
+		attached, _, _ = api.NewProc("AllocConsole").Call()
+	}
 	if attached == 0 {
-		return func() {} // Explorer and SCM have no parent console.
+		return func() {}
 	}
 	for _, s := range streams {
 		if s.valid {
@@ -41,7 +44,7 @@ func prepareConsole(cancel context.CancelFunc) func() {
 	}
 	log.SetOutput(os.Stderr)
 
-	// AttachConsole resets the Go runtime's control-handler table.
+	// Attaching or allocating a console resets Go's control-handler table.
 	// Keep CLI cancellation and shutdown draining after attaching.
 	done := make(chan struct{})
 	handler := windows.NewCallback(func(event uint32) uintptr {

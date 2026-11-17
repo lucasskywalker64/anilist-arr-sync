@@ -93,8 +93,10 @@ On Windows, extract the ZIP and start the executable from PowerShell:
 .\anilist-arr-sync.exe --bind-address 127.0.0.1
 ```
 
-Windows desktop and tray launches run without a console window. Command-line
-launches reuse the calling terminal and preserve redirected output. Windows shells
+Launching the Windows executable without arguments opens a visible console;
+closing it shuts down the application. Installed tray shortcuts use `--tray`
+and run without a console window. Command-line launches reuse the calling
+terminal and preserve redirected output. Windows shells
 can return immediately for GUI executables. For scripts that need to wait and
 read the exit code, use `Start-Process -Wait -PassThru` in PowerShell or
 `start /wait "" anilist-arr-sync.exe --sync` in cmd.exe.
