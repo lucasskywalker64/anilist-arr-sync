@@ -72,7 +72,7 @@ jobs:
           $windowsTar = Join-Path $env:SystemRoot 'System32/tar.exe'
           $pwsh = Join-Path $PSHOME 'pwsh.exe'
           $tools = @($git, $gitTar, $windowsTar, $pwsh) | ForEach-Object {
-              [ordered]@{ path = $_; peMachine = Get-PeMachine $_ }
+              [ordered]@{ path = $_; peMachine = Get-PeMachine $_; sha256 = (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }
           }
           $data = Join-Path $probeRoot 'data'
           [RunnerProbe]::WriteFiles($data)
@@ -86,10 +86,11 @@ jobs:
           Measure-Probe 'native_copy_2000_files_ms' { [RunnerProbe]::CopyFiles($data, (Join-Path $probeRoot ([Guid]::NewGuid().ToString('N')))) }
           foreach ($tar in @($windowsTar, $gitTar)) {
               $label = if ($tar -eq $windowsTar) { 'windows_tar_extract_ms' } else { 'git_tar_extract_ms' }
+              $tarOptions = if ($tar -eq $gitTar) { @('--force-local') } else { @() }
               Measure-Probe $label {
                   $target = Join-Path $probeRoot ([Guid]::NewGuid().ToString('N'))
                   New-Item -ItemType Directory -Path $target | Out-Null
-                  & $tar -xf $archive -C $target
+                  & $tar @tarOptions -xf $archive -C $target
                   if ($LASTEXITCODE -ne 0) { throw 'Archive extraction failed' }
               }
           }
@@ -104,6 +105,7 @@ jobs:
               disk = @(Get-CimInstance Win32_DiskDrive | Select-Object Model, InterfaceType)
               imageVersion = $env:ImageVersion
               checksum = $checksum.ToString()
+              payloadSha256 = (Get-FileHash -LiteralPath (Join-Path $data '0.bin') -Algorithm SHA256).Hash
               tools = $tools
               measurements = $measurements
           }
