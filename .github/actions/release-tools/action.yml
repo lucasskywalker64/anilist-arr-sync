@@ -56,6 +56,7 @@ runs:
       run: |
         if ($env:GO_CACHE_LOGICAL -ne $env:GO_CACHE_PHYSICAL) {
           if (!(Test-Path -LiteralPath $env:GO_CACHE_LOGICAL)) {
+            New-Item -ItemType Directory -Path (Split-Path $env:GO_CACHE_LOGICAL) -Force | Out-Null
             New-Item -ItemType Junction -Path $env:GO_CACHE_LOGICAL -Target $env:GO_CACHE_PHYSICAL | Out-Null
           }
           if (!(Test-Path -LiteralPath "$env:GO_CACHE_LOGICAL.complete")) {
