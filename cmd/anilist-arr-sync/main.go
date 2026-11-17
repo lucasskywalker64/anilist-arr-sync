@@ -26,6 +26,7 @@ var (
 	commit          = "unknown"
 	date            = "unknown"
 	updatePublicKey = ""
+	launchBrowser   = openBrowser
 )
 
 type options struct {
@@ -86,6 +87,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	defer prepareConsole(stop)()
 	if err := run(ctx, os.Args[1:], os.Stdout); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return
@@ -174,8 +176,8 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 		r.start()
 		url := r.browserURL()
 		log.Printf("listening at %s", url)
-		if r.listenerCfg.LaunchBrowser && !o.noBrowser && out == os.Stdout && isatty.IsTerminal(os.Stdout.Fd()) && !server.IsContainerized(r.listenerCfg.UpdateMechanism) {
-			if err := openBrowser(url); err != nil {
+		if r.listenerCfg.LaunchBrowser && !o.noBrowser && out == os.Stdout && (runtime.GOOS == "windows" || isatty.IsTerminal(os.Stdout.Fd())) && !server.IsContainerized(r.listenerCfg.UpdateMechanism) {
+			if err := launchBrowser(url); err != nil {
 				log.Printf("browser: %v", err)
 			}
 		}

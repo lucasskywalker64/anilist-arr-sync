@@ -96,7 +96,6 @@ function EnsureTrayDesktop {
 function StartTray {
     $start = [Diagnostics.ProcessStartInfo]::new((Join-Path $app 'anilist-arr-sync.exe'))
     $start.UseShellExecute = $false
-    $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
     foreach ($argument in @('--tray', '--no-browser', '--data-dir', $data, '--config', (Join-Path $data 'config.xml'))) { $start.ArgumentList.Add($argument) }
@@ -144,6 +143,8 @@ function AssertInstalledArchitecture([string]$Expected) {
     $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3c) + 4)
     $wanted = if ($Expected -eq 'arm64') { 0xaa64 } else { 0x8664 }
     if ($machine -ne $wanted) { throw 'Installer wrote the wrong executable architecture' }
+    $subsystem = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3c) + 24 + 68)
+    if ($subsystem -ne 2) { throw 'Installed executable can create a console window' }
     $entries = @(Get-ChildItem 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall' | Where-Object PSChildName -Like 'AniList-Arr-Sync*_is1')
     if ($entries.Count -ne 1 -or $entries[0].PSChildName -ne 'AniList-Arr-Sync_is1') { throw 'Installer did not preserve one shared installation identity' }
 }
