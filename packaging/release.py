@@ -46,9 +46,10 @@ def nightly_input(path):
     if path.startswith('internal/storage/migrations/') and path.endswith('.sql'):
         return True
     name = path.rsplit('/', 1)[-1]
-    if (name.endswith(('.md', '_test.go', '_test.py')) or name.startswith('test-') or
-            '.test.' in name or '.spec.' in name or
+    if (name.endswith(('.md', '_test.go', '_test.py')) or
             {'tests', 'testdata', '__tests__'} & set(path.split('/')[:-1])):
+        return False
+    if not name.endswith('.go') and (name.startswith('test-') or '.test.' in name or '.spec.' in name):
         return False
     return path.startswith(NIGHTLY_INPUT_TREES) or ('/' not in path and path.endswith('.go'))
 
