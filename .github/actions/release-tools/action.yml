@@ -1,5 +1,10 @@
 name: Release tools and embedded frontend
 description: Install pinned OSS packaging tools, then build the embedded frontend
+inputs:
+  frontend-artifact:
+    description: Frontend artifact built and license-checked by this workflow
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -17,17 +22,39 @@ runs:
         Write-Host "Completing desktop setup in session $session ($(@($setup).Count) privacy setup processes)"
         $setup | Stop-Process -Force
     - uses: actions/setup-go@v5
+      id: go
       with:
         go-version-file: go.mod
+        cache: false
+    - name: Locate Go caches
+      id: go-cache
+      shell: pwsh
+      run: |
+        "build=$(go env GOCACHE)" >> $env:GITHUB_OUTPUT
+        "modules=$(go env GOMODCACHE)" >> $env:GITHUB_OUTPUT
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ${{ steps.go-cache.outputs.build }}
+          ${{ steps.go-cache.outputs.modules }}
+        key: release-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+        restore-keys: |
+          release-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-
     - uses: actions/setup-node@v4
       with:
         node-version: '24'
-        cache: npm
+        cache: ${{ inputs.frontend-artifact == '' && 'npm' || '' }}
         cache-dependency-path: web/package-lock.json
     - uses: actions/setup-python@v5
       with:
         python-version: '3.13'
+    - uses: actions/download-artifact@v4
+      if: inputs.frontend-artifact != ''
+      with:
+        name: ${{ inputs.frontend-artifact }}
+        path: web/dist
     - name: Build and typecheck embedded UI
+      if: inputs.frontend-artifact == ''
       shell: pwsh
       working-directory: web
       run: |
@@ -38,6 +65,7 @@ runs:
         npm run build
         if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed' }
     - name: Check audited runtime licenses and notices
+      if: inputs.frontend-artifact == ''
       shell: pwsh
       run: |
         python packaging/licenses.py --check

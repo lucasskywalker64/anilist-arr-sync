@@ -21,7 +21,37 @@ on:
 permissions:
   contents: read
 jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build and typecheck embedded UI
+        working-directory: web
+        run: |
+          npm ci
+          npm run check
+          npm run build
+      - name: Check audited runtime licenses and notices
+        run: python packaging/licenses.py --check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-frontend
+          path: web/dist/*
+          if-no-files-found: error
+          retention-days: 3
   snapshot:
+    needs: frontend
     strategy:
       fail-fast: false
       matrix:
@@ -38,6 +68,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/release-tools
+        with:
+          frontend-artifact: release-frontend
       - name: Verify installer process failure paths
         shell: pwsh
         run: ./packaging/test-installer-process.ps1

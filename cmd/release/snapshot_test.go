@@ -58,6 +58,11 @@ func TestSnapshot(t *testing.T) {
 	for _, mode := range []string{"fixture", "nightly", "bootstrap"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Setenv("RELEASE_MODE", mode)
+			// Installer behavior is shared across these modes. Exercise its full
+			// lifecycle once; retain artifact and native-health checks for every mode.
+			if mode != "fixture" {
+				t.Setenv("RELEASE_INSTALL_TEST", "")
+			}
 			version := "v0.0.1"
 			if mode == "nightly" {
 				version += "-nightly.20261116.123"
