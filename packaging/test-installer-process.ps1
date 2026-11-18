@@ -40,12 +40,17 @@ CreateUninstallRegKey=no
 PrivilegesRequired=lowest
 OutputBaseFilename=fixture
 '@
-    & ISCC.exe /Qp "/O$fixtureRoot" $definition | Out-Null
+    $binary = Join-Path $fixtureRoot 'anilist-arr-sync-fixture-amd64.exe'
+    Set-Content -LiteralPath $binary -Value 'application fixture'
+    $fileEntry = (Select-String -LiteralPath (Join-Path $PSScriptRoot 'windows.iss') -SimpleMatch 'Source: "{#Binary}"').Line
+    Add-Content -LiteralPath $definition -Value "`n[Files]`n$fileEntry"
+    & ISCC.exe /Qp "/O$fixtureRoot" "/DBinary=$binary" $definition | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Cannot compile disposable installer process fixture' }
     $root = Join-Path $fixtureRoot 'native logs'
     $app = Join-Path $fixtureRoot 'native app'
     $stage = 'native install'
     InvokeInstallerProcess (Join-Path $fixtureRoot 'fixture.exe') @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$app`"") 30000
+    if (!(Test-Path -LiteralPath (Join-Path $app 'anilist-arr-sync.exe'))) { throw 'Installer did not install the canonical executable filename' }
     $uninstaller = Join-Path $app 'unins000.exe'
     if (!(Test-Path -LiteralPath $uninstaller)) { throw 'Native fixture did not create its uninstaller' }
     $stage = 'native uninstall'

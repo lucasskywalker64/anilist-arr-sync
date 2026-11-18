@@ -53,7 +53,7 @@ Name: "desktop"; Description: "Desktop tray"; Types: desktop; Flags: exclusive
 Name: "{code:DataDir}"
 
 [Files]
-Source: "{#Binary}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Binary}"; DestDir: "{app}"; DestName: "anilist-arr-sync.exe"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
