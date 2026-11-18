@@ -61,6 +61,9 @@ Name: "{group}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parame
 Name: "{userstartup}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop
 Name: "{group}\Open dashboard"; Filename: "http://localhost:7171"
 
+[Run]
+Filename: "{app}\anilist-arr-sync.exe"; Description: "Start AniList-Arr-Sync now"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop; Flags: postinstall nowait skipifsilent runasoriginaluser
+
 [UninstallDelete]
 Type: files; Name: "{app}\update-owner"
 Type: files; Name: "{app}\installation.ini"
