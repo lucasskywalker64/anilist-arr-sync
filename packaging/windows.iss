@@ -53,13 +53,16 @@ Name: "desktop"; Description: "Desktop tray"; Types: desktop; Flags: exclusive
 Name: "{code:DataDir}"
 
 [Files]
-Source: "{#Binary}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Binary}"; DestDir: "{app}"; DestName: "anilist-arr-sync.exe"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop
 Name: "{userstartup}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop
 Name: "{group}\Open dashboard"; Filename: "http://localhost:7171"
+
+[Run]
+Filename: "{app}\anilist-arr-sync.exe"; Description: "Start AniList-Arr-Sync now"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop; Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [UninstallDelete]
 Type: files; Name: "{app}\update-owner"

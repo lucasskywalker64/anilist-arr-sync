@@ -93,6 +93,14 @@ On Windows, extract the ZIP and start the executable from PowerShell:
 .\anilist-arr-sync.exe --bind-address 127.0.0.1
 ```
 
+Launching the Windows executable without arguments opens a visible console;
+closing it shuts down the application. Installed tray shortcuts use `--tray`
+and run without a console window. Command-line launches reuse the calling
+terminal and preserve redirected output. Windows shells
+can return immediately for GUI executables. For scripts that need to wait and
+read the exit code, use `Start-Process -Wait -PassThru` in PowerShell or
+`start /wait "" anilist-arr-sync.exe --sync` in cmd.exe.
+
 On Linux, extract the archive and run:
 
 ```sh
@@ -115,6 +123,8 @@ The installer requires administrator privileges. Service mode starts the
 application with Windows. Desktop mode starts the tray application at sign-in;
 the signed-in desktop account must itself be an administrator. Desktop
 installation rejects elevation using a different administrator's account.
+The final page of an interactive Desktop tray install shows **Start AniList-Arr-Sync now**,
+checked by default.
 Double-click the tray icon to open the dashboard, or use its right-click menu to
 open the dashboard or quit.
 

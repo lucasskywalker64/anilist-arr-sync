@@ -18,6 +18,7 @@ builds:
     ldflags:
       - >-
         -s -w
+        {{ if eq .Os "windows" }}-H windowsgui{{ end }}
         -X main.version={{ .Env.RELEASE_VERSION }}
         -X main.commit={{ .Env.RELEASE_COMMIT }}
         -X main.date={{ .Date }}

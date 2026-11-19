@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"debug/pe"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -144,6 +145,22 @@ func verifyUpdaterArtifacts(t *testing.T, id updater.Identity, public string) {
 	}))
 	defer server.Close()
 	for _, target := range targets {
+		if target.os == "windows" {
+			name, _ := updater.ArchiveName(id.Version, target.os, target.arch)
+			data, err := archiveBinary(filepath.Join(targetDir, name), target.os)
+			if err != nil {
+				t.Fatal(err)
+			}
+			binary, err := pe.NewFile(bytes.NewReader(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			header, ok := binary.OptionalHeader.(*pe.OptionalHeader64)
+			if !ok || header.Subsystem != pe.IMAGE_SUBSYSTEM_WINDOWS_GUI {
+				t.Fatalf("windows/%s release executable can create a console window", target.arch)
+			}
+			_ = binary.Close()
+		}
 		for _, tampered := range []bool{false, true} {
 			t.Run(target.os+"/"+target.arch+"/tampered="+map[bool]string{false: "no", true: "yes"}[tampered], func(t *testing.T) {
 				dir := t.TempDir()

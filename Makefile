@@ -1,6 +1,10 @@
 .PHONY: all build test test-race lint frontend-install frontend-build frontend-check frontend-test licenses clean
 
 PYTHON ?= python
+GOOS ?= $(shell go env GOOS)
+ifeq ($(GOOS),windows)
+APP_LDFLAGS = -ldflags="-H windowsgui"
+endif
 
 all: build test-race lint
 
@@ -23,7 +27,7 @@ licenses: web/node_modules/.package-lock.json
 	$(PYTHON) packaging/licenses.py --check
 
 build: frontend-build licenses
-	go build ./cmd/anilist-arr-sync
+	go build $(APP_LDFLAGS) ./cmd/anilist-arr-sync
 
 test: frontend-build licenses frontend-test
 	go test ./...
