@@ -123,8 +123,8 @@ The installer requires administrator privileges. Service mode starts the
 application with Windows. Desktop mode starts the tray application at sign-in;
 the signed-in desktop account must itself be an administrator. Desktop
 installation rejects elevation using a different administrator's account.
-The final setup page offers to start the tray app immediately and selects that
-option by default.
+The final page of an interactive Desktop tray install shows **Start AniList-Arr-Sync now**,
+checked by default.
 Double-click the tray icon to open the dashboard, or use its right-click menu to
 open the dashboard or quit.
 

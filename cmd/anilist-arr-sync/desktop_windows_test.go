@@ -19,6 +19,9 @@ import (
 )
 
 func TestWindowsBrowserLaunch(t *testing.T) {
+	t.Setenv("CONTAINER", "")
+	t.Setenv("IN_DOCKER", "")
+
 	for _, tc := range []struct {
 		name               string
 		enabled, noBrowser bool

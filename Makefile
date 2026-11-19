@@ -1,7 +1,8 @@
 .PHONY: all build test test-race lint frontend-install frontend-build frontend-check frontend-test licenses clean
 
 PYTHON ?= python
-ifeq ($(shell go env GOOS),windows)
+GOOS ?= $(shell go env GOOS)
+ifeq ($(GOOS),windows)
 APP_LDFLAGS = -ldflags="-H windowsgui"
 endif
 
