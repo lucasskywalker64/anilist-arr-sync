@@ -1,6 +1,7 @@
 #ifndef Binary
   #error Binary is required
 #endif
+#define DashboardURL "http://localhost:7171"
 #if Arch == "arm64"
   #define AllowedArch "arm64"
 #else
@@ -59,9 +60,10 @@ Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
 Name: "{group}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop
 Name: "{userstartup}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop
-Name: "{group}\Open dashboard"; Filename: "http://localhost:7171"
+Name: "{group}\Open dashboard"; Filename: "{#DashboardURL}"
 
 [Run]
+Filename: "{#DashboardURL}"; Description: "Open AniList-Arr-Sync dashboard"; Components: service; Flags: postinstall shellexec skipifsilent runasoriginaluser
 Filename: "{app}\anilist-arr-sync.exe"; Description: "Start AniList-Arr-Sync now"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop; Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [UninstallDelete]

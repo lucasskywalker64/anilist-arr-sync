@@ -120,7 +120,9 @@ before making the dashboard available remotely.
 ### Windows installer
 
 The installer requires administrator privileges. Service mode starts the
-application with Windows. Desktop mode starts the tray application at sign-in;
+application with Windows. At the end of an interactive service install, the
+checked **Open AniList-Arr-Sync dashboard** option opens the browser when you
+click **Finish**. Desktop mode starts the tray application at sign-in;
 the signed-in desktop account must itself be an administrator. Desktop
 installation rejects elevation using a different administrator's account.
 The final page of an interactive Desktop tray install shows **Start AniList-Arr-Sync now**,
