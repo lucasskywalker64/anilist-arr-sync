@@ -2,6 +2,7 @@
   #error Binary is required
 #endif
 #define DashboardURL "http://localhost:7171"
+#define StartDescription "Start AniList-Arr-Sync"
 #if Arch == "arm64"
   #define AllowedArch "arm64"
 #else
@@ -62,9 +63,13 @@ Name: "{group}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parame
 Name: "{userstartup}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop
 Name: "{group}\Open dashboard"; Filename: "{#DashboardURL}"
 
+[InstallDelete]
+Type: files; Name: "{userstartup}\AniList-Arr-Sync.lnk"; Components: service
+Type: files; Name: "{group}\AniList-Arr-Sync.lnk"; Components: service
+
 [Run]
-Filename: "{#DashboardURL}"; Description: "Open AniList-Arr-Sync dashboard"; Components: service; Flags: postinstall shellexec skipifsilent runasoriginaluser
-Filename: "{app}\anilist-arr-sync.exe"; Description: "Start AniList-Arr-Sync now"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop; Flags: postinstall nowait skipifsilent runasoriginaluser
+Filename: "{#DashboardURL}"; Description: "{#StartDescription}"; Components: service; BeforeInstall: StartInstalledService; Flags: postinstall shellexec skipifsilent runasoriginaluser
+Filename: "{app}\anilist-arr-sync.exe"; Description: "{#StartDescription}"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop; Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [UninstallDelete]
 Type: files; Name: "{app}\update-owner"
@@ -75,11 +80,21 @@ Filename: "{app}\installation.ini"; Section: "Installation"; Key: "ServiceName";
 Filename: "{app}\installation.ini"; Section: "Installation"; Key: "DataDir"; String: "{code:DataDir}"
 
 [Code]
+const
+  ServiceStopped = 1;
+  ServiceStartPending = 2;
+  ServiceStopPending = 3;
+  ServiceRunning = 4;
+
 type
   TServiceStatus = record
     ServiceType, CurrentState, ControlsAccepted, Win32ExitCode,
       ServiceSpecificExitCode, CheckPoint, WaitHint: LongWord;
   end;
+
+var
+  ModePage: TInputOptionWizardPage;
+  ResumeService: Boolean;
 
 function OpenSCManager(Machine, Database: String; Access: LongWord): THandle;
   external 'OpenSCManagerW@advapi32.dll stdcall';
@@ -103,6 +118,38 @@ function WaitForSingleObject(Handle: THandle; Timeout: LongWord): LongWord;
   external 'WaitForSingleObject@kernel32.dll stdcall';
 function CloseHandle(Handle: THandle): Boolean;
   external 'CloseHandle@kernel32.dll stdcall';
+
+procedure InitializeWizard;
+begin
+  ModePage := CreateInputOptionPage(wpSelectDir, 'Choose how the app starts',
+    'Which installation mode should Setup use?',
+    'Both modes install AniList-Arr-Sync and its web dashboard.', True, False);
+  ModePage.Add('&Windows service (starts at boot, even when signed out)');
+  ModePage.Add('&Desktop tray (starts at sign-in, with a tray icon)');
+  ModePage.CheckListBox.MinItemHeight := ScaleY(24);
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = wpSelectComponents) or ((PageID = ModePage.ID) and WizardSilent);
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID = ModePage.ID then begin
+    if WizardIsComponentSelected('desktop') then ModePage.SelectedValueIndex := 1
+    else ModePage.SelectedValueIndex := 0;
+  end;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  if CurPageID = ModePage.ID then begin
+    if ModePage.SelectedValueIndex = 1 then WizardSelectComponents('!service,desktop')
+    else WizardSelectComponents('!desktop,service');
+  end;
+  Result := True;
+end;
 
 function ServiceName: String;
 begin
@@ -130,33 +177,48 @@ begin
     RaiseException('Service control failed: ' + IntToStr(Code));
 end;
 
-procedure StopService;
+function ChangeServiceState(TargetState: LongWord): Boolean;
 var Manager, Service: THandle;
     Status: TServiceStatus;
     Attempts: Integer;
 begin
-  RunSC('stop ' + ServiceName, True);
+  Result := False;
   Manager := OpenSCManager('', '', 1);
   if Manager = 0 then RaiseException('Cannot open service manager');
   try
     Service := OpenService(Manager, ServiceName, 4);
     if Service = 0 then begin
-      if DLLGetLastError <> 1060 then RaiseException('Cannot query service');
-      Exit;
+      if (DLLGetLastError = 1060) and (TargetState = ServiceStopped) then Exit;
+      RaiseException('Cannot query service');
     end;
     try
+      if not QueryServiceStatus(Service, Status) then RaiseException('Cannot query service state');
+      Result := (Status.CurrentState = ServiceRunning) or (Status.CurrentState = ServiceStartPending);
+      if Status.CurrentState = TargetState then Exit;
+      if TargetState = ServiceRunning then begin
+        if Status.CurrentState <> ServiceStartPending then RunSC('start ' + ServiceName, False);
+      end else if Status.CurrentState <> ServiceStopPending then
+        RunSC('stop ' + ServiceName, True);
       for Attempts := 1 to 300 do begin
         if not QueryServiceStatus(Service, Status) then RaiseException('Cannot query service state');
-        if Status.CurrentState = 1 then Exit;
+        if Status.CurrentState = TargetState then Exit;
+        if (TargetState = ServiceRunning) and (Status.CurrentState = ServiceStopped) then
+          RaiseException('AniList-Arr-Sync stopped before its dashboard was ready. Service exit code: ' + IntToStr(Status.Win32ExitCode));
         Sleep(100);
       end;
-      RaiseException('Timed out stopping service');
+      RaiseException('Timed out waiting for the AniList-Arr-Sync service');
     finally
       CloseServiceHandle(Service);
     end;
   finally
     CloseServiceHandle(Manager);
   end;
+end;
+
+procedure StartInstalledService;
+begin
+  { The app reports SERVICE_RUNNING after its HTTP listener is ready. }
+  ChangeServiceState(ServiceRunning);
 end;
 
 procedure StopTray;
@@ -214,7 +276,7 @@ begin
         RaiseException('Desktop mode requires the signed-in desktop account to be an administrator. Use Windows service mode when elevating with another account.');
     end;
     StopTray;
-    StopService;
+    ResumeService := ChangeServiceState(ServiceStopped);
   except
     Result := GetExceptionMessage;
   end;
@@ -243,7 +305,7 @@ begin
       StringChangeEx(Command, '"', '\"', True);
       RunSC('create ' + ServiceName + ' type= own start= auto binPath= "' + Command + '" DisplayName= "AniList-Arr-Sync"', False);
       RunSC('failure ' + ServiceName + ' reset= 86400 actions= restart/60000/restart/60000/restart/60000', False);
-      RunSC('start ' + ServiceName, False);
+      if WizardSilent and ResumeService then StartInstalledService;
     end;
   end;
 end;
@@ -252,7 +314,7 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then begin
     StopTray;
-    StopService;
+    ChangeServiceState(ServiceStopped);
     RunSC('delete ' + ServiceName, True);
   end;
 end;

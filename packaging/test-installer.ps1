@@ -171,13 +171,17 @@ try {
     $listener.Stop()
     $stage = 'initial service install'
     Install ''
-    WaitHealthy
     AssertInstalledArchitecture $Arch
     if (Test-Path -LiteralPath (Join-Path $app 'update-owner')) { throw 'Direct installer created an ownership marker' }
     $registered = Get-CimInstance Win32_Service -Filter "Name='$service'"
     if ($registered.ServiceType -ne 'Own Process' -or !$registered.PathName.Contains((Join-Path $app 'anilist-arr-sync.exe')) -or !$registered.PathName.Contains($data) -or !$registered.PathName.Contains('--config')) {
         throw 'Service registration lost its type, executable, or persistent absolute paths'
     }
+    if ($registered.State -ne 'Stopped' -or $registered.StartMode -ne 'Auto') {
+        throw 'Fresh silent install must leave the service stopped and configured for automatic startup'
+    }
+    Start-Service -Name $service
+    WaitHealthy
     foreach ($owner in 'winget', 'chocolatey', '') {
         $stage = "service upgrade (owner=$owner)"
         Install $owner
@@ -196,6 +200,11 @@ try {
     if (Get-Service -Name $service -ErrorAction SilentlyContinue) { throw 'Desktop mode retained the Windows service' }
     $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($startup)
     if ($shortcut.TargetPath -ne (Join-Path $app 'anilist-arr-sync.exe') -or !$shortcut.Arguments.Contains('--tray') -or !$shortcut.Arguments.Contains($data)) { throw 'Desktop startup shortcut lost tray/data arguments' }
+    $stage = 'switch back to service installation'
+    Install ''
+    if (Test-Path -LiteralPath $startup) { throw 'Service mode retained the tray startup shortcut' }
+    $stage = 'restore desktop installation'
+    Install '' 'desktop'
     $stage = 'tray startup'
     StartTray
     WaitHealthy
