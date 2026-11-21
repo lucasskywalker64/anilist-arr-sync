@@ -4,4 +4,4 @@ package main
 
 import "context"
 
-func prepareConsole(context.CancelFunc) func() { return func() {} }
+func prepareConsole(context.CancelFunc) {}

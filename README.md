@@ -119,12 +119,20 @@ before making the dashboard available remotely.
 
 ### Windows installer
 
-The installer requires administrator privileges. Service mode starts the
-application with Windows. Desktop mode starts the tray application at sign-in;
-the signed-in desktop account must itself be an administrator. Desktop
-installation rejects elevation using a different administrator's account.
-The final page of an interactive Desktop tray install shows **Start AniList-Arr-Sync now**,
-checked by default.
+The installer requires administrator privileges. On **Select Additional Tasks**,
+you can create a desktop icon and choose whether the app starts at boot as a
+Windows service, at sign-in as a tray app, or only when you start it manually.
+Manual startup runs the same tray app from the Start menu or desktop shortcut.
+Installing the tray app requires the signed-in account to be an administrator.
+The desktop icon opens the dashboard in either mode. If the service is stopped,
+Windows may prompt for administrator approval to start it. In tray mode, the
+icon starts the app if needed.
+
+On the final page, **Start AniList-Arr-Sync** is checked by default. Click
+**Finish** to start the selected mode and open the dashboard. Clear the box
+to skip the immediate launch. Fresh silent installs also skip the immediate
+launch. Silent upgrades resume a Windows service that was already running.
+
 Double-click the tray icon to open the dashboard, or use its right-click menu to
 open the dashboard or quit.
 

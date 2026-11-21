@@ -1,6 +1,7 @@
 #ifndef Binary
   #error Binary is required
 #endif
+#define StartDescription "Start AniList-Arr-Sync"
 #if Arch == "arm64"
   #define AllowedArch "arm64"
 #else
@@ -33,6 +34,8 @@ Compression=lzma2
 SolidCompression=yes
 CloseApplications=yes
 RestartApplications=no
+WizardStyle=classic
+WizardSmallImageFile=compiler:WizClassicSmallImage.bmp
 #ifdef Production
 SignTool=signpath
 SignedUninstaller=yes
@@ -41,13 +44,14 @@ SignedUninstallerDir={#OutputDir}\uninstallers-{#Arch}
 SignedUninstaller=no
 #endif
 
-[Types]
-Name: "service"; Description: "Windows service (starts with Windows)"
-Name: "desktop"; Description: "Desktop tray (starts at sign-in)"
+[Messages]
+SelectTasksLabel2=Select the additional tasks you would like Setup to perform while installing [name], then click Next.
 
-[Components]
-Name: "service"; Description: "Windows service"; Types: service; Flags: exclusive
-Name: "desktop"; Description: "Desktop tray"; Types: desktop; Flags: exclusive
+[Tasks]
+Name: "desktopicon"; Description: "Create a &desktop icon"
+Name: "service"; Description: "Install Windows Service (Starts when the computer starts and runs as LocalSystem, even when no one is signed in)"; GroupDescription: "Start automatically"; Flags: exclusive unchecked
+Name: "startup"; Description: "Create shortcut in Startup folder (Starts the tray app when you log into Windows)"; GroupDescription: "Start automatically"; Flags: exclusive
+Name: "manual"; Description: "Do not start automatically"; GroupDescription: "Start automatically"; Flags: exclusive unchecked
 
 [Dirs]
 Name: "{code:DataDir}"
@@ -57,12 +61,23 @@ Source: "{#Binary}"; DestDir: "{app}"; DestName: "anilist-arr-sync.exe"; Flags: 
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop
-Name: "{userstartup}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop
-Name: "{group}\Open dashboard"; Filename: "http://localhost:7171"
+Name: "{group}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Tasks: not service
+Name: "{userstartup}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Tasks: startup
+Name: "{commondesktop}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --open-dashboard --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Tasks: desktopicon and not service
+Name: "{commondesktop}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--open-service-dashboard ""{code:StoredServiceName}"" ""{code:DataDir}\config.xml"""; Tasks: desktopicon and service
+Name: "{group}\Open dashboard"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--open-installed-dashboard ""{code:DataDir}\config.xml"""; Tasks: not service
+Name: "{group}\Open dashboard"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--open-installed-dashboard ""{code:DataDir}\config.xml"" ""{code:StoredServiceName}"""; Tasks: service
+
+[InstallDelete]
+Type: files; Name: "{userstartup}\AniList-Arr-Sync.lnk"; Tasks: not startup
+Type: files; Name: "{group}\AniList-Arr-Sync.lnk"; Tasks: service
+Type: files; Name: "{commondesktop}\AniList-Arr-Sync.lnk"; Tasks: not desktopicon
+Type: files; Name: "{commondesktop}\AniList-Arr-Sync.url"
+Type: files; Name: "{group}\Open dashboard.url"
 
 [Run]
-Filename: "{app}\anilist-arr-sync.exe"; Description: "Start AniList-Arr-Sync now"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop; Flags: postinstall nowait skipifsilent runasoriginaluser
+Filename: "{app}\anilist-arr-sync.exe"; Description: "{#StartDescription}"; Parameters: "--open-installed-dashboard ""{code:DataDir}\config.xml"" ""{code:StoredServiceName}"""; Tasks: service; BeforeInstall: StartInstalledService; Flags: postinstall nowait skipifsilent runasoriginaluser
+Filename: "{app}\anilist-arr-sync.exe"; Description: "{#StartDescription}"; Parameters: "--tray --open-dashboard --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Tasks: not service; Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [UninstallDelete]
 Type: files; Name: "{app}\update-owner"
@@ -73,11 +88,21 @@ Filename: "{app}\installation.ini"; Section: "Installation"; Key: "ServiceName";
 Filename: "{app}\installation.ini"; Section: "Installation"; Key: "DataDir"; String: "{code:DataDir}"
 
 [Code]
+const
+  ServiceStopped = 1;
+  ServiceStartPending = 2;
+  ServiceStopPending = 3;
+  ServiceRunning = 4;
+
 type
   TServiceStatus = record
     ServiceType, CurrentState, ControlsAccepted, Win32ExitCode,
       ServiceSpecificExitCode, CheckPoint, WaitHint: LongWord;
   end;
+
+var
+  StartupTasksInitialized: Boolean;
+  ResumeService: Boolean;
 
 function OpenSCManager(Machine, Database: String; Access: LongWord): THandle;
   external 'OpenSCManagerW@advapi32.dll stdcall';
@@ -108,6 +133,27 @@ begin
   if Result = '' then Result := GetIniString('Installation', 'ServiceName', 'AniListArrSync', ExpandConstant('{app}\installation.ini'));
 end;
 
+procedure CurPageChanged(CurPageID: Integer);
+var LegacyType: String;
+begin
+  if (CurPageID <> wpSelectTasks) or StartupTasksInitialized then Exit;
+  StartupTasksInitialized := True;
+  LegacyType := Lowercase(ExpandConstant('{param:TYPE|}'));
+  if LegacyType = 'service' then WizardSelectTasks('service')
+  else if LegacyType = 'desktop' then WizardSelectTasks('startup')
+  else if (GetPreviousData('UsesStartupTasks', '') = '') and
+    (ExpandConstant('{param:TASKS|}{param:MERGETASKS|}') = '') then begin
+    if FileExists(ExpandConstant('{app}\installation.ini')) then begin
+      if RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\' + ServiceName) then WizardSelectTasks('service');
+    end else if WizardSilent then WizardSelectTasks('service');
+  end;
+end;
+
+procedure RegisterPreviousData(PreviousDataKey: Integer);
+begin
+  SetPreviousData(PreviousDataKey, 'UsesStartupTasks', '1');
+end;
+
 function StoredServiceName(Param: String): String;
 begin
   Result := ServiceName;
@@ -128,33 +174,48 @@ begin
     RaiseException('Service control failed: ' + IntToStr(Code));
 end;
 
-procedure StopService;
+function ChangeServiceState(TargetState: LongWord): Boolean;
 var Manager, Service: THandle;
     Status: TServiceStatus;
     Attempts: Integer;
 begin
-  RunSC('stop ' + ServiceName, True);
+  Result := False;
   Manager := OpenSCManager('', '', 1);
   if Manager = 0 then RaiseException('Cannot open service manager');
   try
     Service := OpenService(Manager, ServiceName, 4);
     if Service = 0 then begin
-      if DLLGetLastError <> 1060 then RaiseException('Cannot query service');
-      Exit;
+      if (DLLGetLastError = 1060) and (TargetState = ServiceStopped) then Exit;
+      RaiseException('Cannot query service');
     end;
     try
+      if not QueryServiceStatus(Service, Status) then RaiseException('Cannot query service state');
+      Result := (Status.CurrentState = ServiceRunning) or (Status.CurrentState = ServiceStartPending);
+      if Status.CurrentState = TargetState then Exit;
+      if TargetState = ServiceRunning then begin
+        if Status.CurrentState <> ServiceStartPending then RunSC('start ' + ServiceName, False);
+      end else if Status.CurrentState <> ServiceStopPending then
+        RunSC('stop ' + ServiceName, True);
       for Attempts := 1 to 300 do begin
         if not QueryServiceStatus(Service, Status) then RaiseException('Cannot query service state');
-        if Status.CurrentState = 1 then Exit;
+        if Status.CurrentState = TargetState then Exit;
+        if (TargetState = ServiceRunning) and (Status.CurrentState = ServiceStopped) then
+          RaiseException('AniList-Arr-Sync stopped before its dashboard was ready. Service exit code: ' + IntToStr(Status.Win32ExitCode));
         Sleep(100);
       end;
-      RaiseException('Timed out stopping service');
+      RaiseException('Timed out waiting for the AniList-Arr-Sync service');
     finally
       CloseServiceHandle(Service);
     end;
   finally
     CloseServiceHandle(Manager);
   end;
+end;
+
+procedure StartInstalledService;
+begin
+  { The app reports SERVICE_RUNNING after its HTTP listener is ready. }
+  ChangeServiceState(ServiceRunning);
 end;
 
 procedure StopTray;
@@ -193,7 +254,7 @@ var Window: THandle;
 begin
   Result := '';
   try
-    if WizardIsComponentSelected('desktop') then begin
+    if not WizardIsTaskSelected('service') then begin
       { User Startup and the data ACL must belong to the actual desktop user.
         Refuse credential-based elevation instead of configuring the admin's
         profile. Service installation does not depend on a desktop account. }
@@ -212,7 +273,7 @@ begin
         RaiseException('Desktop mode requires the signed-in desktop account to be an administrator. Use Windows service mode when elevating with another account.');
     end;
     StopTray;
-    StopService;
+    ResumeService := ChangeServiceState(ServiceStopped);
   except
     Result := GetExceptionMessage;
   end;
@@ -230,18 +291,17 @@ begin
       if not SaveStringToFile(Marker, Owner + #13#10, False) then
         RaiseException('Cannot write update ownership marker');
     RunSC('delete ' + ServiceName, True);
-    if WizardIsComponentSelected('desktop') then begin
+    if not WizardIsTaskSelected('service') then begin
       Account := GetEnv('USERDOMAIN') + '\' + GetUserNameString;
       if not Exec(ExpandConstant('{sys}\icacls.exe'), '"' + DataDir('') + '" /grant "' + Account + ':(OI)(CI)M"', '', SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
         RaiseException('Cannot grant the desktop account access to application data');
-    end;
-    if WizardIsComponentSelected('service') then begin
+    end else begin
       Command := '"' + ExpandConstant('{app}\anilist-arr-sync.exe') + '" --no-browser --data-dir "' +
         DataDir('') + '" --config "' + DataDir('') + '\config.xml"';
       StringChangeEx(Command, '"', '\"', True);
       RunSC('create ' + ServiceName + ' type= own start= auto binPath= "' + Command + '" DisplayName= "AniList-Arr-Sync"', False);
       RunSC('failure ' + ServiceName + ' reset= 86400 actions= restart/60000/restart/60000/restart/60000', False);
-      RunSC('start ' + ServiceName, False);
+      if WizardSilent and ResumeService then StartInstalledService;
     end;
   end;
 end;
@@ -250,7 +310,7 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then begin
     StopTray;
-    StopService;
+    ChangeServiceState(ServiceStopped);
     RunSC('delete ' + ServiceName, True);
   end;
 end;

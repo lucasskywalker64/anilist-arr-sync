@@ -10,7 +10,7 @@ import (
 
 // Reuse a calling terminal, preserving redirected streams. An argument-free
 // desktop launch gets its own console so it remains visible and can be closed.
-func prepareConsole(cancel context.CancelFunc) func() {
+func prepareConsole(cancel context.CancelFunc) {
 	streams := []struct {
 		file   **os.File
 		id     uint32
@@ -33,7 +33,7 @@ func prepareConsole(cancel context.CancelFunc) func() {
 		attached, _, _ = api.NewProc("AllocConsole").Call()
 	}
 	if attached == 0 {
-		return func() {}
+		return
 	}
 	for _, s := range streams {
 		if s.valid {
@@ -46,23 +46,19 @@ func prepareConsole(cancel context.CancelFunc) func() {
 
 	// Attaching or allocating a console resets Go's control-handler table.
 	// Keep CLI cancellation and shutdown draining after attaching.
-	done := make(chan struct{})
 	handler := windows.NewCallback(func(event uint32) uintptr {
 		switch event {
 		case windows.CTRL_C_EVENT, windows.CTRL_BREAK_EVENT:
 			cancel()
 		case windows.CTRL_CLOSE_EVENT, windows.CTRL_LOGOFF_EVENT, windows.CTRL_SHUTDOWN_EVENT:
 			cancel()
-			<-done
+			// Windows terminates the process when this handler returns. Let main
+			// drain the runtime and exit with its own status.
+			select {}
 		default:
 			return 0
 		}
 		return 1
 	})
-	control := api.NewProc("SetConsoleCtrlHandler")
-	_, _, _ = control.Call(handler, 1)
-	return func() {
-		close(done)
-		_, _, _ = control.Call(handler, 0)
-	}
+	_, _, _ = api.NewProc("SetConsoleCtrlHandler").Call(handler, 1)
 }

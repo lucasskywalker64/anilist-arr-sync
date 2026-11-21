@@ -33,6 +33,7 @@ type options struct {
 	configPath, dataDir, bindAddress   string
 	port                               int
 	sync, noBrowser, showVersion, tray bool
+	openDashboard                      bool
 	showLicense                        bool
 	portSet, bindSet                   bool
 }
@@ -50,6 +51,7 @@ func parseFlags(args []string, out io.Writer) (options, error) {
 	fs.BoolVar(&o.showVersion, "version", false, "Print build version")
 	fs.BoolVar(&o.showLicense, "license", false, "Print license, third-party notices, and source links")
 	fs.BoolVar(&o.tray, "tray", false, "Run with a Windows notification-area icon")
+	fs.BoolVar(&o.openDashboard, "open-dashboard", false, "Open the dashboard from a Windows tray shortcut")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -87,7 +89,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	defer prepareConsole(stop)()
+	prepareConsole(stop)
 	if err := run(ctx, os.Args[1:], os.Stdout); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return
@@ -102,6 +104,10 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 }
 
 func runWithReady(ctx context.Context, args []string, out io.Writer, ready func()) error {
+	return runInstance(ctx, args, out, ready, false)
+}
+
+func runInstance(ctx context.Context, args []string, out io.Writer, ready func(), service bool) error {
 	o, err := parseFlags(args, out)
 	if err != nil {
 		return err
@@ -119,6 +125,13 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 	paths, err := resolvePaths(o, runtime.GOOS, server.IsContainerized(""))
 	if err != nil {
 		return err
+	}
+	openTrayDashboard := o.tray && o.openDashboard && !o.noBrowser && !o.sync
+	if openTrayDashboard {
+		opened, err := openExistingTrayDashboard(paths.config)
+		if opened || err != nil {
+			return err
+		}
 	}
 	sessions := server.NewSessionStore(24 * time.Hour)
 	sessionDatabase := ""
@@ -156,15 +169,28 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 			err := r.syncOnce(ctx, out)
 			return errors.Join(err, r.close())
 		}
+		url := r.browserURL()
+		removeDashboard := func() {}
+		if runtime.GOOS == "windows" && (o.tray || service) {
+			// Publish before shortcuts can discover the tray window or running service.
+			path := dashboardEndpointPath(paths.config, uint32(os.Getpid()))
+			if err := publishDashboardEndpoint(path, url); err != nil {
+				log.Printf("publish dashboard URL: %v", err)
+			} else {
+				removeDashboard = func() { _ = os.Remove(path) }
+			}
+		}
 		stopTray := func() {}
 		if o.tray {
-			stopTray, err = startTray(r.browserURL, cancel)
+			stopTray, err = startTray(paths.config, r.browserURL, cancel)
 			if err != nil {
+				removeDashboard()
 				return failRestart(errors.Join(err, r.close()))
 			}
 		}
 		if err := r.server.Start(); err != nil {
 			stopTray()
+			removeDashboard()
 			return failRestart(errors.Join(err, r.close()))
 		}
 		ready()
@@ -174,9 +200,9 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 			}
 		}
 		r.start()
-		url := r.browserURL()
 		log.Printf("listening at %s", url)
-		if r.listenerCfg.LaunchBrowser && !o.noBrowser && out == os.Stdout && (runtime.GOOS == "windows" || isatty.IsTerminal(os.Stdout.Fd())) && !server.IsContainerized(r.listenerCfg.UpdateMechanism) {
+		if openTrayDashboard || (r.listenerCfg.LaunchBrowser && !o.noBrowser && out == os.Stdout && (runtime.GOOS == "windows" || isatty.IsTerminal(os.Stdout.Fd())) && !server.IsContainerized(r.listenerCfg.UpdateMechanism)) {
+			openTrayDashboard = false
 			if err := launchBrowser(url); err != nil {
 				log.Printf("browser: %v", err)
 			}
@@ -196,6 +222,7 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 		}()
 		action := r.server.WaitLifecycle()
 		stopTray()
+		removeDashboard()
 		close(stopWatching)
 		if handoff != nil {
 			handoff.Close()
