@@ -12,10 +12,7 @@ import (
 var trayUser32 = windows.NewLazySystemDLL("user32.dll")
 var trayShell32 = windows.NewLazySystemDLL("shell32.dll")
 
-const (
-	trayWindowClass   = "AniListArrSyncTray"
-	trayOpenDashboard = 0x8003 // WM_APP + 3
-)
+const trayWindowClass = "AniListArrSyncTray"
 
 type trayClass struct {
 	size, style                        uint32
@@ -86,9 +83,6 @@ func startTray(configPath string, url func() string, quit func()) (func(), error
 				return 0
 			}
 			switch message {
-			case trayOpenDashboard:
-				_ = openBrowser(url())
-				return 0
 			case callbackMessage:
 				if lparam == 0x0203 { // WM_LBUTTONDBLCLK
 					_ = openBrowser(url())
@@ -186,18 +180,27 @@ func startTray(configPath string, url func() string, quit func()) (func(), error
 }
 
 func openExistingTrayDashboard(configPath string) (bool, error) {
+	pid, err := trayDashboardProcessID(configPath)
+	if err != nil || pid == 0 {
+		return false, err
+	}
+	return true, openInstalledDashboard(configPath, pid)
+}
+
+func trayDashboardProcessID(configPath string) (uint32, error) {
 	title, err := windows.UTF16PtrFromString(configPath)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	name, _ := windows.UTF16PtrFromString(trayWindowClass)
 	window, _, _ := trayUser32.NewProc("FindWindowW").Call(uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(title)))
 	if window == 0 {
-		return false, nil
+		return 0, nil
 	}
-	posted, _, err := trayUser32.NewProc("PostMessageW").Call(window, trayOpenDashboard, 0, 0)
-	if posted == 0 {
-		return false, fmt.Errorf("open dashboard from the running tray app: %w", err)
+	var pid uint32
+	thread, _, err := trayUser32.NewProc("GetWindowThreadProcessId").Call(window, uintptr(unsafe.Pointer(&pid)))
+	if thread == 0 {
+		return 0, fmt.Errorf("identify the running tray app: %w", err)
 	}
-	return true, nil
+	return pid, nil
 }

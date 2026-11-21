@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -62,6 +63,48 @@ func TestWindowsBrowserLaunch(t *testing.T) {
 				t.Fatalf("opened %q, want %q", opened, want)
 			}
 		})
+	}
+}
+
+func TestWindowsServiceDashboardUsesLiveURL(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.xml")
+	cfg := config.NewDefault()
+	cfg.BindAddress, cfg.URLBase = "127.0.0.1", "/sync"
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	port := freePort(t)
+	t.Setenv("ANILIST_SYNC__SERVER__PORT", strconv.Itoa(port))
+
+	previous := launchBrowser
+	t.Cleanup(func() { launchBrowser = previous })
+	var opened string
+	launchBrowser = func(url string) error { opened = url; return nil }
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	pid := uint32(os.Getpid())
+	var openErr error
+	if err := runInstance(ctx, []string{"--data-dir", dir}, io.Discard, func() {
+		openErr = openInstalledDashboard(configPath, pid)
+		cancel()
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	if openErr != nil {
+		t.Fatal(openErr)
+	}
+	if want := fmt.Sprintf("http://127.0.0.1:%d/sync", port); opened != want {
+		t.Fatalf("opened %q, want live URL %q", opened, want)
+	}
+	if _, err := os.Stat(dashboardEndpointPath(configPath, pid)); !os.IsNotExist(err) {
+		t.Fatalf("expected dashboard URL to be removed on shutdown, got %v", err)
+	}
+	if err := openInstalledDashboard(configPath, 0); err != nil {
+		t.Fatal(err)
+	}
+	if want := dashboardURL(*cfg); opened != want {
+		t.Fatalf("opened %q, want configured URL %q when the app is stopped", opened, want)
 	}
 }
 

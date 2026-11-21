@@ -104,6 +104,10 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 }
 
 func runWithReady(ctx context.Context, args []string, out io.Writer, ready func()) error {
+	return runInstance(ctx, args, out, ready, false)
+}
+
+func runInstance(ctx context.Context, args []string, out io.Writer, ready func(), service bool) error {
 	o, err := parseFlags(args, out)
 	if err != nil {
 		return err
@@ -165,16 +169,26 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 			err := r.syncOnce(ctx, out)
 			return errors.Join(err, r.close())
 		}
+		if err := r.server.Start(); err != nil {
+			return failRestart(errors.Join(err, r.close()))
+		}
+		url := r.browserURL()
+		removeDashboard := func() {}
+		if runtime.GOOS == "windows" && (o.tray || service) {
+			path := dashboardEndpointPath(paths.config, uint32(os.Getpid()))
+			if err := publishDashboardEndpoint(path, url); err != nil {
+				log.Printf("publish dashboard URL: %v", err)
+			} else {
+				removeDashboard = func() { _ = os.Remove(path) }
+			}
+		}
 		stopTray := func() {}
 		if o.tray {
 			stopTray, err = startTray(paths.config, r.browserURL, cancel)
 			if err != nil {
+				removeDashboard()
 				return failRestart(errors.Join(err, r.close()))
 			}
-		}
-		if err := r.server.Start(); err != nil {
-			stopTray()
-			return failRestart(errors.Join(err, r.close()))
 		}
 		ready()
 		if handoff != nil {
@@ -183,7 +197,6 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 			}
 		}
 		r.start()
-		url := r.browserURL()
 		log.Printf("listening at %s", url)
 		if openTrayDashboard || (r.listenerCfg.LaunchBrowser && !o.noBrowser && out == os.Stdout && (runtime.GOOS == "windows" || isatty.IsTerminal(os.Stdout.Fd())) && !server.IsContainerized(r.listenerCfg.UpdateMechanism)) {
 			openTrayDashboard = false
@@ -206,6 +219,7 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 		}()
 		action := r.server.WaitLifecycle()
 		stopTray()
+		removeDashboard()
 		close(stopWatching)
 		if handoff != nil {
 			handoff.Close()

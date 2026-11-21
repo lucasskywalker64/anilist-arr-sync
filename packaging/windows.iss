@@ -1,7 +1,6 @@
 #ifndef Binary
   #error Binary is required
 #endif
-#define DashboardURL "http://localhost:7171"
 #define StartDescription "Start AniList-Arr-Sync"
 #if Arch == "arm64"
   #define AllowedArch "arm64"
@@ -66,17 +65,19 @@ Name: "{group}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parame
 Name: "{userstartup}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Tasks: startup
 Name: "{commondesktop}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --open-dashboard --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Tasks: desktopicon and not service
 Name: "{commondesktop}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--open-service-dashboard ""{code:StoredServiceName}"" ""{code:DataDir}\config.xml"""; Tasks: desktopicon and service
-Name: "{group}\Open dashboard"; Filename: "{#DashboardURL}"
+Name: "{group}\Open dashboard"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--open-installed-dashboard ""{code:DataDir}\config.xml"""; Tasks: not service
+Name: "{group}\Open dashboard"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--open-installed-dashboard ""{code:DataDir}\config.xml"" ""{code:StoredServiceName}"""; Tasks: service
 
 [InstallDelete]
 Type: files; Name: "{userstartup}\AniList-Arr-Sync.lnk"; Tasks: not startup
 Type: files; Name: "{group}\AniList-Arr-Sync.lnk"; Tasks: service
 Type: files; Name: "{commondesktop}\AniList-Arr-Sync.lnk"; Tasks: not desktopicon
 Type: files; Name: "{commondesktop}\AniList-Arr-Sync.url"
+Type: files; Name: "{group}\Open dashboard.url"
 
 [Run]
-Filename: "{#DashboardURL}"; Description: "{#StartDescription}"; Tasks: service; BeforeInstall: StartInstalledService; Flags: postinstall shellexec skipifsilent runasoriginaluser
-Filename: "{app}\anilist-arr-sync.exe"; Description: "{#StartDescription}"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Tasks: not service; Flags: postinstall nowait skipifsilent runasoriginaluser
+Filename: "{app}\anilist-arr-sync.exe"; Description: "{#StartDescription}"; Parameters: "--open-installed-dashboard ""{code:DataDir}\config.xml"" ""{code:StoredServiceName}"""; Tasks: service; BeforeInstall: StartInstalledService; Flags: postinstall nowait skipifsilent runasoriginaluser
+Filename: "{app}\anilist-arr-sync.exe"; Description: "{#StartDescription}"; Parameters: "--tray --open-dashboard --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Tasks: not service; Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [UninstallDelete]
 Type: files; Name: "{app}\update-owner"
