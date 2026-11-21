@@ -139,7 +139,10 @@ open the dashboard or quit.
 Both modes retain data in `%ProgramData%\AniList-Arr-Sync` by default. Upgrades
 preserve the data location and package-manager ownership. Use Windows Installed
 Apps or the generated uninstaller to remove an installer-based installation.
-Uninstalling preserves user data.
+Uninstalling preserves local application data by default, with an opt-in option
+during interactive uninstall (or `/DELETEAPPDATA` for unattended uninstall) to
+permanently remove the recorded local data directory without affecting Sonarr,
+Radarr, or AniList.
 
 ### Container
 
