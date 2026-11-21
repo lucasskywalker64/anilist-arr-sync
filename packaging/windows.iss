@@ -35,6 +35,8 @@ Compression=lzma2
 SolidCompression=yes
 CloseApplications=yes
 RestartApplications=no
+WizardStyle=classic
+WizardSmallImageFile=compiler:WizClassicSmallImage.bmp
 #ifdef Production
 SignTool=signpath
 SignedUninstaller=yes
@@ -43,13 +45,14 @@ SignedUninstallerDir={#OutputDir}\uninstallers-{#Arch}
 SignedUninstaller=no
 #endif
 
-[Types]
-Name: "service"; Description: "Windows service (starts with Windows)"
-Name: "desktop"; Description: "Desktop tray (starts at sign-in)"
+[Messages]
+SelectTasksLabel2=Select the additional tasks you would like Setup to perform while installing [name], then click Next.
 
-[Components]
-Name: "service"; Description: "Windows service"; Types: service; Flags: exclusive
-Name: "desktop"; Description: "Desktop tray"; Types: desktop; Flags: exclusive
+[Tasks]
+Name: "desktopicon"; Description: "Create a &desktop icon"
+Name: "service"; Description: "Install Windows Service (Starts when the computer starts and runs as LocalSystem, even when no one is signed in)"; GroupDescription: "Start automatically"; Flags: exclusive unchecked
+Name: "startup"; Description: "Create shortcut in Startup folder (Starts the tray app when you log into Windows)"; GroupDescription: "Start automatically"; Flags: exclusive
+Name: "manual"; Description: "Do not start automatically"; GroupDescription: "Start automatically"; Flags: exclusive unchecked
 
 [Dirs]
 Name: "{code:DataDir}"
@@ -59,17 +62,21 @@ Source: "{#Binary}"; DestDir: "{app}"; DestName: "anilist-arr-sync.exe"; Flags: 
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop
-Name: "{userstartup}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop
+Name: "{group}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Tasks: not service
+Name: "{userstartup}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Tasks: startup
+Name: "{commondesktop}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Tasks: desktopicon and not service
+Name: "{commondesktop}\AniList-Arr-Sync"; Filename: "{#DashboardURL}"; Tasks: desktopicon and service
 Name: "{group}\Open dashboard"; Filename: "{#DashboardURL}"
 
 [InstallDelete]
-Type: files; Name: "{userstartup}\AniList-Arr-Sync.lnk"; Components: service
-Type: files; Name: "{group}\AniList-Arr-Sync.lnk"; Components: service
+Type: files; Name: "{userstartup}\AniList-Arr-Sync.lnk"; Tasks: not startup
+Type: files; Name: "{group}\AniList-Arr-Sync.lnk"; Tasks: service
+Type: files; Name: "{commondesktop}\AniList-Arr-Sync.lnk"; Tasks: not desktopicon or service
+Type: files; Name: "{commondesktop}\AniList-Arr-Sync.url"; Tasks: not desktopicon or not service
 
 [Run]
-Filename: "{#DashboardURL}"; Description: "{#StartDescription}"; Components: service; BeforeInstall: StartInstalledService; Flags: postinstall shellexec skipifsilent runasoriginaluser
-Filename: "{app}\anilist-arr-sync.exe"; Description: "{#StartDescription}"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Components: desktop; Flags: postinstall nowait skipifsilent runasoriginaluser
+Filename: "{#DashboardURL}"; Description: "{#StartDescription}"; Tasks: service; BeforeInstall: StartInstalledService; Flags: postinstall shellexec skipifsilent runasoriginaluser
+Filename: "{app}\anilist-arr-sync.exe"; Description: "{#StartDescription}"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Tasks: not service; Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [UninstallDelete]
 Type: files; Name: "{app}\update-owner"
@@ -93,7 +100,7 @@ type
   end;
 
 var
-  ModePage: TInputOptionWizardPage;
+  StartupTasksInitialized: Boolean;
   ResumeService: Boolean;
 
 function OpenSCManager(Machine, Database: String; Access: LongWord): THandle;
@@ -119,42 +126,31 @@ function WaitForSingleObject(Handle: THandle; Timeout: LongWord): LongWord;
 function CloseHandle(Handle: THandle): Boolean;
   external 'CloseHandle@kernel32.dll stdcall';
 
-procedure InitializeWizard;
-begin
-  ModePage := CreateInputOptionPage(wpSelectDir, 'Choose how the app starts',
-    'Which installation mode should Setup use?',
-    'Both modes install AniList-Arr-Sync and its web dashboard.', True, False);
-  ModePage.Add('&Windows service (starts at boot, even when signed out)');
-  ModePage.Add('&Desktop tray (starts at sign-in, with a tray icon)');
-  ModePage.CheckListBox.MinItemHeight := ScaleY(24);
-end;
-
-function ShouldSkipPage(PageID: Integer): Boolean;
-begin
-  Result := (PageID = wpSelectComponents) or ((PageID = ModePage.ID) and WizardSilent);
-end;
-
-procedure CurPageChanged(CurPageID: Integer);
-begin
-  if CurPageID = ModePage.ID then begin
-    if WizardIsComponentSelected('desktop') then ModePage.SelectedValueIndex := 1
-    else ModePage.SelectedValueIndex := 0;
-  end;
-end;
-
-function NextButtonClick(CurPageID: Integer): Boolean;
-begin
-  if CurPageID = ModePage.ID then begin
-    if ModePage.SelectedValueIndex = 1 then WizardSelectComponents('!service,desktop')
-    else WizardSelectComponents('!desktop,service');
-  end;
-  Result := True;
-end;
-
 function ServiceName: String;
 begin
   Result := ExpandConstant('{param:SERVICENAME|}');
   if Result = '' then Result := GetIniString('Installation', 'ServiceName', 'AniListArrSync', ExpandConstant('{app}\installation.ini'));
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+var LegacyType: String;
+begin
+  if (CurPageID <> wpSelectTasks) or StartupTasksInitialized then Exit;
+  StartupTasksInitialized := True;
+  LegacyType := Lowercase(ExpandConstant('{param:TYPE|}'));
+  if LegacyType = 'service' then WizardSelectTasks('service')
+  else if LegacyType = 'desktop' then WizardSelectTasks('startup')
+  else if (GetPreviousData('UsesStartupTasks', '') = '') and
+    (ExpandConstant('{param:TASKS|}{param:MERGETASKS|}') = '') then begin
+    if FileExists(ExpandConstant('{app}\installation.ini')) then begin
+      if RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\' + ServiceName) then WizardSelectTasks('service');
+    end else if WizardSilent then WizardSelectTasks('service');
+  end;
+end;
+
+procedure RegisterPreviousData(PreviousDataKey: Integer);
+begin
+  SetPreviousData(PreviousDataKey, 'UsesStartupTasks', '1');
 end;
 
 function StoredServiceName(Param: String): String;
@@ -257,7 +253,7 @@ var Window: THandle;
 begin
   Result := '';
   try
-    if WizardIsComponentSelected('desktop') then begin
+    if not WizardIsTaskSelected('service') then begin
       { User Startup and the data ACL must belong to the actual desktop user.
         Refuse credential-based elevation instead of configuring the admin's
         profile. Service installation does not depend on a desktop account. }
@@ -294,12 +290,11 @@ begin
       if not SaveStringToFile(Marker, Owner + #13#10, False) then
         RaiseException('Cannot write update ownership marker');
     RunSC('delete ' + ServiceName, True);
-    if WizardIsComponentSelected('desktop') then begin
+    if not WizardIsTaskSelected('service') then begin
       Account := GetEnv('USERDOMAIN') + '\' + GetUserNameString;
       if not Exec(ExpandConstant('{sys}\icacls.exe'), '"' + DataDir('') + '" /grant "' + Account + ':(OI)(CI)M"', '', SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
         RaiseException('Cannot grant the desktop account access to application data');
-    end;
-    if WizardIsComponentSelected('service') then begin
+    end else begin
       Command := '"' + ExpandConstant('{app}\anilist-arr-sync.exe') + '" --no-browser --data-dir "' +
         DataDir('') + '" --config "' + DataDir('') + '\config.xml"';
       StringChangeEx(Command, '"', '\"', True);

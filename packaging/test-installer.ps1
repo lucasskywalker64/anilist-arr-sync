@@ -9,7 +9,10 @@ foreach ($identity in @('AniList-Arr-Sync', 'AniList-Arr-Sync-amd64', 'AniList-A
     if (Test-Path -LiteralPath $key) { throw 'Existing installation blocks isolated installer verification' }
 }
 $startup = Join-Path ([Environment]::GetFolderPath('Startup')) 'AniList-Arr-Sync.lnk'
-if (Test-Path -LiteralPath $startup) { throw 'Existing startup shortcut blocks isolated installer verification' }
+$desktop = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'AniList-Arr-Sync'
+if (Test-Path -LiteralPath @($startup, "$desktop.lnk", "$desktop.url") | Where-Object { $_ }) {
+    throw 'Existing shortcuts block isolated installer verification'
+}
 $releaseRoot = (Resolve-Path .release).Path
 $root = Join-Path $releaseRoot ('install-test-' + [Guid]::NewGuid().ToString('N'))
 $app = Join-Path $root 'app'
@@ -104,8 +107,10 @@ function StartTray {
     $script:trayError = $tray.StandardError.ReadToEndAsync()
 }
 
-function Install([string]$Owner, [string]$Type = 'service') {
-    $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/TYPE=$Type", "/SERVICENAME=$service", "/DIR=`"$app`"", "/DATADIR=`"$data`"", "/GROUP=`"$group`"")
+function Install([string]$Owner, [string]$Type = 'service', [string]$Tasks) {
+    $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/SERVICENAME=$service", "/DIR=`"$app`"", "/DATADIR=`"$data`"", "/GROUP=`"$group`"")
+    if ($Type) { $arguments += "/TYPE=$Type" }
+    if ($Tasks) { $arguments += "/TASKS=$Tasks" }
     if ($Owner) { $arguments += "/UPDATEOWNER=$Owner" }
     InvokeInstallerProcess $Installer $arguments
 }
@@ -180,6 +185,7 @@ try {
     if ($registered.State -ne 'Stopped' -or $registered.StartMode -ne 'Auto') {
         throw 'Fresh silent install must leave the service stopped and configured for automatic startup'
     }
+    if (!(Test-Path -LiteralPath "$desktop.url")) { throw 'Service desktop icon did not link to the dashboard' }
     Start-Service -Name $service
     WaitHealthy
     foreach ($owner in 'winget', 'chocolatey', '') {
@@ -200,9 +206,13 @@ try {
     if (Get-Service -Name $service -ErrorAction SilentlyContinue) { throw 'Desktop mode retained the Windows service' }
     $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($startup)
     if ($shortcut.TargetPath -ne (Join-Path $app 'anilist-arr-sync.exe') -or !$shortcut.Arguments.Contains('--tray') -or !$shortcut.Arguments.Contains($data)) { throw 'Desktop startup shortcut lost tray/data arguments' }
-    $stage = 'switch back to service installation'
-    Install ''
-    if (Test-Path -LiteralPath $startup) { throw 'Service mode retained the tray startup shortcut' }
+    if (!(Test-Path -LiteralPath "$desktop.lnk") -or (Test-Path -LiteralPath "$desktop.url")) { throw 'Desktop mode did not replace the dashboard shortcut with a tray launcher' }
+    $stage = 'switch to manual startup with no desktop icon'
+    Install '' '' 'manual'
+    if (Get-Service -Name $service -ErrorAction SilentlyContinue) { throw 'Manual mode installed a Windows service' }
+    if (Test-Path -LiteralPath @($startup, "$desktop.lnk", "$desktop.url") | Where-Object { $_ }) {
+        throw 'Manual mode retained a startup or desktop shortcut'
+    }
     $stage = 'restore desktop installation'
     Install '' 'desktop'
     $stage = 'tray startup'
@@ -236,6 +246,7 @@ try {
     if (Test-Path -LiteralPath (Join-Path $app 'update-owner')) { throw 'Uninstall retained ownership marker' }
     if (Test-Path -LiteralPath (Join-Path $app 'anilist-arr-sync.exe')) { throw 'Uninstall retained executable' }
     if (Test-Path -LiteralPath $startup) { throw 'Uninstall retained startup shortcut' }
+    if (Test-Path -LiteralPath @("$desktop.lnk", "$desktop.url") | Where-Object { $_ }) { throw 'Uninstall retained desktop shortcut' }
     if (Test-Path -LiteralPath 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\AniList-Arr-Sync_is1') { throw 'Uninstall retained the shared installation record' }
     if (!(Test-Path -LiteralPath (Join-Path $data 'config.xml'))) { throw 'Uninstall deleted persistent user data' }
 } catch {

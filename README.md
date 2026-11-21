@@ -119,9 +119,11 @@ before making the dashboard available remotely.
 
 ### Windows installer
 
-The installer requires administrator privileges. Choose **Windows service**
-to start the app at boot or **Desktop tray** to start it at sign-in. Desktop
-tray installation requires the signed-in account to be an administrator.
+The installer requires administrator privileges. On **Select Additional Tasks**,
+you can create a desktop icon and choose whether the app starts at boot as a
+Windows service, at sign-in as a tray app, or only when you start it manually.
+Manual startup runs the same tray app from the Start menu or desktop shortcut.
+Installing the tray app requires the signed-in account to be an administrator.
 
 On the final page, **Start AniList-Arr-Sync** is checked by default. Click
 **Finish** to start the selected mode and open the dashboard. Clear the box
