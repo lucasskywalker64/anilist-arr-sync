@@ -124,6 +124,9 @@ you can create a desktop icon and choose whether the app starts at boot as a
 Windows service, at sign-in as a tray app, or only when you start it manually.
 Manual startup runs the same tray app from the Start menu or desktop shortcut.
 Installing the tray app requires the signed-in account to be an administrator.
+The desktop icon opens the dashboard in either mode. If the service is stopped,
+Windows may prompt for administrator approval to start it. In tray mode, the
+icon starts the app if needed.
 
 On the final page, **Start AniList-Arr-Sync** is checked by default. Click
 **Finish** to start the selected mode and open the dashboard. Clear the box

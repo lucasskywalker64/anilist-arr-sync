@@ -33,6 +33,7 @@ type options struct {
 	configPath, dataDir, bindAddress   string
 	port                               int
 	sync, noBrowser, showVersion, tray bool
+	openDashboard                      bool
 	showLicense                        bool
 	portSet, bindSet                   bool
 }
@@ -50,6 +51,7 @@ func parseFlags(args []string, out io.Writer) (options, error) {
 	fs.BoolVar(&o.showVersion, "version", false, "Print build version")
 	fs.BoolVar(&o.showLicense, "license", false, "Print license, third-party notices, and source links")
 	fs.BoolVar(&o.tray, "tray", false, "Run with a Windows notification-area icon")
+	fs.BoolVar(&o.openDashboard, "open-dashboard", false, "Open the dashboard from a Windows tray shortcut")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -120,6 +122,13 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 	if err != nil {
 		return err
 	}
+	openTrayDashboard := o.tray && o.openDashboard && !o.noBrowser && !o.sync
+	if openTrayDashboard {
+		opened, err := openExistingTrayDashboard(paths.config)
+		if opened || err != nil {
+			return err
+		}
+	}
 	sessions := server.NewSessionStore(24 * time.Hour)
 	sessionDatabase := ""
 	sessionSSL := false
@@ -158,7 +167,7 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 		}
 		stopTray := func() {}
 		if o.tray {
-			stopTray, err = startTray(r.browserURL, cancel)
+			stopTray, err = startTray(paths.config, r.browserURL, cancel)
 			if err != nil {
 				return failRestart(errors.Join(err, r.close()))
 			}
@@ -176,7 +185,8 @@ func runWithReady(ctx context.Context, args []string, out io.Writer, ready func(
 		r.start()
 		url := r.browserURL()
 		log.Printf("listening at %s", url)
-		if r.listenerCfg.LaunchBrowser && !o.noBrowser && out == os.Stdout && (runtime.GOOS == "windows" || isatty.IsTerminal(os.Stdout.Fd())) && !server.IsContainerized(r.listenerCfg.UpdateMechanism) {
+		if openTrayDashboard || (r.listenerCfg.LaunchBrowser && !o.noBrowser && out == os.Stdout && (runtime.GOOS == "windows" || isatty.IsTerminal(os.Stdout.Fd())) && !server.IsContainerized(r.listenerCfg.UpdateMechanism)) {
+			openTrayDashboard = false
 			if err := launchBrowser(url); err != nil {
 				log.Printf("browser: %v", err)
 			}

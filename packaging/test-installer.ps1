@@ -185,7 +185,10 @@ try {
     if ($registered.State -ne 'Stopped' -or $registered.StartMode -ne 'Auto') {
         throw 'Fresh silent install must leave the service stopped and configured for automatic startup'
     }
-    if (!(Test-Path -LiteralPath "$desktop.url")) { throw 'Service desktop icon did not link to the dashboard' }
+    $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut("$desktop.lnk")
+    if ($shortcut.TargetPath -ne (Join-Path $app 'anilist-arr-sync.exe') -or !$shortcut.Arguments.Contains('--open-service-dashboard') -or !$shortcut.Arguments.Contains($service) -or !$shortcut.Arguments.Contains($data)) {
+        throw 'Service desktop icon lost the installed launcher, service name, or dashboard config path'
+    }
     Start-Service -Name $service
     WaitHealthy
     foreach ($owner in 'winget', 'chocolatey', '') {
@@ -206,7 +209,10 @@ try {
     if (Get-Service -Name $service -ErrorAction SilentlyContinue) { throw 'Desktop mode retained the Windows service' }
     $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($startup)
     if ($shortcut.TargetPath -ne (Join-Path $app 'anilist-arr-sync.exe') -or !$shortcut.Arguments.Contains('--tray') -or !$shortcut.Arguments.Contains($data)) { throw 'Desktop startup shortcut lost tray/data arguments' }
-    if (!(Test-Path -LiteralPath "$desktop.lnk") -or (Test-Path -LiteralPath "$desktop.url")) { throw 'Desktop mode did not replace the dashboard shortcut with a tray launcher' }
+    $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut("$desktop.lnk")
+    if ($shortcut.TargetPath -ne (Join-Path $app 'anilist-arr-sync.exe') -or !$shortcut.Arguments.Contains('--tray --open-dashboard') -or !$shortcut.Arguments.Contains($data) -or (Test-Path -LiteralPath "$desktop.url")) {
+        throw 'Tray desktop icon lost the installed launcher, browser option, or dashboard config path'
+    }
     $stage = 'switch to manual startup with no desktop icon'
     Install '' '' 'manual'
     if (Get-Service -Name $service -ErrorAction SilentlyContinue) { throw 'Manual mode installed a Windows service' }

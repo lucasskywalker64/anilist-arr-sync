@@ -64,15 +64,15 @@ Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
 Name: "{group}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Tasks: not service
 Name: "{userstartup}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Tasks: startup
-Name: "{commondesktop}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Tasks: desktopicon and not service
-Name: "{commondesktop}\AniList-Arr-Sync"; Filename: "{#DashboardURL}"; Tasks: desktopicon and service
+Name: "{commondesktop}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--tray --open-dashboard --data-dir ""{code:DataDir}"" --config ""{code:DataDir}\config.xml"""; Tasks: desktopicon and not service
+Name: "{commondesktop}\AniList-Arr-Sync"; Filename: "{app}\anilist-arr-sync.exe"; Parameters: "--open-service-dashboard ""{code:StoredServiceName}"" ""{code:DataDir}\config.xml"""; Tasks: desktopicon and service
 Name: "{group}\Open dashboard"; Filename: "{#DashboardURL}"
 
 [InstallDelete]
 Type: files; Name: "{userstartup}\AniList-Arr-Sync.lnk"; Tasks: not startup
 Type: files; Name: "{group}\AniList-Arr-Sync.lnk"; Tasks: service
-Type: files; Name: "{commondesktop}\AniList-Arr-Sync.lnk"; Tasks: not desktopicon or service
-Type: files; Name: "{commondesktop}\AniList-Arr-Sync.url"; Tasks: not desktopicon or not service
+Type: files; Name: "{commondesktop}\AniList-Arr-Sync.lnk"; Tasks: not desktopicon
+Type: files; Name: "{commondesktop}\AniList-Arr-Sync.url"
 
 [Run]
 Filename: "{#DashboardURL}"; Description: "{#StartDescription}"; Tasks: service; BeforeInstall: StartInstalledService; Flags: postinstall shellexec skipifsilent runasoriginaluser
