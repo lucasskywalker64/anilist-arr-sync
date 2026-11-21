@@ -260,6 +260,7 @@ try {
     $stage = 'uninstall with active tray'
     Uninstall
     if (!$tray.WaitForExit(30000)) { throw 'Uninstall left the tray runtime running' }
+    $tray = $null; $trayOutput = $null; $trayError = $null
     if (Test-Path -LiteralPath (Join-Path $app 'update-owner')) { throw 'Uninstall retained ownership marker' }
     if (Test-Path -LiteralPath (Join-Path $app 'anilist-arr-sync.exe')) { throw 'Uninstall retained executable' }
     if (Test-Path -LiteralPath $startup) { throw 'Uninstall retained startup shortcut' }
@@ -289,6 +290,7 @@ try {
     $stage = 'opted-in uninstall deleting custom data directory with active tray'
     Uninstall @('/DELETEAPPDATA')
     if (!$tray.WaitForExit(30000)) { throw 'Opted-in uninstall left the tray runtime running' }
+    $tray = $null; $trayOutput = $null; $trayError = $null
     if (Test-Path -LiteralPath $data) { throw 'Opted-in uninstall left custom data directory behind' }
     if (!(Test-Path -LiteralPath $outsideBackupFile)) { throw 'Opted-in uninstall deleted external backup outside data directory' }
     if (!(Test-Path -LiteralPath $outsideTargetFile)) { throw 'Opted-in uninstall followed directory junction outside data directory' }
