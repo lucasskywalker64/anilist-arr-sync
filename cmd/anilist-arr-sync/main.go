@@ -169,12 +169,10 @@ func runInstance(ctx context.Context, args []string, out io.Writer, ready func()
 			err := r.syncOnce(ctx, out)
 			return errors.Join(err, r.close())
 		}
-		if err := r.server.Start(); err != nil {
-			return failRestart(errors.Join(err, r.close()))
-		}
 		url := r.browserURL()
 		removeDashboard := func() {}
 		if runtime.GOOS == "windows" && (o.tray || service) {
+			// Publish before shortcuts can discover the tray window or running service.
 			path := dashboardEndpointPath(paths.config, uint32(os.Getpid()))
 			if err := publishDashboardEndpoint(path, url); err != nil {
 				log.Printf("publish dashboard URL: %v", err)
@@ -189,6 +187,11 @@ func runInstance(ctx context.Context, args []string, out io.Writer, ready func()
 				removeDashboard()
 				return failRestart(errors.Join(err, r.close()))
 			}
+		}
+		if err := r.server.Start(); err != nil {
+			stopTray()
+			removeDashboard()
+			return failRestart(errors.Join(err, r.close()))
 		}
 		ready()
 		if handoff != nil {
