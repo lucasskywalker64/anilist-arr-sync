@@ -54,13 +54,19 @@ reinstalling dependencies; editor extensions can also keep native modules locked
 
 | Command | Work performed |
 | --- | --- |
-| `make` or `make all` | Build, frontend tests, Go race tests, frontend typechecking, license checks, and Go lint checks. |
+| `make` or `make all` | Build, frontend tests, Go race tests, frontend typechecking, license checks, Go format/vet/lint checks, packaging tests, and (on Windows) installer build and process-boundary tests. |
+| `make verify-elevated` | Run `make all` plus the elevated Windows installer lifecycle tests (`packaging/test-installer.ps1`). |
+| `make help` | List all individual frontend, Go, packaging, installer, release, and container targets. |
 | `make build` | Build the embedded frontend, check notices, and write the application executable. |
 | `make test` | Build the frontend, check notices, and run frontend and Go tests. |
 | `make test-race` | Run the same checks as `make test`, with the Go race detector enabled. |
-| `make lint` | Build the frontend, check its types and notices, then run `go vet` and `golangci-lint`. |
+| `make lint` | Build the frontend, check its types and notices, then run `gofmt`, `go vet`, and `golangci-lint`. |
+| `make packaging-test` | Run `packaging/release_test.py` and `packaging/production.test.cjs`. |
+| `make installer` | Build the Windows GUI executable with version resources and compile the Inno Setup installer into `.release/`. |
+| `make installer-process-test` | Run non-admin `packaging/test-installer-process.ps1`. |
+| `make installer-test` | Build the Windows installer and run elevated `packaging/test-installer.ps1`. |
 | `make frontend-install` | Reinstall frontend dependencies from the lockfile. |
-| `make clean` | Remove the local application executable and generated frontend files, preserving `web/dist/.gitkeep` and installed dependencies. |
+| `make clean` | Remove the local application executable, generated frontend files (preserving `web/dist/.gitkeep`), and generated Windows `.syso` resources. |
 
 `make all` and `make lint` run `golangci-lint` v2.14.0 through Go, without a
 separate installation or PATH changes. The first run downloads and compiles the

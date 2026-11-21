@@ -290,11 +290,14 @@ and build instructions.
 The frontend is embedded in the executable. Build it before compiling the Go
 application so the executable includes the current dashboard.
 
-With GNU Make installed, `make build` creates the application executable.
-`make all` builds it and runs frontend tests, Go race tests, typechecking,
-license-notice verification, and Go lint checks. See the
+With GNU Make installed, `make build` creates the application executable and
+`make help` lists every individual target. `make all` builds the app and runs
+frontend tests, Go race tests, typechecking, license-notice verification, Go
+format/lint checks, packaging tests, and (on Windows) the installer build and
+non-admin process tests. Run `make verify-elevated` in an Administrator shell to
+also run the elevated Windows installer lifecycle tests. See the
 [Make targets and prerequisites](SOURCE.md#build-and-run-a-modified-version)
-for individual checks and cleanup. The equivalent development checks can also
+for details and cleanup. The equivalent development checks can also
 be run directly:
 
 ```sh
