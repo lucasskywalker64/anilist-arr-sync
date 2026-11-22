@@ -144,7 +144,7 @@ func NewServer(
 
 	return &Server{
 		cfg:              cfg,
-		runtimeCfg:       *cfg,
+		runtimeCfg:       *cfg.Clone(),
 		configPath:       configPath,
 		db:               db,
 		orch:             orch,
@@ -200,7 +200,7 @@ func (s *Server) Errors() <-chan error {
 func (s *Server) Config() config.Config {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
-	return *s.cfg
+	return *s.cfg.Clone()
 }
 
 func (s *Server) getAPIKey() string {

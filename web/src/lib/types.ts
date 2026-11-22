@@ -141,12 +141,14 @@ export interface AppConfig {
   sonarrUrl: string;
   sonarrApiKey: string;
   sonarrQualityProfileId: number;
+  sonarrQualityProfileOverrides?: Record<string, number>;
   sonarrRootFolderPath: string;
   sonarrMonitorOnAdd: boolean;
   sonarrSearchOnAdd: boolean;
   radarrUrl: string;
   radarrApiKey: string;
   radarrQualityProfileId: number;
+  radarrQualityProfileOverrides?: Record<string, number>;
   radarrRootFolderPath: string;
   radarrMonitorOnAdd: boolean;
   radarrSearchOnAdd: boolean;

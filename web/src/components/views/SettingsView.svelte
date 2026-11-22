@@ -25,6 +25,7 @@
   import Alert from "../common/Alert.svelte";
   import Label from "../common/Label.svelte";
   import AniListStatusPicker from "./AniListStatusPicker.svelte";
+  import CountryProfileOverrides from "./CountryProfileOverrides.svelte";
   import { api } from "../../lib/api";
   import type { AppConfig, NotificationItem, ServarrConnectionOptions } from "../../lib/types";
 
@@ -33,13 +34,15 @@
 
   const servarrServices = [
     { kind: "sonarr", name: "Sonarr", versions: "v3/v4", port: 8989, url: "sonarrUrl", key: "sonarrApiKey",
-      profile: "sonarrQualityProfileId", folder: "sonarrRootFolderPath", monitor: "sonarrMonitorOnAdd", search: "sonarrSearchOnAdd" },
+      profile: "sonarrQualityProfileId", overrides: "sonarrQualityProfileOverrides", folder: "sonarrRootFolderPath", monitor: "sonarrMonitorOnAdd", search: "sonarrSearchOnAdd" },
     { kind: "radarr", name: "Radarr", versions: "v3/v4/v5", port: 7878, url: "radarrUrl", key: "radarrApiKey",
-      profile: "radarrQualityProfileId", folder: "radarrRootFolderPath", monitor: "radarrMonitorOnAdd", search: "radarrSearchOnAdd" },
+      profile: "radarrQualityProfileId", overrides: "radarrQualityProfileOverrides", folder: "radarrRootFolderPath", monitor: "radarrMonitorOnAdd", search: "radarrSearchOnAdd" },
   ] as const;
   type ServarrService = (typeof servarrServices)[number];
+
   let servarrOptions: Partial<Record<ServarrService["kind"], ServarrConnectionOptions>> = {};
   let testingServarr: ServarrService["kind"] | null = null;
+  let overridesResetToken = 0;
 
   let savedConfig: AppConfig | null = null;
   let formConfig: Partial<AppConfig> = {};
@@ -85,7 +88,15 @@
 
   function isFieldDirty(field: keyof AppConfig): boolean {
     if (!savedConfig) return false;
-    return savedConfig[field] !== formConfig[field];
+    return JSON.stringify(savedConfig[field]) !== JSON.stringify(formConfig[field]);
+  }
+
+  function normalizeOverridesMap(raw?: Record<string, number>): Record<string, number> {
+    if (!raw) return {};
+    const entries = Object.entries(raw)
+      .map(([country, id]) => [country.trim().toUpperCase(), id] as const)
+      .sort(([a], [b]) => a.localeCompare(b));
+    return Object.fromEntries(entries);
   }
 
   let notifRequestId = 0;
@@ -118,7 +129,12 @@
     loading = true;
     errorMsg = "";
     try {
-      savedConfig = await api.getConfig();
+      const loaded = await api.getConfig();
+      savedConfig = {
+        ...loaded,
+        sonarrQualityProfileOverrides: normalizeOverridesMap(loaded.sonarrQualityProfileOverrides),
+        radarrQualityProfileOverrides: normalizeOverridesMap(loaded.radarrQualityProfileOverrides),
+      };
       formConfig = JSON.parse(JSON.stringify(savedConfig));
     } catch (e: any) {
       errorMsg = e.message || "Failed to load configuration";
@@ -135,7 +151,7 @@
     try {
       const options = await api.testServarr(service.kind, url, key === "******" ? "" : key);
       if (formConfig[service.url]?.trim() === url && (formConfig[service.key]?.trim() ?? "") === key) {
-        servarrOptions[service.kind] = options;
+        servarrOptions = { ...servarrOptions, [service.kind]: options };
       }
     } catch (err) {
       errorMsg = err instanceof Error ? err.message : `Could not load ${service.name} options.`;
@@ -163,6 +179,7 @@
       }
       const res = await api.updateConfig(payload);
       savedConfig = JSON.parse(JSON.stringify(formConfig));
+      overridesResetToken += 1;
       formPassword = "";
       formPasswordConfirm = "";
       if (res?.restartRequired) {
@@ -182,6 +199,7 @@
     if (savedConfig) {
       formConfig = JSON.parse(JSON.stringify(savedConfig));
       servarrOptions = {};
+      overridesResetToken += 1;
       formPassword = "";
       formPasswordConfirm = "";
     }
@@ -1036,6 +1054,12 @@
           </FormGroup>
         </FieldSet>
       {:else if subTab === "servarr"}
+        <datalist id="anilist-country-codes">
+          <option value="CN">China</option>
+          <option value="KR">South Korea</option>
+          <option value="JP">Japan</option>
+          <option value="TW">Taiwan</option>
+        </datalist>
         {#each servarrServices as service}
           {@const options = servarrOptions[service.kind]}
           <FieldSet legend={service.name}>
@@ -1068,6 +1092,18 @@
                   bind:value={formConfig[service.profile]} />
               {/if}
             </FormGroup>
+            <CountryProfileOverrides
+              serviceKind={service.kind}
+              serviceName={service.name}
+              overrides={formConfig[service.overrides] ?? {}}
+              qualityProfiles={options?.qualityProfiles ?? []}
+              isDirty={isFieldDirty(service.overrides)}
+              disabled={saving}
+              resetToken={overridesResetToken}
+              on:change={(e) => {
+                formConfig = { ...formConfig, [service.overrides]: e.detail };
+              }}
+            />
             <FormGroup label="Root Folder" forId={`${service.kind}-settings-folder`} isDirty={isFieldDirty(service.folder)}>
               {#if options?.rootFolders?.length}
                 <select id={`${service.kind}-settings-folder`} class="formInput"

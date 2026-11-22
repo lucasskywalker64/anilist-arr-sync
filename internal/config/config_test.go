@@ -245,6 +245,127 @@ func TestConfigValidation(t *testing.T) {
 	}
 }
 
+func TestConfigValidation_QualityProfileOverrides(t *testing.T) {
+	t.Run("normalizes lowercase country codes to uppercase", func(t *testing.T) {
+		cfg := config.NewDefault()
+		cfg.SonarrQualityProfileOverrides = config.CountryQualityProfiles{"cn": 4, " kr ": 5}
+		cfg.RadarrQualityProfileOverrides = config.CountryQualityProfiles{"tw": 6}
+
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("unexpected validation error: %v", err)
+		}
+		if cfg.SonarrQualityProfileOverrides["CN"] != 4 || cfg.SonarrQualityProfileOverrides["KR"] != 5 {
+			t.Errorf("unexpected normalized Sonarr overrides: %+v", cfg.SonarrQualityProfileOverrides)
+		}
+		if cfg.RadarrQualityProfileOverrides["TW"] != 6 {
+			t.Errorf("unexpected normalized Radarr overrides: %+v", cfg.RadarrQualityProfileOverrides)
+		}
+	})
+
+	invalidCases := []struct {
+		name      string
+		modify    func(c *config.Config)
+		wantError string
+	}{
+		{
+			name: "sonarr empty country code",
+			modify: func(c *config.Config) {
+				c.SonarrQualityProfileOverrides = config.CountryQualityProfiles{"": 4}
+			},
+			wantError: "SonarrQualityProfileOverrides",
+		},
+		{
+			name: "sonarr three letter country code",
+			modify: func(c *config.Config) {
+				c.SonarrQualityProfileOverrides = config.CountryQualityProfiles{"CHN": 4}
+			},
+			wantError: "SonarrQualityProfileOverrides",
+		},
+		{
+			name: "sonarr numeric country code",
+			modify: func(c *config.Config) {
+				c.SonarrQualityProfileOverrides = config.CountryQualityProfiles{"C1": 4}
+			},
+			wantError: "SonarrQualityProfileOverrides",
+		},
+		{
+			name: "sonarr non-ascii country code",
+			modify: func(c *config.Config) {
+				c.SonarrQualityProfileOverrides = config.CountryQualityProfiles{"ÄÖ": 4}
+			},
+			wantError: "SonarrQualityProfileOverrides",
+		},
+		{
+			name: "sonarr zero profile id",
+			modify: func(c *config.Config) {
+				c.SonarrQualityProfileOverrides = config.CountryQualityProfiles{"CN": 0}
+			},
+			wantError: "SonarrQualityProfileOverrides",
+		},
+		{
+			name: "radarr negative profile id",
+			modify: func(c *config.Config) {
+				c.RadarrQualityProfileOverrides = config.CountryQualityProfiles{"KR": -2}
+			},
+			wantError: "RadarrQualityProfileOverrides",
+		},
+		{
+			name: "duplicate country code after normalization",
+			modify: func(c *config.Config) {
+				c.SonarrQualityProfileOverrides = config.CountryQualityProfiles{"cn": 4, "CN": 5}
+			},
+			wantError: "duplicate",
+		},
+	}
+
+	for _, tc := range invalidCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.NewDefault()
+			tc.modify(cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("expected validation error containing %q, got nil", tc.wantError)
+			}
+			if !containsSubstring(err.Error(), tc.wantError) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tc.wantError)
+			}
+		})
+	}
+}
+
+func TestConfigResolveQualityProfileID(t *testing.T) {
+	cfg := config.NewDefault()
+	cfg.SonarrQualityProfileID = 1
+	cfg.RadarrQualityProfileID = 2
+	cfg.SonarrQualityProfileOverrides = config.CountryQualityProfiles{"CN": 4, "KR": 5}
+	cfg.RadarrQualityProfileOverrides = config.CountryQualityProfiles{"CN": 6}
+
+	if got := cfg.ResolveSonarrQualityProfileID("CN"); got != 4 {
+		t.Errorf("ResolveSonarrQualityProfileID(CN) = %d, want 4", got)
+	}
+	if got := cfg.ResolveSonarrQualityProfileID("kr"); got != 5 {
+		t.Errorf("ResolveSonarrQualityProfileID(kr) = %d, want 5", got)
+	}
+	if got := cfg.ResolveSonarrQualityProfileID("JP"); got != 1 {
+		t.Errorf("ResolveSonarrQualityProfileID(JP) = %d, want default 1", got)
+	}
+	if got := cfg.ResolveSonarrQualityProfileID(""); got != 1 {
+		t.Errorf("ResolveSonarrQualityProfileID('') = %d, want default 1", got)
+	}
+	if got := cfg.ResolveRadarrQualityProfileID("CN"); got != 6 {
+		t.Errorf("ResolveRadarrQualityProfileID(CN) = %d, want 6", got)
+	}
+	if got := cfg.ResolveRadarrQualityProfileID("JP"); got != 2 {
+		t.Errorf("ResolveRadarrQualityProfileID(JP) = %d, want default 2", got)
+	}
+
+	cloned := cfg.Clone()
+	cloned.SonarrQualityProfileOverrides["CN"] = 99
+	if cfg.SonarrQualityProfileOverrides["CN"] != 4 {
+		t.Errorf("Clone did not isolate SonarrQualityProfileOverrides map")
+	}
+}
+
 func containsSubstring(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 || (len(s) > 0 && searchSubstr(s, substr)))
 }
