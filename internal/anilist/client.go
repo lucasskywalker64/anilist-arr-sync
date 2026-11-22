@@ -88,15 +88,16 @@ type MediaCoverImage struct {
 
 // Media represents an anime media entity on AniList.
 type Media struct {
-	ID         int             `json:"id"`
-	IDMal      *int            `json:"idMal"`
-	Title      MediaTitle      `json:"title"`
-	CoverImage MediaCoverImage `json:"coverImage"`
-	Format     string          `json:"format"`
-	Status     MediaStatus     `json:"status"`
-	StartDate  Date            `json:"startDate"`
-	Episodes   *int            `json:"episodes"`
-	Synonyms   []string        `json:"synonyms"`
+	ID              int             `json:"id"`
+	IDMal           *int            `json:"idMal"`
+	Title           MediaTitle      `json:"title"`
+	CoverImage      MediaCoverImage `json:"coverImage"`
+	Format          string          `json:"format"`
+	Status          MediaStatus     `json:"status"`
+	CountryOfOrigin string          `json:"countryOfOrigin"`
+	StartDate       Date            `json:"startDate"`
+	Episodes        *int            `json:"episodes"`
+	Synonyms        []string        `json:"synonyms"`
 }
 
 const defaultCoverPlaceholderURL = "https://dummyimage.com/400x600/2b2d42/2b2d42.png"
@@ -388,6 +389,7 @@ query ($userName: String, $type: MediaType, $statusIn: [MediaListStatus], $chunk
           }
           format
           status
+          countryOfOrigin
           startDate {
             year
             month

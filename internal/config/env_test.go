@@ -168,3 +168,70 @@ func TestApplyEnv_InvalidValues(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyEnv_QualityProfileOverrides(t *testing.T) {
+	t.Run("comma-separated map syntax", func(t *testing.T) {
+		cfg := config.NewDefault()
+		err := cfg.ApplyEnv([]string{
+			"ANILIST_SYNC__SONARR__QUALITYPROFILEOVERRIDES=cn=4,KR:5",
+			"ANILIST_SYNC__RADARR__QUALITYPROFILEOVERRIDES=CN=6, tw=7",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("unexpected validation error: %v", err)
+		}
+		if cfg.SonarrQualityProfileOverrides["CN"] != 4 || cfg.SonarrQualityProfileOverrides["KR"] != 5 {
+			t.Errorf("unexpected Sonarr overrides: %+v", cfg.SonarrQualityProfileOverrides)
+		}
+		if cfg.RadarrQualityProfileOverrides["CN"] != 6 || cfg.RadarrQualityProfileOverrides["TW"] != 7 {
+			t.Errorf("unexpected Radarr overrides: %+v", cfg.RadarrQualityProfileOverrides)
+		}
+	})
+
+	t.Run("per-country key syntax", func(t *testing.T) {
+		cfg := config.NewDefault()
+		err := cfg.ApplyEnv([]string{
+			"ANILIST_SYNC__SONARR__QUALITYPROFILEOVERRIDES__cn=4",
+			"ANILIST_SYNC__RADARR__QUALITYPROFILEOVERRIDES__KR=8",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("unexpected validation error: %v", err)
+		}
+		if cfg.SonarrQualityProfileOverrides["CN"] != 4 {
+			t.Errorf("unexpected Sonarr overrides: %+v", cfg.SonarrQualityProfileOverrides)
+		}
+		if cfg.RadarrQualityProfileOverrides["KR"] != 8 {
+			t.Errorf("unexpected Radarr overrides: %+v", cfg.RadarrQualityProfileOverrides)
+		}
+	})
+
+	t.Run("empty map clears existing overrides", func(t *testing.T) {
+		cfg := config.NewDefault()
+		cfg.SonarrQualityProfileOverrides = config.CountryQualityProfiles{"CN": 4}
+		if err := cfg.ApplyEnv([]string{"ANILIST_SYNC__SONARR__QUALITYPROFILEOVERRIDES="}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(cfg.SonarrQualityProfileOverrides) != 0 {
+			t.Errorf("expected empty overrides, got %+v", cfg.SonarrQualityProfileOverrides)
+		}
+	})
+
+	t.Run("invalid syntax rejected", func(t *testing.T) {
+		for _, env := range []string{
+			"ANILIST_SYNC__SONARR__QUALITYPROFILEOVERRIDES=CN",
+			"ANILIST_SYNC__SONARR__QUALITYPROFILEOVERRIDES=CN=abc",
+			"ANILIST_SYNC__SONARR__QUALITYPROFILEOVERRIDES=cn=4,CN=5",
+			"ANILIST_SYNC__RADARR__QUALITYPROFILEOVERRIDES__CN=notanint",
+		} {
+			cfg := config.NewDefault()
+			if err := cfg.ApplyEnv([]string{env}); err == nil {
+				t.Errorf("expected error for %q, got nil", env)
+			}
+		}
+	})
+}

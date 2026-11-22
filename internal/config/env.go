@@ -11,6 +11,13 @@ const envPrefix = "ANILIST_SYNC__"
 // ApplyEnv parses environment variables matching ANILIST_SYNC__[NAMESPACE]__[KEY]
 // and applies them over the receiver Config fields.
 func (c *Config) ApplyEnv(environ []string) error {
+	type envEntry struct {
+		origKey string
+		subKey  string
+		val     string
+	}
+	var perCountry []envEntry
+
 	for _, entry := range environ {
 		key, value, found := strings.Cut(entry, "=")
 		if !found {
@@ -25,7 +32,19 @@ func (c *Config) ApplyEnv(environ []string) error {
 		subKey := strings.TrimPrefix(upperKey, envPrefix)
 		val := strings.TrimSpace(value)
 
+		if strings.HasPrefix(subKey, "RADARR__QUALITYPROFILEOVERRIDES__") ||
+			strings.HasPrefix(subKey, "SONARR__QUALITYPROFILEOVERRIDES__") {
+			perCountry = append(perCountry, envEntry{origKey: key, subKey: subKey, val: val})
+			continue
+		}
+
 		if err := c.applyField(key, subKey, val); err != nil {
+			return err
+		}
+	}
+
+	for _, e := range perCountry {
+		if err := c.applyField(e.origKey, e.subKey, e.val); err != nil {
 			return err
 		}
 	}
@@ -173,6 +192,12 @@ func (c *Config) applyField(origKey, subKey, val string) error {
 			return err
 		}
 		c.RadarrQualityProfileID = v
+	case "RADARR__QUALITYPROFILEOVERRIDES":
+		overrides, err := parseQualityProfileOverridesEnv(origKey, val)
+		if err != nil {
+			return err
+		}
+		c.RadarrQualityProfileOverrides = overrides
 	case "RADARR__ROOTFOLDERPATH":
 		c.RadarrRootFolderPath = val
 	case "RADARR__SEARCHONADD":
@@ -193,6 +218,12 @@ func (c *Config) applyField(origKey, subKey, val string) error {
 			return err
 		}
 		c.SonarrQualityProfileID = v
+	case "SONARR__QUALITYPROFILEOVERRIDES":
+		overrides, err := parseQualityProfileOverridesEnv(origKey, val)
+		if err != nil {
+			return err
+		}
+		c.SonarrQualityProfileOverrides = overrides
 	case "SONARR__ROOTFOLDERPATH":
 		c.SonarrRootFolderPath = val
 	case "SONARR__SERIESTYPE":
@@ -267,7 +298,60 @@ func (c *Config) applyField(origKey, subKey, val string) error {
 			return err
 		}
 		c.FirstRunDryRun = v
+	default:
+		switch {
+		case strings.HasPrefix(subKey, "RADARR__QUALITYPROFILEOVERRIDES__"):
+			country := strings.TrimPrefix(subKey, "RADARR__QUALITYPROFILEOVERRIDES__")
+			v, err := parseInt()
+			if err != nil {
+				return err
+			}
+			if c.RadarrQualityProfileOverrides == nil {
+				c.RadarrQualityProfileOverrides = make(CountryQualityProfiles)
+			}
+			c.RadarrQualityProfileOverrides[country] = v
+		case strings.HasPrefix(subKey, "SONARR__QUALITYPROFILEOVERRIDES__"):
+			country := strings.TrimPrefix(subKey, "SONARR__QUALITYPROFILEOVERRIDES__")
+			v, err := parseInt()
+			if err != nil {
+				return err
+			}
+			if c.SonarrQualityProfileOverrides == nil {
+				c.SonarrQualityProfileOverrides = make(CountryQualityProfiles)
+			}
+			c.SonarrQualityProfileOverrides[country] = v
+		}
 	}
 
 	return nil
+}
+
+func parseQualityProfileOverridesEnv(origKey, val string) (CountryQualityProfiles, error) {
+	if val == "" {
+		return nil, nil
+	}
+	result := make(CountryQualityProfiles)
+	for entry := range strings.SplitSeq(val, ",") {
+		part := strings.TrimSpace(entry)
+		if part == "" {
+			return nil, fmt.Errorf("invalid quality profile override entry in %s: empty item", origKey)
+		}
+		rawCountry, rawID, found := strings.Cut(part, "=")
+		if !found {
+			rawCountry, rawID, found = strings.Cut(part, ":")
+		}
+		if !found {
+			return nil, fmt.Errorf("invalid quality profile override %q for %s (expected CC=ID or CC:ID)", part, origKey)
+		}
+		country := strings.ToUpper(strings.TrimSpace(rawCountry))
+		if _, exists := result[country]; exists {
+			return nil, fmt.Errorf("duplicate quality profile override for country %q in %s", country, origKey)
+		}
+		id, err := strconv.Atoi(strings.TrimSpace(rawID))
+		if err != nil {
+			return nil, fmt.Errorf("invalid integer profile ID %q for country %q in %s: %w", strings.TrimSpace(rawID), country, origKey, err)
+		}
+		result[country] = id
+	}
+	return result, nil
 }

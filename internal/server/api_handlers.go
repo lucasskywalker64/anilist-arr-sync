@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -250,7 +251,7 @@ func (s *Server) requiresRestart(next config.Config) bool {
 // handleGetConfig returns the sanitized runtime configuration.
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	s.cfgMu.RLock()
-	sanitized := *s.cfg
+	sanitized := *s.cfg.Clone()
 	restartRequired := s.requiresRestart(sanitized)
 	s.cfgMu.RUnlock()
 	if sanitized.RadarrAPIKey != "" {
@@ -270,67 +271,78 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	radarrOverrides := sanitized.RadarrQualityProfileOverrides
+	if radarrOverrides == nil {
+		radarrOverrides = config.CountryQualityProfiles{}
+	}
+	sonarrOverrides := sanitized.SonarrQualityProfileOverrides
+	if sonarrOverrides == nil {
+		sonarrOverrides = config.CountryQualityProfiles{}
+	}
+
 	// serialize to JSON map
 	m := map[string]any{
-		"bindAddress":               sanitized.BindAddress,
-		"port":                      sanitized.Port,
-		"urlBase":                   sanitized.URLBase,
-		"allowedHosts":              sanitized.AllowedHosts,
-		"applicationUrl":            sanitized.ApplicationURL,
-		"enableSsl":                 sanitized.EnableSsl,
-		"sslPort":                   sanitized.SslPort,
-		"authenticationMethod":      sanitized.AuthenticationMethod,
-		"authenticationRequired":    sanitized.AuthenticationRequired,
-		"trustedNetworks":           sanitized.TrustedNetworks,
-		"apiKey":                    sanitized.APIKey,
-		"username":                  adminUsername,
-		"useProxy":                  sanitized.UseProxy,
-		"proxyType":                 sanitized.ProxyType,
-		"proxyHostname":             sanitized.ProxyHostname,
-		"proxyPort":                 sanitized.ProxyPort,
-		"proxyUsername":             sanitized.ProxyUsername,
-		"proxyPassword":             sanitized.ProxyPassword,
-		"proxyIgnoredAddresses":     sanitized.ProxyIgnoredAddresses,
-		"proxyBypassLocalAddresses": sanitized.ProxyBypassLocalAddresses,
-		"logLevel":                  sanitized.LogLevel,
-		"consoleLogLevel":           sanitized.ConsoleLogLevel,
-		"logSizeLimit":              sanitized.LogSizeLimit,
-		"instanceName":              sanitized.InstanceName,
-		"wizardCompleted":           sanitized.WizardCompleted,
-		"restartRequired":           restartRequired,
-		"updateBranch":              sanitized.UpdateBranch,
-		"updateAutomatically":       sanitized.UpdateAutomatically,
-		"updateMechanism":           sanitized.UpdateMechanism,
-		"backupFolder":              sanitized.BackupFolder,
-		"backupInterval":            sanitized.BackupInterval,
-		"backupRetention":           sanitized.BackupRetention,
-		"databasePath":              sanitized.DatabasePath,
-		"aniListUsername":           sanitized.AniListUsername,
-		"aniListTvStatus":           sanitized.AniListTvStatus,
-		"aniListMovieStatus":        sanitized.AniListMovieStatus,
-		"radarrUrl":                 sanitized.RadarrURL,
-		"radarrApiKey":              sanitized.RadarrAPIKey,
-		"radarrQualityProfileId":    sanitized.RadarrQualityProfileID,
-		"radarrRootFolderPath":      sanitized.RadarrRootFolderPath,
-		"radarrMonitorOnAdd":        sanitized.RadarrMonitorOnAdd,
-		"radarrSearchOnAdd":         sanitized.RadarrSearchOnAdd,
-		"sonarrUrl":                 sanitized.SonarrURL,
-		"sonarrApiKey":              sanitized.SonarrAPIKey,
-		"sonarrQualityProfileId":    sanitized.SonarrQualityProfileID,
-		"sonarrRootFolderPath":      sanitized.SonarrRootFolderPath,
-		"sonarrMonitorOnAdd":        sanitized.SonarrMonitorOnAdd,
-		"sonarrSearchOnAdd":         sanitized.SonarrSearchOnAdd,
-		"tagName":                   sanitized.TagName,
-		"syncIntervalHours":         sanitized.SyncIntervalHours,
-		"dateToleranceDays":         sanitized.DateToleranceDays,
-		"confidenceThreshold":       sanitized.ConfidenceThreshold,
-		"unmonitorDropped":          sanitized.UnmonitorDropped,
-		"unmonitorCompleted":        sanitized.UnmonitorCompleted,
-		"deleteDropped":             sanitized.DeleteDropped,
-		"deleteCompleted":           sanitized.DeleteCompleted,
-		"unmonitorWatched":          sanitized.UnmonitorWatched,
-		"deleteWatched":             sanitized.DeleteWatched,
-		"firstRunDryRun":            sanitized.FirstRunDryRun,
+		"bindAddress":                   sanitized.BindAddress,
+		"port":                          sanitized.Port,
+		"urlBase":                       sanitized.URLBase,
+		"allowedHosts":                  sanitized.AllowedHosts,
+		"applicationUrl":                sanitized.ApplicationURL,
+		"enableSsl":                     sanitized.EnableSsl,
+		"sslPort":                       sanitized.SslPort,
+		"authenticationMethod":          sanitized.AuthenticationMethod,
+		"authenticationRequired":        sanitized.AuthenticationRequired,
+		"trustedNetworks":               sanitized.TrustedNetworks,
+		"apiKey":                        sanitized.APIKey,
+		"username":                      adminUsername,
+		"useProxy":                      sanitized.UseProxy,
+		"proxyType":                     sanitized.ProxyType,
+		"proxyHostname":                 sanitized.ProxyHostname,
+		"proxyPort":                     sanitized.ProxyPort,
+		"proxyUsername":                 sanitized.ProxyUsername,
+		"proxyPassword":                 sanitized.ProxyPassword,
+		"proxyIgnoredAddresses":         sanitized.ProxyIgnoredAddresses,
+		"proxyBypassLocalAddresses":     sanitized.ProxyBypassLocalAddresses,
+		"logLevel":                      sanitized.LogLevel,
+		"consoleLogLevel":               sanitized.ConsoleLogLevel,
+		"logSizeLimit":                  sanitized.LogSizeLimit,
+		"instanceName":                  sanitized.InstanceName,
+		"wizardCompleted":               sanitized.WizardCompleted,
+		"restartRequired":               restartRequired,
+		"updateBranch":                  sanitized.UpdateBranch,
+		"updateAutomatically":           sanitized.UpdateAutomatically,
+		"updateMechanism":               sanitized.UpdateMechanism,
+		"backupFolder":                  sanitized.BackupFolder,
+		"backupInterval":                sanitized.BackupInterval,
+		"backupRetention":               sanitized.BackupRetention,
+		"databasePath":                  sanitized.DatabasePath,
+		"aniListUsername":               sanitized.AniListUsername,
+		"aniListTvStatus":               sanitized.AniListTvStatus,
+		"aniListMovieStatus":            sanitized.AniListMovieStatus,
+		"radarrUrl":                     sanitized.RadarrURL,
+		"radarrApiKey":                  sanitized.RadarrAPIKey,
+		"radarrQualityProfileId":        sanitized.RadarrQualityProfileID,
+		"radarrQualityProfileOverrides": radarrOverrides,
+		"radarrRootFolderPath":          sanitized.RadarrRootFolderPath,
+		"radarrMonitorOnAdd":            sanitized.RadarrMonitorOnAdd,
+		"radarrSearchOnAdd":             sanitized.RadarrSearchOnAdd,
+		"sonarrUrl":                     sanitized.SonarrURL,
+		"sonarrApiKey":                  sanitized.SonarrAPIKey,
+		"sonarrQualityProfileId":        sanitized.SonarrQualityProfileID,
+		"sonarrQualityProfileOverrides": sonarrOverrides,
+		"sonarrRootFolderPath":          sanitized.SonarrRootFolderPath,
+		"sonarrMonitorOnAdd":            sanitized.SonarrMonitorOnAdd,
+		"sonarrSearchOnAdd":             sanitized.SonarrSearchOnAdd,
+		"tagName":                       sanitized.TagName,
+		"syncIntervalHours":             sanitized.SyncIntervalHours,
+		"dateToleranceDays":             sanitized.DateToleranceDays,
+		"confidenceThreshold":           sanitized.ConfidenceThreshold,
+		"unmonitorDropped":              sanitized.UnmonitorDropped,
+		"unmonitorCompleted":            sanitized.UnmonitorCompleted,
+		"deleteDropped":                 sanitized.DeleteDropped,
+		"deleteCompleted":               sanitized.DeleteCompleted,
+		"unmonitorWatched":              sanitized.UnmonitorWatched,
+		"deleteWatched":                 sanitized.DeleteWatched,
+		"firstRunDryRun":                sanitized.FirstRunDryRun,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -359,7 +371,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
 
-	next := *s.cfg
+	next := *s.cfg.Clone()
 	completingSetup := false
 
 	// Apply known fields to copy
@@ -563,6 +575,17 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			} else {
 				next.RadarrQualityProfileID = int(num)
 			}
+		case "sonarrqualityprofileoverrides", "radarrqualityprofileoverrides":
+			overrides, err := parseQualityProfileOverridesJSON(v)
+			if err != nil {
+				s.writeJSONError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			if k == "sonarrqualityprofileoverrides" {
+				next.SonarrQualityProfileOverrides = overrides
+			} else {
+				next.RadarrQualityProfileOverrides = overrides
+			}
 		case "sonarrrootfolderpath":
 			if str, ok := v.(string); ok {
 				next.SonarrRootFolderPath = str
@@ -743,6 +766,35 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		"message":         "configuration updated",
 		"restartRequired": s.requiresRestart(next),
 	})
+}
+
+func parseQualityProfileOverridesJSON(v any) (config.CountryQualityProfiles, error) {
+	if v == nil {
+		return nil, nil
+	}
+	raw, ok := v.(map[string]any)
+	if !ok {
+		return nil, errors.New("quality profile overrides must be an object mapping country codes to profile IDs")
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	parsed := make(config.CountryQualityProfiles, len(raw))
+	for rawKey, rawVal := range raw {
+		code, valid := config.NormalizeCountryCode(rawKey)
+		if !valid {
+			return nil, fmt.Errorf("invalid country code %q (expected 2-letter ASCII code)", rawKey)
+		}
+		if _, exists := parsed[code]; exists {
+			return nil, fmt.Errorf("duplicate country code %q in quality profile overrides", code)
+		}
+		num, ok := rawVal.(float64)
+		if !ok || num <= 0 || num > math.MaxInt32 || math.Trunc(num) != num {
+			return nil, fmt.Errorf("quality profile ID for %s must be a positive integer", code)
+		}
+		parsed[code] = int(num)
+	}
+	return parsed, nil
 }
 
 // handleStartSync triggers a manual sync run in the background.

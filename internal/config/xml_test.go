@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -138,67 +139,69 @@ func TestToXML_RoundTrip(t *testing.T) {
 
 func TestToXML_FullRoundTrip_AllFields(t *testing.T) {
 	orig := &config.Config{
-		BindAddress:                "10.0.0.1",
-		Port:                       8888,
-		URLBase:                    "/custom-base",
-		AllowedHosts:               "example.com,localhost",
-		ApplicationURL:             "https://example.com/custom-base",
-		EnableSsl:                  true,
-		SslPort:                    8889,
-		SslCertPath:                "/certs/cert.pem",
-		SslKeyPath:                 "/certs/key.pem",
-		AuthenticationMethod:       "Basic",
-		AuthenticationRequired:     "Enabled",
-		APIKey:                     "custom-secret-key-12345678901234",
-		TrustedNetworks:            "10.0.0.0/8,172.16.0.0/12",
-		UseProxy:                   true,
-		ProxyType:                  "Socks5",
-		ProxyHostname:              "proxy.example.com",
-		ProxyPort:                  1080,
-		ProxyUsername:              "puser",
-		ProxyPassword:              "ppass",
-		ProxyIgnoredAddresses:      "192.168.1.1",
-		ProxyBypassLocalAddresses:  false,
-		LogLevel:                   "Debug",
-		ConsoleLogLevel:            "Trace",
-		LogSizeLimit:               50,
-		LogRotate:                  15,
-		InstanceName:               "Non-Default Instance",
-		LaunchBrowser:              true,
-		EnableDesktopNotifications: true,
-		UpdateBranch:               "nightly",
-		UpdateAutomatically:        true,
-		UpdateMechanism:            "BuiltIn",
-		BackupFolder:               "/custom/backups",
-		BackupInterval:             48,
-		BackupRetention:            60,
-		DatabasePath:               "/custom/data/sync.db",
-		AniListUsername:            "custom_user",
-		AniListTvStatus:            "CURRENT",
-		AniListMovieStatus:         "PLANNING",
-		AniListIncludeUnreleased:   true,
-		RadarrURL:                  "http://radarr.local:7878",
-		RadarrAPIKey:               "radarr-key-999",
-		RadarrQualityProfileID:     5,
-		RadarrRootFolderPath:       "/media/movies",
-		RadarrSearchOnAdd:          true,
-		SonarrURL:                  "http://sonarr.local:8989",
-		SonarrAPIKey:               "sonarr-key-888",
-		SonarrQualityProfileID:     7,
-		SonarrRootFolderPath:       "/media/tv",
-		SonarrSeriesType:           "standard",
-		SonarrSearchOnAdd:          true,
-		TagName:                    "custom-tag-name",
-		SyncIntervalHours:          12,
-		DateToleranceDays:          14,
-		ConfidenceThreshold:        0.95,
-		UnmonitorDropped:           true,
-		UnmonitorCompleted:         true,
-		DeleteDropped:              true,
-		DeleteCompleted:            true,
-		UnmonitorWatched:           true,
-		DeleteWatched:              true,
-		FirstRunDryRun:             true,
+		BindAddress:                   "10.0.0.1",
+		Port:                          8888,
+		URLBase:                       "/custom-base",
+		AllowedHosts:                  "example.com,localhost",
+		ApplicationURL:                "https://example.com/custom-base",
+		EnableSsl:                     true,
+		SslPort:                       8889,
+		SslCertPath:                   "/certs/cert.pem",
+		SslKeyPath:                    "/certs/key.pem",
+		AuthenticationMethod:          "Basic",
+		AuthenticationRequired:        "Enabled",
+		APIKey:                        "custom-secret-key-12345678901234",
+		TrustedNetworks:               "10.0.0.0/8,172.16.0.0/12",
+		UseProxy:                      true,
+		ProxyType:                     "Socks5",
+		ProxyHostname:                 "proxy.example.com",
+		ProxyPort:                     1080,
+		ProxyUsername:                 "puser",
+		ProxyPassword:                 "ppass",
+		ProxyIgnoredAddresses:         "192.168.1.1",
+		ProxyBypassLocalAddresses:     false,
+		LogLevel:                      "Debug",
+		ConsoleLogLevel:               "Trace",
+		LogSizeLimit:                  50,
+		LogRotate:                     15,
+		InstanceName:                  "Non-Default Instance",
+		LaunchBrowser:                 true,
+		EnableDesktopNotifications:    true,
+		UpdateBranch:                  "nightly",
+		UpdateAutomatically:           true,
+		UpdateMechanism:               "BuiltIn",
+		BackupFolder:                  "/custom/backups",
+		BackupInterval:                48,
+		BackupRetention:               60,
+		DatabasePath:                  "/custom/data/sync.db",
+		AniListUsername:               "custom_user",
+		AniListTvStatus:               "CURRENT",
+		AniListMovieStatus:            "PLANNING",
+		AniListIncludeUnreleased:      true,
+		RadarrURL:                     "http://radarr.local:7878",
+		RadarrAPIKey:                  "radarr-key-999",
+		RadarrQualityProfileID:        5,
+		RadarrQualityProfileOverrides: config.CountryQualityProfiles{"CN": 8, "KR": 9},
+		RadarrRootFolderPath:          "/media/movies",
+		RadarrSearchOnAdd:             true,
+		SonarrURL:                     "http://sonarr.local:8989",
+		SonarrAPIKey:                  "sonarr-key-888",
+		SonarrQualityProfileID:        7,
+		SonarrQualityProfileOverrides: config.CountryQualityProfiles{"CN": 10, "TW": 11},
+		SonarrRootFolderPath:          "/media/tv",
+		SonarrSeriesType:              "standard",
+		SonarrSearchOnAdd:             true,
+		TagName:                       "custom-tag-name",
+		SyncIntervalHours:             12,
+		DateToleranceDays:             14,
+		ConfidenceThreshold:           0.95,
+		UnmonitorDropped:              true,
+		UnmonitorCompleted:            true,
+		DeleteDropped:                 true,
+		DeleteCompleted:               true,
+		UnmonitorWatched:              true,
+		DeleteWatched:                 true,
+		FirstRunDryRun:                true,
 	}
 
 	data, err := orig.ToXML()
@@ -211,8 +214,55 @@ func TestToXML_FullRoundTrip_AllFields(t *testing.T) {
 		t.Fatalf("ParseXML failed: %v", err)
 	}
 
-	if *loaded != *orig {
+	if !reflect.DeepEqual(loaded, orig) {
 		t.Errorf("parsed config does not equal original config.\nLoaded: %+v\nOriginal: %+v", loaded, orig)
+	}
+}
+
+func TestParseXML_QualityProfileOverrides(t *testing.T) {
+	xmlData := []byte(`<Config>
+  <SonarrQualityProfileOverrides>
+    <Override country="cn">4</Override>
+    <Override country="KR">5</Override>
+  </SonarrQualityProfileOverrides>
+  <RadarrQualityProfileOverrides>
+    <Override country="tw">6</Override>
+  </RadarrQualityProfileOverrides>
+</Config>`)
+
+	cfg, err := config.ParseXML(xmlData)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+	if cfg.SonarrQualityProfileOverrides["CN"] != 4 || cfg.SonarrQualityProfileOverrides["KR"] != 5 {
+		t.Errorf("unexpected Sonarr overrides: %+v", cfg.SonarrQualityProfileOverrides)
+	}
+	if cfg.RadarrQualityProfileOverrides["TW"] != 6 {
+		t.Errorf("unexpected Radarr overrides: %+v", cfg.RadarrQualityProfileOverrides)
+	}
+
+	// Duplicate country code after case normalization must fail parsing.
+	dupXML := []byte(`<Config>
+  <SonarrQualityProfileOverrides>
+    <Override country="cn">4</Override>
+    <Override country="CN">5</Override>
+  </SonarrQualityProfileOverrides>
+</Config>`)
+	if _, err := config.ParseXML(dupXML); err == nil {
+		t.Fatal("expected error for duplicate country override in XML, got nil")
+	}
+
+	// Non-integer profile ID must fail parsing.
+	badIntXML := []byte(`<Config>
+  <RadarrQualityProfileOverrides>
+    <Override country="CN">abc</Override>
+  </RadarrQualityProfileOverrides>
+</Config>`)
+	if _, err := config.ParseXML(badIntXML); err == nil {
+		t.Fatal("expected error for non-integer profile ID in XML, got nil")
 	}
 }
 

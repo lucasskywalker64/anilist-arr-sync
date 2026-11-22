@@ -67,13 +67,21 @@ func (o *Orchestrator) PrepareReview(ctx context.Context, id, tvdbID int) (*Revi
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	var pending int
+	var countryOfOrigin string
 	if err := run.db.Read(ctx, func(ctx context.Context, q storage.Querier) error {
-		return q.QueryRowContext(ctx, `SELECT COUNT(*) FROM review_queue WHERE id=? AND status='PENDING'`, id).Scan(&pending)
+		return q.QueryRowContext(ctx, `
+			SELECT COALESCE(NULLIF(rq.country_of_origin, ''), COALESCE(sm.country_of_origin, ''))
+			FROM review_queue rq
+			LEFT JOIN synced_media sm ON sm.anilist_id = rq.anilist_id
+			WHERE rq.id = ? AND rq.status = 'PENDING'
+		`, id).Scan(&countryOfOrigin)
 	}); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("pending review and positive TVDB ID are required")
+		}
 		return nil, err
 	}
-	if pending != 1 || tvdbID <= 0 {
+	if tvdbID <= 0 {
 		return nil, errors.New("pending review and positive TVDB ID are required")
 	}
 	series, err := run.sonarr.LookupSeriesByTVDBID(ctx, tvdbID)
@@ -85,7 +93,8 @@ func (o *Orchestrator) PrepareReview(ctx context.Context, id, tvdbID int) (*Revi
 		return nil, errors.New("this series is already being prepared by another review")
 	}
 	if p.created {
-		if run.cfg.SonarrQualityProfileID <= 0 || run.cfg.SonarrRootFolderPath == "" {
+		qualityProfileID := run.cfg.ResolveSonarrQualityProfileID(countryOfOrigin)
+		if qualityProfileID <= 0 || run.cfg.SonarrRootFolderPath == "" {
 			_ = run.writeReview(ctx, `DELETE FROM review_preparations WHERE review_id=?`, id)
 			return nil, errors.New("configure a Sonarr quality profile and root folder before loading episodes")
 		}
@@ -112,7 +121,7 @@ func (o *Orchestrator) PrepareReview(ctx context.Context, id, tvdbID int) (*Revi
 		if err = run.writeReview(ctx, `UPDATE review_preparations SET add_started_at=CURRENT_TIMESTAMP WHERE review_id=?`, id); err != nil {
 			return nil, err
 		}
-		series, err = run.sonarr.AddSeries(ctx, servarr.AddSeriesRequest{TVDBID: tvdbID, Title: series.Title, RootFolderPath: run.cfg.SonarrRootFolderPath, QualityProfileID: run.cfg.SonarrQualityProfileID, SeriesType: run.cfg.SonarrSeriesType, SeasonFolder: true, Monitored: false, MonitorNewItems: "none", Seasons: seasons, Tags: tags, AddOptions: &servarr.AddSeriesOptions{Monitor: "none"}})
+		series, err = run.sonarr.AddSeries(ctx, servarr.AddSeriesRequest{TVDBID: tvdbID, Title: series.Title, RootFolderPath: run.cfg.SonarrRootFolderPath, QualityProfileID: qualityProfileID, SeriesType: run.cfg.SonarrSeriesType, SeasonFolder: true, Monitored: false, MonitorNewItems: "none", Seasons: seasons, Tags: tags, AddOptions: &servarr.AddSeriesOptions{Monitor: "none"}})
 		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 		if err != nil {

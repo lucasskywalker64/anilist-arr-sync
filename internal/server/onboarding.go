@@ -39,7 +39,7 @@ func validateOnboardingConfig(next config.Config) error {
 	if next.RadarrURL != "" && (strings.TrimSpace(next.RadarrAPIKey) == "" || next.RadarrQualityProfileID <= 0 || strings.TrimSpace(next.RadarrRootFolderPath) == "") {
 		return errors.New("completing setup with Radarr requires its API key, profile, and root folder")
 	}
-	effective := next
+	effective := *next.Clone()
 	if err := effective.ApplyEnv(os.Environ()); err != nil {
 		return errors.New("could not validate setup against environment variables")
 	}

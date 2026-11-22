@@ -1120,3 +1120,89 @@ func TestFetchUserMediaListOverview_PaginatedMinimalFields(t *testing.T) {
 		t.Errorf("unexpected overview[2]: %+v", overview[2])
 	}
 }
+
+func TestFetchWatchlist_CountryOfOrigin(t *testing.T) {
+	var capturedQuery string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		capturedQuery = body.Query
+
+		resp := map[string]any{
+			"data": map[string]any{
+				"MediaListCollection": map[string]any{
+					"hasNextChunk": false,
+					"lists": []map[string]any{
+						{
+							"name":   "Watching",
+							"status": "CURRENT",
+							"entries": []map[string]any{
+								{
+									"id":     201,
+									"status": "CURRENT",
+									"media": map[string]any{
+										"id":              126403,
+										"format":          "ONA",
+										"status":          "FINISHED",
+										"countryOfOrigin": "CN",
+										"title":           map[string]any{"romaji": "Shiguang Dailiren"},
+									},
+								},
+								{
+									"id":     202,
+									"status": "CURRENT",
+									"media": map[string]any{
+										"id":              154587,
+										"format":          "TV",
+										"status":          "FINISHED",
+										"countryOfOrigin": "JP",
+										"title":           map[string]any{"romaji": "Sousou no Frieren"},
+									},
+								},
+								{
+									"id":     203,
+									"status": "CURRENT",
+									"media": map[string]any{
+										"id":              999999,
+										"format":          "TV",
+										"status":          "FINISHED",
+										"countryOfOrigin": nil,
+										"title":           map[string]any{"romaji": "Unknown Origin"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := anilist.NewClient(server.URL, anilist.WithRateLimit(60000))
+	entries, err := client.FetchWatchlist(context.Background(), anilist.WatchlistFilter{Username: "testuser"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(capturedQuery, "countryOfOrigin") {
+		t.Errorf("expected GraphQL query to select countryOfOrigin, got:\n%s", capturedQuery)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(entries))
+	}
+	if entries[0].Media.CountryOfOrigin != "CN" {
+		t.Errorf("entries[0].Media.CountryOfOrigin = %q, want %q", entries[0].Media.CountryOfOrigin, "CN")
+	}
+	if entries[1].Media.CountryOfOrigin != "JP" {
+		t.Errorf("entries[1].Media.CountryOfOrigin = %q, want %q", entries[1].Media.CountryOfOrigin, "JP")
+	}
+	if entries[2].Media.CountryOfOrigin != "" {
+		t.Errorf("entries[2].Media.CountryOfOrigin = %q, want empty string", entries[2].Media.CountryOfOrigin)
+	}
+}

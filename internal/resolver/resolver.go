@@ -221,6 +221,7 @@ func (r *Resolver) resolve(ctx context.Context, media anilist.Media, queueReview
 	}
 
 	posterURL := media.CoverImageURL()
+	countryOfOrigin := strings.ToUpper(strings.TrimSpace(media.CountryOfOrigin))
 
 	err = r.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var exists int
@@ -230,6 +231,14 @@ func (r *Resolver) resolve(ctx context.Context, media anilist.Media, queueReview
 			LIMIT 1;
 		`, media.ID).Scan(&exists)
 		if checkErr == nil {
+			if countryOfOrigin != "" {
+				_, updErr := tx.ExecContext(ctx, `
+					UPDATE review_queue
+					SET country_of_origin = ?
+					WHERE anilist_id = ? AND status = 'PENDING' AND country_of_origin = '';
+				`, countryOfOrigin, media.ID)
+				return updErr
+			}
 			return nil
 		} else if !errors.Is(checkErr, sql.ErrNoRows) {
 			return checkErr
@@ -238,10 +247,10 @@ func (r *Resolver) resolve(ctx context.Context, media anilist.Media, queueReview
 		_, writeErr := tx.ExecContext(ctx, `
 			INSERT INTO review_queue (
 				anilist_id, media_type, title_romaji, title_english,
-				release_year, poster_url, candidates_json, reason, status
+				release_year, poster_url, candidates_json, reason, status, country_of_origin
 			)
-			VALUES (?, ?, ?, ?, ?, ?, '[]', ?, 'PENDING');
-		`, media.ID, queueMediaType, titleRomaji, titleEnglish, media.StartDate.Year, posterURL, reason)
+			VALUES (?, ?, ?, ?, ?, ?, '[]', ?, 'PENDING', ?);
+		`, media.ID, queueMediaType, titleRomaji, titleEnglish, media.StartDate.Year, posterURL, reason, countryOfOrigin)
 		return writeErr
 	})
 	if err != nil {
