@@ -32,8 +32,7 @@ func (c *Config) ApplyEnv(environ []string) error {
 		subKey := strings.TrimPrefix(upperKey, envPrefix)
 		val := strings.TrimSpace(value)
 
-		if strings.HasPrefix(subKey, "RADARR__QUALITYPROFILEOVERRIDES__") ||
-			strings.HasPrefix(subKey, "SONARR__QUALITYPROFILEOVERRIDES__") {
+		if _, _, ok := c.perCountryOverrideTarget(subKey); ok {
 			perCountry = append(perCountry, envEntry{origKey: key, subKey: subKey, val: val})
 			continue
 		}
@@ -299,31 +298,29 @@ func (c *Config) applyField(origKey, subKey, val string) error {
 		}
 		c.FirstRunDryRun = v
 	default:
-		switch {
-		case strings.HasPrefix(subKey, "RADARR__QUALITYPROFILEOVERRIDES__"):
-			country := strings.TrimPrefix(subKey, "RADARR__QUALITYPROFILEOVERRIDES__")
+		if target, country, ok := c.perCountryOverrideTarget(subKey); ok {
 			v, err := parseInt()
 			if err != nil {
 				return err
 			}
-			if c.RadarrQualityProfileOverrides == nil {
-				c.RadarrQualityProfileOverrides = make(CountryQualityProfiles)
+			if *target == nil {
+				*target = make(CountryQualityProfiles)
 			}
-			c.RadarrQualityProfileOverrides[country] = v
-		case strings.HasPrefix(subKey, "SONARR__QUALITYPROFILEOVERRIDES__"):
-			country := strings.TrimPrefix(subKey, "SONARR__QUALITYPROFILEOVERRIDES__")
-			v, err := parseInt()
-			if err != nil {
-				return err
-			}
-			if c.SonarrQualityProfileOverrides == nil {
-				c.SonarrQualityProfileOverrides = make(CountryQualityProfiles)
-			}
-			c.SonarrQualityProfileOverrides[country] = v
+			(*target)[country] = v
 		}
 	}
 
 	return nil
+}
+
+func (c *Config) perCountryOverrideTarget(subKey string) (*CountryQualityProfiles, string, bool) {
+	if country, ok := strings.CutPrefix(subKey, "RADARR__QUALITYPROFILEOVERRIDES__"); ok {
+		return &c.RadarrQualityProfileOverrides, country, true
+	}
+	if country, ok := strings.CutPrefix(subKey, "SONARR__QUALITYPROFILEOVERRIDES__"); ok {
+		return &c.SonarrQualityProfileOverrides, country, true
+	}
+	return nil, "", false
 }
 
 func parseQualityProfileOverridesEnv(origKey, val string) (CountryQualityProfiles, error) {

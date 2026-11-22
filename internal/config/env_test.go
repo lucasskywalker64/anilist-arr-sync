@@ -234,4 +234,21 @@ func TestApplyEnv_QualityProfileOverrides(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("invalid country codes and non-positive IDs fail validation", func(t *testing.T) {
+		for _, env := range []string{
+			"ANILIST_SYNC__SONARR__QUALITYPROFILEOVERRIDES=CHN=4",
+			"ANILIST_SYNC__RADARR__QUALITYPROFILEOVERRIDES=CN=0",
+			"ANILIST_SYNC__SONARR__QUALITYPROFILEOVERRIDES__C1=4",
+			"ANILIST_SYNC__RADARR__QUALITYPROFILEOVERRIDES__KR=-1",
+		} {
+			cfg := config.NewDefault()
+			if err := cfg.ApplyEnv([]string{env}); err != nil {
+				t.Fatalf("unexpected ApplyEnv error for %q: %v", env, err)
+			}
+			if err := cfg.Validate(); err == nil {
+				t.Errorf("expected Validate error for %q, got nil", env)
+			}
+		}
+	})
 }

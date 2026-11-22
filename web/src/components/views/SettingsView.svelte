@@ -25,6 +25,7 @@
   import Alert from "../common/Alert.svelte";
   import Label from "../common/Label.svelte";
   import AniListStatusPicker from "./AniListStatusPicker.svelte";
+  import CountryProfileOverrides from "./CountryProfileOverrides.svelte";
   import { api } from "../../lib/api";
   import type { AppConfig, NotificationItem, ServarrConnectionOptions } from "../../lib/types";
 
@@ -38,23 +39,10 @@
       profile: "radarrQualityProfileId", overrides: "radarrQualityProfileOverrides", folder: "radarrRootFolderPath", monitor: "radarrMonitorOnAdd", search: "radarrSearchOnAdd" },
   ] as const;
   type ServarrService = (typeof servarrServices)[number];
-  type OverrideDraft = { country: string; profileId: string };
-  type OverrideEditState = { originalCountry: string; country: string; profileId: string };
 
   let servarrOptions: Partial<Record<ServarrService["kind"], ServarrConnectionOptions>> = {};
   let testingServarr: ServarrService["kind"] | null = null;
-  let overrideDrafts: Record<ServarrService["kind"], OverrideDraft> = {
-    sonarr: { country: "", profileId: "" },
-    radarr: { country: "", profileId: "" },
-  };
-  let editingOverride: Record<ServarrService["kind"], OverrideEditState | null> = {
-    sonarr: null,
-    radarr: null,
-  };
-  let overrideErrors: Record<ServarrService["kind"], string> = {
-    sonarr: "",
-    radarr: "",
-  };
+  let overridesResetToken = 0;
 
   let savedConfig: AppConfig | null = null;
   let formConfig: Partial<AppConfig> = {};
@@ -111,150 +99,6 @@
     return Object.fromEntries(entries);
   }
 
-  function validateOverrideEntry(
-    kind: ServarrService["kind"],
-    rawCountry: string,
-    rawProfileId: string,
-    existing: Record<string, number>,
-    originalCountry?: string,
-  ): { code: string; profileId: number } | null {
-    const code = rawCountry.trim().toUpperCase();
-    if (!/^[A-Z]{2}$/.test(code)) {
-      overrideErrors = {
-        ...overrideErrors,
-        [kind]: "Enter a valid 2-letter ASCII country code (for example CN, KR, or TW).",
-      };
-      return null;
-    }
-    const trimmedId = String(rawProfileId ?? "").trim();
-    const profileId = Number(trimmedId);
-    if (!trimmedId || !Number.isInteger(profileId) || profileId <= 0) {
-      overrideErrors = {
-        ...overrideErrors,
-        [kind]: "Select or enter a positive quality profile ID.",
-      };
-      return null;
-    }
-    if (code !== originalCountry && Object.prototype.hasOwnProperty.call(existing, code)) {
-      overrideErrors = {
-        ...overrideErrors,
-        [kind]: `An override for ${code} already exists. Edit the existing row instead.`,
-      };
-      return null;
-    }
-    overrideErrors = { ...overrideErrors, [kind]: "" };
-    return { code, profileId };
-  }
-
-  function updateOverrideDraft(
-    kind: ServarrService["kind"],
-    field: "country" | "profileId",
-    value: string,
-  ) {
-    overrideDrafts = {
-      ...overrideDrafts,
-      [kind]: { ...overrideDrafts[kind], [field]: value },
-    };
-  }
-
-  function addQualityProfileOverride(service: ServarrService) {
-    const current = formConfig[service.overrides] ?? {};
-    const draft = overrideDrafts[service.kind];
-    const validated = validateOverrideEntry(service.kind, draft.country, draft.profileId, current);
-    if (!validated) return;
-    formConfig = {
-      ...formConfig,
-      [service.overrides]: normalizeOverridesMap({
-        ...current,
-        [validated.code]: validated.profileId,
-      }),
-    };
-    const firstProfile = servarrOptions[service.kind]?.qualityProfiles?.[0]?.id;
-    overrideDrafts = {
-      ...overrideDrafts,
-      [service.kind]: {
-        country: "",
-        profileId: firstProfile ? String(firstProfile) : "",
-      },
-    };
-  }
-
-  function startEditOverride(service: ServarrService, country: string, profileId: number) {
-    editingOverride = {
-      ...editingOverride,
-      [service.kind]: {
-        originalCountry: country,
-        country,
-        profileId: String(profileId),
-      },
-    };
-    overrideErrors = { ...overrideErrors, [service.kind]: "" };
-  }
-
-  function updateEditOverrideField(
-    kind: ServarrService["kind"],
-    field: "country" | "profileId",
-    value: string,
-  ) {
-    const current = editingOverride[kind];
-    if (!current) return;
-    editingOverride = {
-      ...editingOverride,
-      [kind]: { ...current, [field]: value },
-    };
-  }
-
-  function overrideEntries(raw?: Record<string, number>): [string, number][] {
-    return Object.entries(raw ?? {}).sort(([a], [b]) => a.localeCompare(b));
-  }
-
-  function saveEditOverride(service: ServarrService) {
-    const editing = editingOverride[service.kind];
-    if (!editing) return;
-    const current = formConfig[service.overrides] ?? {};
-    const validated = validateOverrideEntry(
-      service.kind,
-      editing.country,
-      editing.profileId,
-      current,
-      editing.originalCountry,
-    );
-    if (!validated) return;
-    const next = { ...current };
-    if (editing.originalCountry !== validated.code) {
-      delete next[editing.originalCountry];
-    }
-    next[validated.code] = validated.profileId;
-    formConfig = {
-      ...formConfig,
-      [service.overrides]: normalizeOverridesMap(next),
-    };
-    editingOverride = { ...editingOverride, [service.kind]: null };
-  }
-
-  function cancelEditOverride(service: ServarrService) {
-    editingOverride = { ...editingOverride, [service.kind]: null };
-    overrideErrors = { ...overrideErrors, [service.kind]: "" };
-  }
-
-  function removeQualityProfileOverride(service: ServarrService, country: string) {
-    const next = { ...(formConfig[service.overrides] ?? {}) };
-    delete next[country];
-    formConfig = {
-      ...formConfig,
-      [service.overrides]: normalizeOverridesMap(next),
-    };
-    if (editingOverride[service.kind]?.originalCountry === country) {
-      editingOverride = { ...editingOverride, [service.kind]: null };
-    }
-    overrideErrors = { ...overrideErrors, [service.kind]: "" };
-  }
-
-  function formatProfileName(options: ServarrConnectionOptions | undefined, profileId: number): string {
-    const found = options?.qualityProfiles?.find((profile) => profile.id === profileId);
-    return found ? found.name : `Profile ID ${profileId}`;
-  }
-
   let notifRequestId = 0;
   let notifLoadError = "";
 
@@ -308,15 +152,6 @@
       const options = await api.testServarr(service.kind, url, key === "******" ? "" : key);
       if (formConfig[service.url]?.trim() === url && (formConfig[service.key]?.trim() ?? "") === key) {
         servarrOptions = { ...servarrOptions, [service.kind]: options };
-        if (!overrideDrafts[service.kind].profileId && options.qualityProfiles.length > 0) {
-          overrideDrafts = {
-            ...overrideDrafts,
-            [service.kind]: {
-              ...overrideDrafts[service.kind],
-              profileId: String(options.qualityProfiles[0].id),
-            },
-          };
-        }
       }
     } catch (err) {
       errorMsg = err instanceof Error ? err.message : `Could not load ${service.name} options.`;
@@ -344,6 +179,7 @@
       }
       const res = await api.updateConfig(payload);
       savedConfig = JSON.parse(JSON.stringify(formConfig));
+      overridesResetToken += 1;
       formPassword = "";
       formPasswordConfirm = "";
       if (res?.restartRequired) {
@@ -363,12 +199,7 @@
     if (savedConfig) {
       formConfig = JSON.parse(JSON.stringify(savedConfig));
       servarrOptions = {};
-      overrideDrafts = {
-        sonarr: { country: "", profileId: "" },
-        radarr: { country: "", profileId: "" },
-      };
-      editingOverride = { sonarr: null, radarr: null };
-      overrideErrors = { sonarr: "", radarr: "" };
+      overridesResetToken += 1;
       formPassword = "";
       formPasswordConfirm = "";
     }
@@ -1261,153 +1092,17 @@
                   bind:value={formConfig[service.profile]} />
               {/if}
             </FormGroup>
-            <FormGroup
-              label="Country Profile Overrides"
-              helpText="Optional ISO 3166-1 alpha-2 country overrides (e.g. CN, KR, TW) applied only when adding new entries."
+            <CountryProfileOverrides
+              serviceKind={service.kind}
+              serviceName={service.name}
+              overrides={formConfig[service.overrides] ?? {}}
+              qualityProfiles={options?.qualityProfiles ?? []}
               isDirty={isFieldDirty(service.overrides)}
-              hasError={!!overrideErrors[service.kind]}
-              errorMessage={overrideErrors[service.kind]}
-            >
-              <div class="countryOverridesContainer">
-                {#if overrideEntries(formConfig[service.overrides]).length > 0}
-                  <div class="countryOverridesList">
-                    {#each overrideEntries(formConfig[service.overrides]) as [country, profileId] (country)}
-                      {#if editingOverride[service.kind]?.originalCountry === country}
-                        {@const editRow = editingOverride[service.kind]}
-                        {#if editRow}
-                        <div class="countryOverrideRow">
-                          <input
-                            id={`${service.kind}-edit-override-country`}
-                            type="text"
-                            maxlength="2"
-                            list="anilist-country-codes"
-                            class="formInput countryCodeInput"
-                            placeholder="CN"
-                            value={editRow.country}
-                            on:input={(e) => updateEditOverrideField(service.kind, "country", e.currentTarget.value)}
-                          />
-                          {#if options?.qualityProfiles?.length}
-                            <select
-                              id={`${service.kind}-edit-override-profile`}
-                              class="formInput overrideProfileInput"
-                              value={editRow.profileId}
-                              on:change={(e) => updateEditOverrideField(service.kind, "profileId", e.currentTarget.value)}
-                            >
-                              {#if !options.qualityProfiles.some((profile) => String(profile.id) === editRow.profileId)}
-                                <option value={editRow.profileId}>Current ID ({editRow.profileId})</option>
-                              {/if}
-                              {#each options.qualityProfiles as profile}
-                                <option value={String(profile.id)}>{profile.name}</option>
-                              {/each}
-                            </select>
-                          {:else}
-                            <input
-                              id={`${service.kind}-edit-override-profile`}
-                              type="number"
-                              min="1"
-                              step="1"
-                              class="formInput overrideProfileInput"
-                              placeholder="Profile ID"
-                              value={editRow.profileId}
-                              on:input={(e) => updateEditOverrideField(service.kind, "profileId", e.currentTarget.value)}
-                            />
-                          {/if}
-                          <div class="overrideRowActions">
-                            <Button
-                              kind="primary"
-                              size="small"
-                              ariaLabel={`Save ${service.name} override edit`}
-                              on:click={() => saveEditOverride(service)}
-                            >
-                              Save
-                            </Button>
-                            <Button
-                              kind="default"
-                              size="small"
-                              ariaLabel={`Cancel ${service.name} override edit`}
-                              on:click={() => cancelEditOverride(service)}
-                            >
-                              Cancel
-                            </Button>
-                          </div>
-                        </div>
-                        {/if}
-                      {:else}
-                        <div class="countryOverrideRow">
-                          <span class="countryCodeBadge">{country}</span>
-                          <span class="overrideProfileLabel">{formatProfileName(options, profileId)}</span>
-                          <div class="overrideRowActions">
-                            <button
-                              type="button"
-                              class="overrideIconBtn"
-                              title={`Edit ${country} override`}
-                              aria-label={`Edit ${service.name} override ${country}`}
-                              on:click={() => startEditOverride(service, country, profileId)}
-                            >
-                              <Edit size={15} />
-                            </button>
-                            <button
-                              type="button"
-                              class="overrideIconBtn deleteBtn"
-                              title={`Remove ${country} override`}
-                              aria-label={`Remove ${service.name} override ${country}`}
-                              on:click={() => removeQualityProfileOverride(service, country)}
-                            >
-                              <Trash2 size={15} />
-                            </button>
-                          </div>
-                        </div>
-                      {/if}
-                    {/each}
-                  </div>
-                {/if}
-
-                <div class="countryOverrideRow countryOverrideAddRow">
-                  <input
-                    id={`${service.kind}-override-country`}
-                    type="text"
-                    maxlength="2"
-                    list="anilist-country-codes"
-                    class="formInput countryCodeInput"
-                    placeholder="CN"
-                    value={overrideDrafts[service.kind].country}
-                    on:input={(e) => updateOverrideDraft(service.kind, "country", e.currentTarget.value)}
-                  />
-                  {#if options?.qualityProfiles?.length}
-                    <select
-                      id={`${service.kind}-override-profile`}
-                      class="formInput overrideProfileInput"
-                      value={overrideDrafts[service.kind].profileId}
-                      on:change={(e) => updateOverrideDraft(service.kind, "profileId", e.currentTarget.value)}
-                    >
-                      <option value="">Select quality profile...</option>
-                      {#each options.qualityProfiles as profile}
-                        <option value={String(profile.id)}>{profile.name}</option>
-                      {/each}
-                    </select>
-                  {:else}
-                    <input
-                      id={`${service.kind}-override-profile`}
-                      type="number"
-                      min="1"
-                      step="1"
-                      class="formInput overrideProfileInput"
-                      placeholder="Profile ID"
-                      value={overrideDrafts[service.kind].profileId}
-                      on:input={(e) => updateOverrideDraft(service.kind, "profileId", e.currentTarget.value)}
-                    />
-                  {/if}
-                  <Button
-                    kind="default"
-                    size="small"
-                    ariaLabel={`Add ${service.name} country override`}
-                    on:click={() => addQualityProfileOverride(service)}
-                  >
-                    <Plus size={14} /> Add
-                  </Button>
-                </div>
-              </div>
-            </FormGroup>
+              resetToken={overridesResetToken}
+              on:change={(e) => {
+                formConfig = { ...formConfig, [service.overrides]: e.detail };
+              }}
+            />
             <FormGroup label="Root Folder" forId={`${service.kind}-settings-folder`} isDirty={isFieldDirty(service.folder)}>
               {#if options?.rootFolders?.length}
                 <select id={`${service.kind}-settings-folder`} class="formInput"
@@ -1816,91 +1511,6 @@
 
   .aniListLists {
     padding-block: 8px 12px;
-  }
-
-  .countryOverridesContainer {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    width: 100%;
-  }
-
-  .countryOverridesList {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .countryOverrideRow {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-  }
-
-  .countryCodeBadge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 44px;
-    height: var(--inputHeight);
-    padding: 0 8px;
-    border-radius: 4px;
-    background-color: var(--cardBackgroundColor);
-    border: 1px solid var(--inputBorderColor);
-    color: var(--white);
-    font-weight: 600;
-    font-size: var(--smallFontSize);
-    letter-spacing: 0.04em;
-  }
-
-  .overrideProfileLabel {
-    flex: 1 1 auto;
-    min-width: 0;
-    color: var(--textColor);
-    font-size: var(--defaultFontSize);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  :global(.inputGroup input.formInput.countryCodeInput) {
-    width: 72px;
-    flex: 0 0 72px;
-    text-transform: uppercase;
-    text-align: center;
-    padding: 6px 8px;
-  }
-
-  :global(.inputGroup input.formInput.overrideProfileInput),
-  :global(.inputGroup select.formInput.overrideProfileInput) {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  .overrideRowActions {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex: 0 0 auto;
-  }
-
-  .overrideIconBtn {
-    background: transparent;
-    border: 1px solid transparent;
-    color: var(--textColor);
-    cursor: pointer;
-    padding: 6px;
-    border-radius: 4px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    transition: color 150ms ease, background-color 150ms ease;
-  }
-
-  .overrideIconBtn:hover {
-    color: var(--themeBlue);
-    background-color: var(--toolbarMenuItemHoverBackgroundColor);
   }
 
   .stickySaveText {
