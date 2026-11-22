@@ -23,6 +23,13 @@ $metadata | ConvertTo-Json -Depth 5 | Set-Content .release/versioninfo.json -Enc
 foreach ($arch in 'amd64', 'arm64') {
     $flags = @('-64')
     if ($arch -eq 'arm64') { $flags += '-arm' }
-    go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.5.0 @flags "-o=cmd/anilist-arr-sync/resource_windows_${arch}.syso" .release/versioninfo.json
-    if ($LASTEXITCODE -ne 0) { throw "Windows resource generation failed: $arch" }
+    $dest = "cmd/anilist-arr-sync/resource_windows_${arch}.syso"
+    $tmp = "${dest}.tmp"
+    try {
+        go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.5.0 @flags "-o=$tmp" .release/versioninfo.json
+        if ($LASTEXITCODE -ne 0) { throw "Windows resource generation failed: $arch" }
+        [IO.File]::Move($tmp, $dest, $true)
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
 }
