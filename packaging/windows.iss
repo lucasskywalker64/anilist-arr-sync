@@ -145,6 +145,8 @@ function GetFinalPathNameByHandle(FileHandle: THandle; FilePath: String; FilePat
   external 'GetFinalPathNameByHandleW@kernel32.dll stdcall';
 function GetLongPathName(ShortPath, LongPath: String; BufferSize: LongWord): LongWord;
   external 'GetLongPathNameW@kernel32.dll stdcall';
+function ExpandEnvironmentStrings(Src, Dst: String; Size: LongWord): LongWord;
+  external 'ExpandEnvironmentStringsW@kernel32.dll stdcall';
 
 function ServiceName: String;
 begin
@@ -441,6 +443,57 @@ begin
   Result := IsSameOrPrefix(ProtectedPath, Candidate);
 end;
 
+function ExpandEnvVars(Value: String): String;
+var Expanded: String;
+    Len: LongWord;
+begin
+  Result := Value;
+  if Pos('%', Value) = 0 then Exit;
+  SetLength(Expanded, 32768);
+  Len := ExpandEnvironmentStrings(Value, Expanded, 32768);
+  if (Len > 1) and (Len <= 32768) then begin
+    SetLength(Expanded, Len - 1);
+    Result := Expanded;
+  end;
+end;
+
+function IsDirectChildOf(Candidate, ParentDir: String): Boolean;
+var NormParent, Rest: String;
+begin
+  Result := False;
+  NormParent := StripTrailingBackslashes(ParentDir);
+  if NormParent = '' then Exit;
+  if Pos(Lowercase(NormParent) + '\', Lowercase(Candidate)) <> 1 then Exit;
+  Rest := Copy(Candidate, Length(NormParent) + 2, Length(Candidate));
+  Result := (Rest <> '') and (Pos('\', Rest) = 0);
+end;
+
+function IsRegisteredProfileRootOrAncestor(Candidate: String): Boolean;
+var ProfilesKey, ProfilesDir, ProfilePath: String;
+    Subkeys: TArrayOfString;
+    I: Integer;
+begin
+  Result := False;
+  ProfilesKey := 'SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList';
+  if RegQueryStringValue(HKLM, ProfilesKey, 'ProfilesDirectory', ProfilesDir) then begin
+    ProfilesDir := ExpandEnvVars(ProfilesDir);
+    if IsSameOrAncestor(Candidate, ProfilesDir) or IsDirectChildOf(Candidate, ProfilesDir) then begin
+      Result := True;
+      Exit;
+    end;
+  end;
+  if RegGetSubkeyNames(HKLM, ProfilesKey, Subkeys) then begin
+    for I := 0 to GetArrayLength(Subkeys) - 1 do begin
+      if RegQueryStringValue(HKLM, ProfilesKey + '\' + Subkeys[I], 'ProfileImagePath', ProfilePath) then begin
+        if IsSameOrAncestor(Candidate, ExpandEnvVars(ProfilePath)) then begin
+          Result := True;
+          Exit;
+        end;
+      end;
+    end;
+  end;
+end;
+
 function IsUnsafeDataDirPath(Normalized: String; var Reason: String): Boolean;
 var DriveRoot: String;
 begin
@@ -463,6 +516,11 @@ begin
   end;
   if IsSameOrAncestor(Normalized, ExpandConstant('{app}')) then begin
     Reason := 'Refusing to delete the installation directory or its parent.';
+    Exit;
+  end;
+  if IsRegisteredProfileRootOrAncestor(Normalized) or
+     IsDirectChildOf(Normalized, DriveRoot + 'Users') then begin
+    Reason := 'Refusing to delete a user profile directory.';
     Exit;
   end;
   if IsSameOrAncestor(Normalized, ExpandConstant('{win}')) or

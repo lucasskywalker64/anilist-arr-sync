@@ -354,10 +354,12 @@ try {
     New-Item -ItemType Junction -Path $unsafeLink -Target $unsafeLinkReal | Out-Null
     $unsafeSeedData = Join-Path $root 'unsafe-seed-data'
     $appSentinel = Join-Path $app 'keep-in-app.txt'
+    $otherProfile = Join-Path (Split-Path $env:USERPROFILE -Parent) 'Default'
     foreach ($unsafeCase in @(
         @{ Name = 'drive root'; Path = 'C:\'; MustExist = 'C:\' },
         @{ Name = 'shared ProgramData'; Path = $env:ProgramData; MustExist = $env:ProgramData },
         @{ Name = 'Windows directory'; Path = $env:SystemRoot; MustExist = $env:SystemRoot },
+        @{ Name = 'other user profile'; Path = $otherProfile; MustExist = $otherProfile },
         @{ Name = 'installation directory'; Path = $app; MustExist = $appSentinel; CreateSentinel = $true },
         @{ Name = 'parent of installation directory'; Path = $root; MustExist = $outsideBackupFile },
         @{ Name = 'junction target'; Path = $unsafeLink; MustExist = $unsafeLinkSentinel },

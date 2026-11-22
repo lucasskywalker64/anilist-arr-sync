@@ -1,9 +1,9 @@
 .PHONY: all verify-elevated help \
 	frontend-install frontend-dev frontend-build frontend-preview frontend-check frontend-test \
 	licenses licenses-update \
-	fmt-check go-vet go-lint go-test go-test-race build devserver test test-race lint \
+	fmt-check go-vet go-lint go-test go-test-race build test test-race lint \
 	packaging-release-test packaging-production-test packaging-test \
-	windows-resources installer installer-process-test installer-test chocolatey-test release-snapshot \
+	windows-resources installer installer-only installer-process-test installer-test chocolatey-test release-snapshot \
 	docker clean
 
 PYTHON ?= python
@@ -19,14 +19,15 @@ INSTALLER_PATH ?= .release/anilist-arr-sync_$(RELEASE_VERSION)_windows_$(ARCH)_s
 
 ifeq ($(GOOS),windows)
 APP_LDFLAGS = -ldflags="-H windowsgui"
-ALL_PLATFORM_TARGETS = installer installer-process-test
+all:
+	$(MAKE) windows-resources
+	$(MAKE) build test-race lint packaging-test installer-only installer-process-test
 else
-ALL_PLATFORM_TARGETS =
+all: build test-race lint packaging-test
 endif
 
-all: build test-race lint packaging-test $(ALL_PLATFORM_TARGETS)
-
-verify-elevated: all installer-test
+verify-elevated: all
+	$(MAKE) installer-test
 
 help:
 	@$(PYTHON) -c "print('\n'.join([ \
@@ -49,7 +50,6 @@ help:
 		'  go-test                   Run go test ./...', \
 		'  go-test-race              Run go test -race ./...', \
 		'  build                     Build frontend, check notices, and compile anilist-arr-sync', \
-		'  devserver                 Run the Go devserver helper', \
 		'  test                      Build frontend, check notices, and run frontend + Go tests', \
 		'  test-race                 Build frontend, check notices, and run frontend + Go race tests', \
 		'  lint                      Build frontend, check types/notices, and run fmt-check + go-vet + go-lint', \
@@ -63,7 +63,7 @@ help:
 		'  installer-test            Run elevated packaging/test-installer.ps1 against the built installer', \
 		'  chocolatey-test           Run packaging/test-chocolatey.ps1 (requires Chocolatey and manifests)', \
 		'  release-snapshot          Run full disposable-key GoReleaser snapshot verification (Admin shell)', \
-		'  docker                    Build container image ($(DOCKER_IMAGE))', \
+		'  docker                    Stage Linux binary and build container image ($(DOCKER_IMAGE))', \
 		'  clean                     Remove local binary, web/dist build output, and generated .syso files', \
 	]))"
 
@@ -112,9 +112,6 @@ go-test-race: frontend-build
 build: frontend-build licenses
 	go build $(APP_LDFLAGS) ./cmd/anilist-arr-sync
 
-devserver:
-	go run ./cmd/devserver
-
 test: frontend-build licenses frontend-test go-test
 
 test-race: frontend-build licenses frontend-test go-test-race
@@ -130,25 +127,28 @@ packaging-production-test:
 packaging-test: packaging-release-test packaging-production-test
 
 windows-resources:
-	$(PWSH) -NoProfile -Command "$$ErrorActionPreference = 'Stop'; New-Item -ItemType Directory -Path .release -Force | Out-Null; $$env:RELEASE_VERSION = '$(RELEASE_VERSION)'; & ./packaging/resources.ps1"
+	$(PWSH) -NoProfile -File packaging/make.ps1 -Task windows-resources -ReleaseVersion "$(RELEASE_VERSION)"
+
+installer-only: frontend-build licenses
+	$(PWSH) -NoProfile -File packaging/make.ps1 -Task installer -Arch "$(ARCH)" -ReleaseVersion "$(RELEASE_VERSION)" -ReleaseCommit "$(RELEASE_COMMIT)"
 
 installer: frontend-build licenses windows-resources
-	$(PWSH) -NoProfile -Command "$$ErrorActionPreference = 'Stop'; New-Item -ItemType Directory -Path .release -Force | Out-Null; if (Test-Path .release-tools/inno) { $$env:PATH = (Resolve-Path .release-tools/inno).Path + ';' + $$env:PATH }; $$stage = Join-Path ([IO.Path]::GetTempPath()) ('anilist-installer-bin-' + [Guid]::NewGuid().ToString('N')); New-Item -ItemType Directory -Path $$stage -Force | Out-Null; try { $$env:GOOS = 'windows'; $$env:GOARCH = '$(ARCH)'; $$env:CGO_ENABLED = '0'; $$bin = Join-Path $$stage 'anilist-arr-sync.exe'; go build -ldflags='-s -w -H windowsgui -X main.version=$(RELEASE_VERSION) -X main.commit=$(RELEASE_COMMIT)' -o $$bin ./cmd/anilist-arr-sync; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }; $$env:RELEASE_VERSION = '$(RELEASE_VERSION)'; $$env:RELEASE_COMMIT = '$(RELEASE_COMMIT)'; $$env:RELEASE_MODE = 'fixture'; $$env:RELEASE_INSTALL_TEST = '0'; & ./packaging/windows.ps1 -Binary $$bin -TargetOS windows -Arch '$(ARCH)' } finally { if (Test-Path -LiteralPath $$stage) { Remove-Item -LiteralPath $$stage -Recurse -Force } }"
+	$(PWSH) -NoProfile -File packaging/make.ps1 -Task installer -Arch "$(ARCH)" -ReleaseVersion "$(RELEASE_VERSION)" -ReleaseCommit "$(RELEASE_COMMIT)"
 
 installer-process-test:
-	$(PWSH) -NoProfile -Command "$$ErrorActionPreference = 'Stop'; if (Test-Path .release-tools/inno) { $$env:PATH = (Resolve-Path .release-tools/inno).Path + ';' + $$env:PATH }; & ./packaging/test-installer-process.ps1"
+	$(PWSH) -NoProfile -File packaging/make.ps1 -Task installer-process-test
 
 installer-test: installer
-	$(PWSH) -NoProfile -Command "$$ErrorActionPreference = 'Stop'; $$env:RELEASE_VERSION = '$(RELEASE_VERSION)'; $$env:RELEASE_COMMIT = '$(RELEASE_COMMIT)'; $$env:RELEASE_MODE = 'fixture'; & ./packaging/test-installer.ps1 -Installer '$(INSTALLER_PATH)' -Arch '$(ARCH)'"
+	$(PWSH) -NoProfile -File packaging/make.ps1 -Task installer-test -Arch "$(ARCH)" -ReleaseVersion "$(RELEASE_VERSION)" -ReleaseCommit "$(RELEASE_COMMIT)" -InstallerPath "$(INSTALLER_PATH)"
 
 chocolatey-test:
-	$(PWSH) -NoProfile -Command "$$ErrorActionPreference = 'Stop'; & ./packaging/test-chocolatey.ps1 -ExpectedArchitecture '$(ARCH)'"
+	$(PWSH) -NoProfile -File packaging/make.ps1 -Task chocolatey-test -Arch "$(ARCH)"
 
 release-snapshot: frontend-build licenses
-	$(PWSH) -NoProfile -Command "$$ErrorActionPreference = 'Stop'; foreach ($$toolDir in @('.release-tools/inno', '.release-tools/goreleaser', '.release-tools/bin')) { if (Test-Path $$toolDir) { $$env:PATH = (Resolve-Path $$toolDir).Path + ';' + $$env:PATH } }; $$env:RELEASE_MODE = 'fixture'; $$env:RELEASE_SNAPSHOT_TEST = '1'; $$env:RELEASE_INSTALL_TEST = '1'; go test -v ./cmd/release -run '^TestSnapshot$$' -count=1 -timeout=30m"
+	$(PWSH) -NoProfile -File packaging/make.ps1 -Task release-snapshot
 
-docker:
-	docker build -t $(DOCKER_IMAGE) .
+docker: frontend-build licenses
+	$(PYTHON) -c "import atexit, os, shutil, subprocess, sys, tempfile; from pathlib import Path; arch, ver, commit, image = sys.argv[1:5]; tmp = tempfile.TemporaryDirectory(prefix='anilist-docker-'); atexit.register(tmp.cleanup); root = Path(tmp.name); binary = root / 'linux' / arch / 'anilist-arr-sync'; binary.parent.mkdir(parents=True, exist_ok=True); env = {**os.environ, 'GOOS': 'linux', 'GOARCH': arch, 'CGO_ENABLED': '0'}; ldflags = f'-s -w -X main.version={ver} -X main.commit={commit}'; subprocess.run(['go', 'build', f'-ldflags={ldflags}', '-o', str(binary), './cmd/anilist-arr-sync'], check=True, env=env); shutil.copy2('Dockerfile', root / 'Dockerfile'); shutil.copytree('packaging/container-config', root / 'packaging/container-config'); subprocess.run(['docker', 'build', '--platform', f'linux/{arch}', '-t', image, str(root)], check=True)" "$(ARCH)" "$(RELEASE_VERSION)" "$(RELEASE_COMMIT)" "$(DOCKER_IMAGE)"
 
 clean:
 	go clean ./cmd/anilist-arr-sync
