@@ -116,7 +116,7 @@
 
 <FormGroup
   label="Country Profile Overrides"
-  helpText="Optional ISO 3166-1 alpha-2 country overrides (e.g. CN, KR, TW) applied only when adding new entries."
+  helpText="Optional country overrides (e.g. CN, KR, TW) applied only when adding new entries."
   {isDirty}
   hasError={!!error}
   errorMessage={error}
