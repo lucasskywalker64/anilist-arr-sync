@@ -9,6 +9,7 @@
   export let overrides: Record<string, number> = {};
   export let qualityProfiles: { id: number; name: string }[] = [];
   export let isDirty = false;
+  export let disabled = false;
   export let resetToken = 0;
 
   const dispatch = createEventDispatcher<{ change: Record<string, number> }>();
@@ -68,6 +69,7 @@
   }
 
   function addOverride() {
+    if (disabled) return;
     const validated = validateEntry(draftCountry, draftProfileId);
     if (!validated) return;
     dispatch("change", normalizeMap({ ...(overrides ?? {}), [validated.code]: validated.profileId }));
@@ -76,12 +78,13 @@
   }
 
   function startEdit(country: string, profileId: number) {
+    if (disabled) return;
     editing = { originalCountry: country, country, profileId: String(profileId) };
     error = "";
   }
 
   function saveEdit() {
-    if (!editing) return;
+    if (disabled || !editing) return;
     const validated = validateEntry(editing.country, editing.profileId, editing.originalCountry);
     if (!validated) return;
     const next = { ...(overrides ?? {}) };
@@ -94,11 +97,13 @@
   }
 
   function cancelEdit() {
+    if (disabled) return;
     editing = null;
     error = "";
   }
 
   function removeOverride(country: string) {
+    if (disabled) return;
     const next = { ...(overrides ?? {}) };
     delete next[country];
     dispatch("change", normalizeMap(next));
@@ -134,6 +139,8 @@
                 list="anilist-country-codes"
                 class="formInput countryCodeInput"
                 placeholder="CN"
+                aria-label={`Edit ${serviceName} override country for ${country}`}
+                {disabled}
                 value={editing.country}
                 on:input={(e) => {
                   if (editing) editing = { ...editing, country: e.currentTarget.value };
@@ -143,6 +150,8 @@
                 <select
                   id={`${serviceKind}-edit-override-profile`}
                   class="formInput overrideProfileInput"
+                  aria-label={`Edit ${serviceName} override profile for ${country}`}
+                  {disabled}
                   value={editing.profileId}
                   on:change={(e) => {
                     if (editing) editing = { ...editing, profileId: e.currentTarget.value };
@@ -163,6 +172,8 @@
                   step="1"
                   class="formInput overrideProfileInput"
                   placeholder="Profile ID"
+                  aria-label={`Edit ${serviceName} override profile for ${country}`}
+                  {disabled}
                   value={editing.profileId}
                   on:input={(e) => {
                     if (editing) editing = { ...editing, profileId: e.currentTarget.value };
@@ -173,6 +184,7 @@
                 <Button
                   kind="primary"
                   size="small"
+                  {disabled}
                   ariaLabel={`Save ${serviceName} override edit`}
                   on:click={saveEdit}
                 >
@@ -181,6 +193,7 @@
                 <Button
                   kind="default"
                   size="small"
+                  {disabled}
                   ariaLabel={`Cancel ${serviceName} override edit`}
                   on:click={cancelEdit}
                 >
@@ -196,6 +209,7 @@
                 <button
                   type="button"
                   class="overrideIconBtn"
+                  {disabled}
                   title={`Edit ${country} override`}
                   aria-label={`Edit ${serviceName} override ${country}`}
                   on:click={() => startEdit(country, profileId)}
@@ -205,6 +219,7 @@
                 <button
                   type="button"
                   class="overrideIconBtn deleteBtn"
+                  {disabled}
                   title={`Remove ${country} override`}
                   aria-label={`Remove ${serviceName} override ${country}`}
                   on:click={() => removeOverride(country)}
@@ -226,6 +241,8 @@
         list="anilist-country-codes"
         class="formInput countryCodeInput"
         placeholder="CN"
+        aria-label={`Add ${serviceName} country code`}
+        {disabled}
         value={draftCountry}
         on:input={(e) => (draftCountry = e.currentTarget.value)}
       />
@@ -233,6 +250,8 @@
         <select
           id={`${serviceKind}-override-profile`}
           class="formInput overrideProfileInput"
+          aria-label={`Add ${serviceName} quality profile`}
+          {disabled}
           value={draftProfileId}
           on:change={(e) => (draftProfileId = e.currentTarget.value)}
         >
@@ -249,6 +268,8 @@
           step="1"
           class="formInput overrideProfileInput"
           placeholder="Profile ID"
+          aria-label={`Add ${serviceName} quality profile`}
+          {disabled}
           value={draftProfileId}
           on:input={(e) => (draftProfileId = e.currentTarget.value)}
         />
@@ -256,6 +277,7 @@
       <Button
         kind="default"
         size="small"
+        {disabled}
         ariaLabel={`Add ${serviceName} country override`}
         on:click={addOverride}
       >
@@ -346,12 +368,17 @@
     transition: color 150ms ease, background-color 150ms ease;
   }
 
-  .overrideIconBtn:hover {
+  .overrideIconBtn:hover:not(:disabled) {
     color: var(--themeBlue);
     background-color: var(--toolbarMenuItemHoverBackgroundColor);
   }
 
-  .deleteBtn:hover {
+  .overrideIconBtn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .deleteBtn:hover:not(:disabled) {
     color: var(--dangerColor);
   }
 </style>

@@ -88,9 +88,11 @@ it('adds, edits, and removes Sonarr country profile overrides using loaded profi
 
   // Add CN -> Donghua (4) using lowercase input
   const countryInput = document.querySelector<HTMLInputElement>('#sonarr-override-country')!;
+  expect(countryInput.getAttribute('aria-label')).toBe('Add Sonarr country code');
   countryInput.value = 'cn';
   countryInput.dispatchEvent(new Event('input', { bubbles: true }));
   const profileSelect = document.querySelector<HTMLSelectElement>('#sonarr-override-profile')!;
+  expect(profileSelect.getAttribute('aria-label')).toBe('Add Sonarr quality profile');
   profileSelect.value = '4';
   profileSelect.dispatchEvent(new Event('change', { bubbles: true }));
   await tick();
@@ -104,9 +106,11 @@ it('adds, edits, and removes Sonarr country profile overrides using loaded profi
   document.querySelector<HTMLButtonElement>('[aria-label="Edit Sonarr override CN"]')!.click();
   await tick();
   const editCountry = document.querySelector<HTMLInputElement>('#sonarr-edit-override-country')!;
+  expect(editCountry.getAttribute('aria-label')).toBe('Edit Sonarr override country for CN');
   editCountry.value = 'kr';
   editCountry.dispatchEvent(new Event('input', { bubbles: true }));
   const editProfile = document.querySelector<HTMLSelectElement>('#sonarr-edit-override-profile')!;
+  expect(editProfile.getAttribute('aria-label')).toBe('Edit Sonarr override profile for CN');
   editProfile.value = '5';
   editProfile.dispatchEvent(new Event('change', { bubbles: true }));
   await tick();
@@ -173,5 +177,46 @@ it('supports numeric profile ID entry for Radarr overrides and rejects invalid c
         radarrQualityProfileOverrides: { CN: 6 },
       }),
     ),
+  );
+});
+
+it('disables override controls while a configuration save is pending', async () => {
+  vi.mocked(api.getConfig).mockResolvedValue(baseConfig({ sonarrQualityProfileOverrides: { CN: 4 } }));
+  let resolveSave!: (value: { status: string }) => void;
+  vi.mocked(api.updateConfig).mockImplementation(
+    () => new Promise((resolve) => { resolveSave = resolve; }),
+  );
+
+  component = new SettingsView({ target: document.body, props: { subTab: 'servarr' } });
+  await vi.waitFor(() =>
+    expect((document.querySelector('#sonarr-settings-url') as HTMLInputElement | null)?.value).toBe('http://localhost:8989'),
+  );
+
+  // Add an override to make the form dirty
+  const countryInput = document.querySelector<HTMLInputElement>('#sonarr-override-country')!;
+  countryInput.value = 'KR';
+  countryInput.dispatchEvent(new Event('input', { bubbles: true }));
+  const profileInput = document.querySelector<HTMLInputElement>('#sonarr-override-profile')!;
+  profileInput.value = '5';
+  profileInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+  document.querySelector<HTMLButtonElement>('[aria-label="Add Sonarr country override"]')!.click();
+  await tick();
+
+  // Start saving and verify override controls are disabled while in flight
+  const saveBtn = [...document.querySelectorAll('button')].find((b) =>
+    b.textContent?.includes('Save Changes'),
+  )!;
+  saveBtn.click();
+  await tick();
+
+  expect(document.querySelector<HTMLInputElement>('#sonarr-override-country')!.disabled).toBe(true);
+  expect(document.querySelector<HTMLInputElement>('#sonarr-override-profile')!.disabled).toBe(true);
+  expect(document.querySelector<HTMLButtonElement>('[aria-label="Edit Sonarr override CN"]')!.disabled).toBe(true);
+  expect(document.querySelector<HTMLButtonElement>('[aria-label="Add Sonarr country override"]')!.disabled).toBe(true);
+
+  resolveSave({ status: 'ok' });
+  await vi.waitFor(() =>
+    expect(document.querySelector<HTMLInputElement>('#sonarr-override-country')!.disabled).toBe(false),
   );
 });

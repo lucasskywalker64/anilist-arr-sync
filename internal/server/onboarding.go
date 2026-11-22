@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -47,7 +48,9 @@ func validateOnboardingConfig(next config.Config) error {
 		!slices.Equal(anilist.ParseListStatuses(effective.AniListTvStatus), anilist.ParseListStatuses(next.AniListTvStatus)) ||
 		!slices.Equal(anilist.ParseListStatuses(effective.AniListMovieStatus), anilist.ParseListStatuses(next.AniListMovieStatus)) ||
 		effective.SonarrQualityProfileID != next.SonarrQualityProfileID || effective.SonarrRootFolderPath != next.SonarrRootFolderPath ||
+		!maps.Equal(effective.SonarrQualityProfileOverrides, next.SonarrQualityProfileOverrides) ||
 		effective.RadarrQualityProfileID != next.RadarrQualityProfileID || effective.RadarrRootFolderPath != next.RadarrRootFolderPath ||
+		!maps.Equal(effective.RadarrQualityProfileOverrides, next.RadarrQualityProfileOverrides) ||
 		effective.SonarrSearchOnAdd != next.SonarrSearchOnAdd || effective.RadarrSearchOnAdd != next.RadarrSearchOnAdd ||
 		effective.FirstRunDryRun != next.FirstRunDryRun || effective.SyncIntervalHours != next.SyncIntervalHours {
 		return errors.New("environment variables override setup settings. Adjust those variables and restart before saving setup")

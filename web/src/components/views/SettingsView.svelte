@@ -1098,6 +1098,7 @@
               overrides={formConfig[service.overrides] ?? {}}
               qualityProfiles={options?.qualityProfiles ?? []}
               isDirty={isFieldDirty(service.overrides)}
+              disabled={saving}
               resetToken={overridesResetToken}
               on:change={(e) => {
                 formConfig = { ...formConfig, [service.overrides]: e.detail };
