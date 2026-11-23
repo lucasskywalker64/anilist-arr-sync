@@ -7,7 +7,9 @@ import { basename, dirname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 try {
-  if (process.env.RELEASE_MODE !== 'production') throw new Error('SignPath requires explicit production mode');
+  if (process.env.RELEASE_MODE !== 'production' || process.env.RELEASE_SIGN_WINDOWS !== 'true') {
+    throw new Error('SignPath requires explicit production mode with RELEASE_SIGN_WINDOWS=true');
+  }
   for (const name of ['SIGNPATH_API_TOKEN', 'SIGNPATH_ORGANIZATION_ID', 'SIGNPATH_PROJECT_SLUG', 'SIGNPATH_SIGNING_POLICY_SLUG', 'SIGNPATH_ARTIFACT_CONFIGURATION_SLUG', 'GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN']) {
     if (!process.env[name]) throw new Error(`Missing ${name}`);
   }

@@ -56,7 +56,7 @@ func TestSnapshot(t *testing.T) {
 	for _, name := range []string{"SIGNPATH_API_TOKEN", "GITHUB_TOKEN", "SCOOP_BUCKET_TOKEN", "AUR_SSH_PRIVATE_KEY", "DOCKERHUB_TOKEN"} {
 		t.Setenv(name, "")
 	}
-	for _, mode := range []string{"fixture", "nightly", "bootstrap"} {
+	for _, mode := range []string{"nightly", "fixture"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Setenv("RELEASE_MODE", mode)
 			// Installer behavior is shared across these modes. Exercise its full
@@ -67,9 +67,6 @@ func TestSnapshot(t *testing.T) {
 			version := "v0.0.1"
 			if mode == "nightly" {
 				version += "-nightly.20261116.123"
-			}
-			if mode == "bootstrap" {
-				version += "-bootstrap.1"
 			}
 			t.Setenv("RELEASE_VERSION", version)
 			id, err := identity()
@@ -218,11 +215,10 @@ func verifyUpdaterArtifacts(t *testing.T, id updater.Identity, public string) {
 					return nil
 				}
 				err = e.Apply(context.Background())
-				rejected := tampered || strings.Contains(id.Version, "-bootstrap.")
-				if rejected && (err == nil || launched) {
+				if tampered && (err == nil || launched) {
 					t.Fatal("tampered final archive passed updater")
 				}
-				if !rejected && (err != nil || !launched) {
+				if !tampered && (err != nil || !launched) {
 					t.Fatalf("final artifact rejected: %v", err)
 				}
 			})

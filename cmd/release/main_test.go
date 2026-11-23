@@ -47,18 +47,18 @@ func TestReleaseSourcesMustMatchCleanCommit(t *testing.T) {
 		t.Fatal("fixture key generation failed")
 	}
 	t.Setenv("MINISIGN_PUBLIC_KEY", public.String())
-	for _, mode := range []string{"production", "nightly", "bootstrap"} {
+	for _, mode := range []string{"production", "nightly"} {
 		for _, snapshot := range []string{"", "1"} {
 			t.Run(mode+"/snapshot="+snapshot, func(t *testing.T) {
 				t.Setenv("RELEASE_MODE", mode)
+				if mode == "production" {
+					t.Setenv("RELEASE_SIGN_WINDOWS", "false")
+				}
 				t.Setenv("RELEASE_SNAPSHOT_TEST", snapshot)
 				setIdentity := func(commit string) {
 					version := "v1.2.3"
-					switch mode {
-					case "nightly":
+					if mode == "nightly" {
 						version += "-nightly.20261116.123"
-					case "bootstrap":
-						version += "-bootstrap.1"
 					}
 					t.Setenv("RELEASE_VERSION", version)
 					t.Setenv("RELEASE_COMMIT", commit)
@@ -192,5 +192,44 @@ func TestPortableArchiveRejectsOwnershipAndNestedExecutables(t *testing.T) {
 		if (err == nil) != (len(entries) == 1 && entries[0] == "anilist-arr-sync.exe") {
 			t.Fatalf("archive entries %v: %v", entries, err)
 		}
+	}
+}
+
+func TestProductionWindowsSigningFlagAndRemovedBootstrapMode(t *testing.T) {
+	t.Setenv("RELEASE_COMMIT", strings.Repeat("a", 40))
+
+	t.Run("bootstrap mode is rejected", func(t *testing.T) {
+		t.Setenv("RELEASE_MODE", "bootstrap")
+		t.Setenv("RELEASE_VERSION", "v1.2.3-bootstrap.1")
+		if _, err := identity(); err == nil {
+			t.Fatal("bootstrap mode should no longer be accepted")
+		}
+	})
+
+	for _, tc := range []struct {
+		name  string
+		mode  string
+		value string
+		want  bool
+		fail  bool
+	}{
+		{name: "production true", mode: "production", value: "true", want: true},
+		{name: "production false", mode: "production", value: "false", want: false},
+		{name: "production unset", mode: "production", value: "", fail: true},
+		{name: "production invalid", mode: "production", value: "yes", fail: true},
+		{name: "nightly ignores unset", mode: "nightly", value: "", want: false},
+		{name: "fixture ignores unset", mode: "fixture", value: "", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("RELEASE_MODE", tc.mode)
+			t.Setenv("RELEASE_SIGN_WINDOWS", tc.value)
+			got, err := windowsSigningRequired()
+			if (err != nil) != tc.fail {
+				t.Fatalf("windowsSigningRequired() err = %v, want fail=%v", err, tc.fail)
+			}
+			if !tc.fail && got != tc.want {
+				t.Fatalf("windowsSigningRequired() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

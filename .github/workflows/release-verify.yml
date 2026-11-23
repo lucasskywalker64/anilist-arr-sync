@@ -135,7 +135,7 @@ jobs:
           identity = json.loads(Path('.release/final/release.json').read_text())
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write('MINISIGN_PUBLIC_KEY=' + Path('.release/fixture-public-key.txt').read_text().strip() + '\n')
-              output.write('RELEASE_MODE=bootstrap\nRELEASE_VERSION=' + identity['version'] + '\nRELEASE_COMMIT=' + identity['commit'] + '\n')
+              output.write('RELEASE_MODE=fixture\nRELEASE_VERSION=' + identity['version'] + '\nRELEASE_COMMIT=' + identity['commit'] + '\n')
           PY
       - name: Verify both container architectures without publication
         env:

@@ -1,11 +1,19 @@
 param([Parameter(Mandatory)][string]$Binary, [string]$TargetOS, [ValidateSet('amd64', 'arm64')][string]$Arch)
 $ErrorActionPreference = 'Stop'
 if ($TargetOS -ne 'windows') { exit 0 }
-if ($env:RELEASE_MODE -eq 'production' -and $env:PROCESSOR_ARCHITECTURE -ne 'ARM64') {
-    throw 'Production requires the Windows ARM64 runner to execute both installer architectures'
+$signWindows = $false
+if ($env:RELEASE_MODE -eq 'production') {
+    if ($env:PROCESSOR_ARCHITECTURE -ne 'ARM64') {
+        throw 'Production requires the Windows ARM64 runner to execute both installer architectures'
+    }
+    if ($env:RELEASE_SIGN_WINDOWS -eq 'true') {
+        $signWindows = $true
+    } elseif ($env:RELEASE_SIGN_WINDOWS -ne 'false') {
+        throw "RELEASE_SIGN_WINDOWS must be 'true' or 'false' in production mode"
+    }
 }
 $Binary = (Resolve-Path -LiteralPath $Binary).Path
-if ($env:RELEASE_MODE -eq 'production') {
+if ($signWindows) {
     node packaging/signpath.mjs $Binary
     if ($LASTEXITCODE -ne 0) { throw 'Application signing failed' }
     & "$PSScriptRoot/verify-authenticode.ps1" -Path $Binary
@@ -15,7 +23,7 @@ if (!$iscc) { $iscc = "${env:ProgramFiles}\Inno Setup 7\ISCC.exe" }
 if (!(Test-Path -LiteralPath $iscc)) { throw 'Inno Setup 7.1.1 is required' }
 $output = (Resolve-Path .release).Path
 $args = @('/Qp', "/DBinary=$Binary", "/DArch=$Arch", "/DReleaseVersion=$env:RELEASE_VERSION", "/DOutputDir=$output")
-if ($env:RELEASE_MODE -eq 'production') {
+if ($signWindows) {
     # Inno invokes this for the uninstaller, temporary setup copies, and setup.
     # SignPath's trusted GitHub connector requires a workflow artifact each time.
     $args += '/DProduction=1'
@@ -25,7 +33,7 @@ if ($env:RELEASE_MODE -eq 'production') {
 & $iscc @args "$PSScriptRoot/windows.iss"
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed: $Arch" }
 $installer = Join-Path $output "anilist-arr-sync_$($env:RELEASE_VERSION)_windows_$($Arch)_setup.exe"
-if ($env:RELEASE_MODE -eq 'production') { & "$PSScriptRoot/verify-authenticode.ps1" -Path $installer }
+if ($signWindows) { & "$PSScriptRoot/verify-authenticode.ps1" -Path $installer }
 if ($env:RELEASE_INSTALL_TEST -eq '1') {
     $nativeArch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
     # The PR matrix covers native installers. Publication's single ARM host
