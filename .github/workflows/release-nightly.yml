@@ -15,8 +15,12 @@ jobs:
       changed: ${{ steps.guard.outputs.changed }}
       commit: ${{ steps.identity.outputs.commit }}
       version: ${{ steps.identity.outputs.version }}
+      publish_ghcr: ${{ steps.identity.outputs.publish_ghcr }}
+      publish_dockerhub: ${{ steps.identity.outputs.publish_dockerhub }}
     env:
       MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+      RELEASE_PUBLISH_GHCR: ${{ vars.RELEASE_PUBLISH_GHCR }}
+      RELEASE_PUBLISH_DOCKERHUB: ${{ vars.RELEASE_PUBLISH_DOCKERHUB }}
       GH_TOKEN: ${{ github.token }}
       PUBLIC_SOURCE: ${{ !github.event.repository.private }}
     steps:
@@ -34,12 +38,21 @@ jobs:
         run: |
           set -euo pipefail
           test "$PUBLIC_SOURCE" = true || { echo 'Release source must remain publicly accessible' >&2; exit 1; }
+          for flag in RELEASE_PUBLISH_GHCR RELEASE_PUBLISH_DOCKERHUB; do
+            value=${!flag-}
+            if [ "$value" != true ] && [ "$value" != false ]; then
+              echo "$flag must be explicitly set to 'true' or 'false'" >&2
+              exit 1
+            fi
+          done
           commit=$(git rev-parse HEAD)
           base=$(git tag --sort=-version:refname | { grep -m1 -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || true; })
           base=${base:-v0.0.0}
           version="$base-nightly.$(date -u +%Y%m%d).$GITHUB_RUN_NUMBER"
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish_ghcr=$RELEASE_PUBLISH_GHCR" >> "$GITHUB_OUTPUT"
+          echo "publish_dockerhub=$RELEASE_PUBLISH_DOCKERHUB" >> "$GITHUB_OUTPUT"
           echo "RELEASE_COMMIT=$commit" >> "$GITHUB_ENV"
       - name: Compare authenticated last published nightly
         id: guard
@@ -70,8 +83,15 @@ jobs:
         env:
           MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+          RELEASE_PUBLISH_DOCKERHUB: ${{ needs.guard.outputs.publish_dockerhub }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          foreach ($name in @('MINISIGN_PUBLIC_KEY', 'MINISIGN_PRIVATE_KEY', 'MINISIGN_PASSWORD')) {
+          $required = [System.Collections.Generic.List[string]]@('MINISIGN_PUBLIC_KEY', 'MINISIGN_PRIVATE_KEY', 'MINISIGN_PASSWORD')
+          if ($env:RELEASE_PUBLISH_DOCKERHUB -ceq 'true') {
+            $required.AddRange([string[]]@('DOCKERHUB_USERNAME', 'DOCKERHUB_TOKEN'))
+          }
+          foreach ($name in $required) {
             if (![Environment]::GetEnvironmentVariable($name)) { throw "Missing $name" }
           }
       - name: Build signed-checksum nightly using OSS snapshot mode
@@ -94,6 +114,7 @@ jobs:
           retention-days: 3
   containers:
     needs: [guard, build]
+    if: needs.guard.outputs.publish_ghcr == 'true' || needs.guard.outputs.publish_dockerhub == 'true'
     uses: ./.github/workflows/release-containers.yml
     permissions:
       contents: read
@@ -103,9 +124,17 @@ jobs:
       version: ${{ needs.guard.outputs.version }}
       mode: nightly
       artifact: nightly-final
+      publish_ghcr: ${{ needs.guard.outputs.publish_ghcr == 'true' }}
+      publish_dockerhub: ${{ needs.guard.outputs.publish_dockerhub == 'true' }}
     secrets: inherit
   publish:
     needs: [guard, build, containers]
+    if: >-
+      always() &&
+      needs.guard.result == 'success' &&
+      needs.guard.outputs.changed == 'true' &&
+      needs.build.result == 'success' &&
+      (needs.containers.result == 'success' || needs.containers.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write

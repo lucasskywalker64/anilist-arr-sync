@@ -222,25 +222,12 @@ def publish_nightly(directory, version, commit, command=run):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('operation', choices=['nightly-guard', 'publish-nightly', 'bootstrap-guard'])
+    parser.add_argument('operation', choices=['nightly-guard', 'publish-nightly'])
     args = parser.parse_args()
     if args.operation == 'nightly-guard':
         value = 'true' if nightly_guard(os.environ['RELEASE_COMMIT']) else 'false'
         with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
             output.write('changed=' + value + '\n')
-    elif args.operation == 'bootstrap-guard':
-        # Exactly one explicit exception. Fetch all pages; never infer from an
-        # empty token, failed request, or a missing signing configuration.
-        page = 1
-        while True:
-            releases = api(f'/releases?per_page=100&page={page}')
-            if releases is None:
-                raise ValueError('Cannot inspect bootstrap history')
-            if any(not release['draft'] and '-bootstrap.' in release['tag_name'] for release in releases):
-                raise ValueError('The one-time bootstrap release already exists')
-            if len(releases) < 100:
-                break
-            page += 1
     else:
         publish_nightly(Path('.release/final'), os.environ['RELEASE_VERSION'], os.environ['RELEASE_COMMIT'])
 

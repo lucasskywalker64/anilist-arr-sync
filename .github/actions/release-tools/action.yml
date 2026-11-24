@@ -132,14 +132,14 @@ runs:
         if ($tool.ExitCode -ne 0) { throw 'Inno Setup installation failed' }
         "${env:ProgramFiles}\Inno Setup 7" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
     - name: Install signing bridge dependencies
-      if: env.RELEASE_MODE == 'production'
+      if: env.RELEASE_MODE == 'production' && env.RELEASE_SIGN_WINDOWS == 'true'
       working-directory: packaging
       shell: pwsh
       run: |
         npm ci --ignore-scripts --no-audit --no-fund
         if ($LASTEXITCODE -ne 0) { throw 'Signing bridge installation failed' }
     - name: Install pinned official SignPath connector
-      if: env.RELEASE_MODE == 'production'
+      if: env.RELEASE_MODE == 'production' && env.RELEASE_SIGN_WINDOWS == 'true'
       uses: actions/checkout@v4
       with:
         repository: SignPath/github-action-submit-signing-request

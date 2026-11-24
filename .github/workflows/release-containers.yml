@@ -6,6 +6,9 @@ on:
       version: {type: string, required: true}
       mode: {type: string, required: true}
       artifact: {type: string, required: true}
+      sign_windows: {type: string, required: false, default: 'false'}
+      publish_ghcr: {type: boolean, required: true}
+      publish_dockerhub: {type: boolean, required: true}
 permissions:
   contents: read
 jobs:
@@ -18,6 +21,7 @@ jobs:
       RELEASE_MODE: ${{ inputs.mode }}
       RELEASE_VERSION: ${{ inputs.version }}
       RELEASE_COMMIT: ${{ inputs.commit }}
+      RELEASE_SIGN_WINDOWS: ${{ inputs.sign_windows }}
       MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
     steps:
       - uses: actions/checkout@v4
@@ -49,26 +53,47 @@ jobs:
           RELEASE_CONTAINER_TEST: '1'
         run: go test ./cmd/release -run '^TestContainerArtifacts$' -count=1 -timeout=15m
       - uses: docker/login-action@v3
+        if: inputs.publish_ghcr
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - uses: docker/login-action@v3
+        if: inputs.publish_dockerhub
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Publish both multiarch registries
+      - name: Publish enabled multiarch registries
         shell: bash
         env:
+          PUBLISH_GHCR: ${{ inputs.publish_ghcr }}
+          PUBLISH_DOCKERHUB: ${{ inputs.publish_dockerhub }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           set -euo pipefail
+          tags=()
           if [ "$RELEASE_MODE" = nightly ]; then
-            tags=(--tag ghcr.io/lucasskywalker64/anilist-arr-sync:develop --tag "$DOCKERHUB_USERNAME/anilist-arr-sync:develop")
+            if [ "$PUBLISH_GHCR" = true ]; then
+              tags+=(--tag ghcr.io/lucasskywalker64/anilist-arr-sync:develop)
+            fi
+            if [ "$PUBLISH_DOCKERHUB" = true ]; then
+              test -n "$DOCKERHUB_USERNAME" || { echo 'DOCKERHUB_USERNAME is required' >&2; exit 1; }
+              tags+=(--tag "$DOCKERHUB_USERNAME/anilist-arr-sync:develop")
+            fi
           elif [ "$RELEASE_MODE" = production ]; then
-            tags=(--tag "ghcr.io/lucasskywalker64/anilist-arr-sync:$RELEASE_VERSION" --tag ghcr.io/lucasskywalker64/anilist-arr-sync:latest --tag "$DOCKERHUB_USERNAME/anilist-arr-sync:$RELEASE_VERSION" --tag "$DOCKERHUB_USERNAME/anilist-arr-sync:latest")
+            if [ "$PUBLISH_GHCR" = true ]; then
+              tags+=(--tag "ghcr.io/lucasskywalker64/anilist-arr-sync:$RELEASE_VERSION" --tag ghcr.io/lucasskywalker64/anilist-arr-sync:latest)
+            fi
+            if [ "$PUBLISH_DOCKERHUB" = true ]; then
+              test -n "$DOCKERHUB_USERNAME" || { echo 'DOCKERHUB_USERNAME is required' >&2; exit 1; }
+              tags+=(--tag "$DOCKERHUB_USERNAME/anilist-arr-sync:$RELEASE_VERSION" --tag "$DOCKERHUB_USERNAME/anilist-arr-sync:latest")
+            fi
           else
             echo 'Container publication requires production or nightly mode' >&2
+            exit 1
+          fi
+          if [ "${#tags[@]}" -eq 0 ]; then
+            echo 'At least one container registry must be enabled' >&2
             exit 1
           fi
           docker buildx build --platform linux/amd64,linux/arm64 --push "${tags[@]}" --label "org.opencontainers.image.revision=$RELEASE_COMMIT" --label "org.opencontainers.image.version=$RELEASE_VERSION" .release/container

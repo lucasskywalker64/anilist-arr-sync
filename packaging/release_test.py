@@ -46,9 +46,106 @@ class PublicationBoundary(unittest.TestCase):
                     output.write_text('')
                     subprocess.run([bash, '-c', fixtures + script], check=True, capture_output=True,
                                    env={**os.environ, 'PUBLIC_SOURCE': 'true', 'FIXTURE_DATE': day,
+                                        'RELEASE_PUBLISH_GHCR': 'true', 'RELEASE_PUBLISH_DOCKERHUB': 'false',
                                         'GITHUB_RUN_NUMBER': '123', 'GITHUB_RUN_ATTEMPT': attempt,
                                         'GITHUB_OUTPUT': output.as_posix(), 'GITHUB_ENV': environment.as_posix()})
-                    self.assertIn('version=' + expected + '\n', output.read_text())
+                    rendered = output.read_text()
+                    self.assertIn('version=' + expected + '\n', rendered)
+                    self.assertIn('publish_ghcr=true\n', rendered)
+                    self.assertIn('publish_dockerhub=false\n', rendered)
+            for flag in ['RELEASE_PUBLISH_GHCR', 'RELEASE_PUBLISH_DOCKERHUB']:
+                for bad in ['', 'yes', 'TRUE', 'FALSE']:
+                    with self.subTest(flag=flag, bad=bad):
+                        env = {**os.environ, 'PUBLIC_SOURCE': 'true', 'FIXTURE_DATE': '20261116',
+                               'RELEASE_PUBLISH_GHCR': 'true', 'RELEASE_PUBLISH_DOCKERHUB': 'true',
+                               'GITHUB_RUN_NUMBER': '123', 'GITHUB_RUN_ATTEMPT': '1',
+                               'GITHUB_OUTPUT': output.as_posix(), 'GITHUB_ENV': environment.as_posix()}
+                        if bad:
+                            env[flag] = bad
+                        else:
+                            env.pop(flag, None)
+                        result = subprocess.run([bash, '-c', fixtures + script], capture_output=True, text=True, env=env)
+                        self.assertNotEqual(result.returncode, 0)
+
+    def test_production_feature_flags_and_conditional_credentials_fail_closed(self):
+        workflow = Path(__file__).resolve().parents[1] / '.github/workflows/release-production.yml'
+        step = workflow.read_text().split('        id: identity\n', 1)[1]
+        script = textwrap.dedent(step.split('        run: |\n', 1)[1].split('      - uses:', 1)[0])
+        pwsh = shutil.which('pwsh')
+        if not pwsh:
+            self.skipTest('pwsh is not available')
+        flags = [
+            'RELEASE_SIGN_WINDOWS', 'RELEASE_PUBLISH_GHCR', 'RELEASE_PUBLISH_DOCKERHUB',
+            'RELEASE_PUBLISH_SCOOP', 'RELEASE_PUBLISH_AUR', 'RELEASE_PUBLISH_WINGET',
+            'RELEASE_PUBLISH_CHOCOLATEY',
+        ]
+        fixtures = ("function git { if ($args[0] -eq 'rev-parse') { '0' * 40 }; $global:LASTEXITCODE = 0 }\n")
+        base_env = {
+            **os.environ,
+            'TAG': 'v0.1.0',
+            'PUBLIC_SOURCE': 'true',
+            'PACKAGE_LICENSE': 'AGPL-3.0-only',
+            'MINISIGN_PUBLIC_KEY': 'pubkey',
+            'MINISIGN_PRIVATE_KEY': 'privkey',
+            'MINISIGN_PASSWORD': 'password',
+            **{flag: 'false' for flag in flags},
+        }
+        for secret in [
+            'SIGNPATH_API_TOKEN', 'SIGNPATH_ORGANIZATION_ID', 'SIGNPATH_PROJECT_SLUG',
+            'SIGNPATH_SIGNING_POLICY_SLUG', 'SIGNPATH_ARTIFACT_CONFIGURATION_SLUG',
+            'SCOOP_BUCKET_TOKEN', 'SCOOP_BUCKET_REPOSITORY', 'AUR_SSH_PRIVATE_KEY',
+            'DOCKERHUB_USERNAME', 'DOCKERHUB_TOKEN', 'WINGET_TOKEN', 'CHOCOLATEY_API_KEY',
+        ]:
+            base_env.pop(secret, None)
+
+        with tempfile.TemporaryDirectory() as temp:
+            script_path = Path(temp, 'validate.ps1')
+            script_path.write_text(fixtures + script, encoding='utf-8')
+            output, environment = Path(temp, 'output'), Path(temp, 'env')
+
+            def run_case(overrides):
+                output.write_text('', encoding='utf-8')
+                environment.write_text('', encoding='utf-8')
+                env = {**base_env, 'GITHUB_OUTPUT': str(output), 'GITHUB_ENV': str(environment)}
+                for key, value in overrides.items():
+                    if value is None:
+                        env.pop(key, None)
+                    else:
+                        env[key] = value
+                return subprocess.run([pwsh, '-NoProfile', '-File', str(script_path)], capture_output=True, text=True, env=env)
+
+            result = run_case({})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('sign_windows=false\n', output.read_text(encoding='utf-8'))
+
+            for flag in flags:
+                for bad in [None, 'yes', 'TRUE', 'FALSE']:
+                    with self.subTest(flag=flag, bad=bad):
+                        self.assertNotEqual(run_case({flag: bad}).returncode, 0)
+
+            requirements = {
+                'RELEASE_SIGN_WINDOWS': {
+                    'SIGNPATH_API_TOKEN': 'tok',
+                    'SIGNPATH_ORGANIZATION_ID': 'org',
+                    'SIGNPATH_PROJECT_SLUG': 'proj',
+                    'SIGNPATH_SIGNING_POLICY_SLUG': 'pol',
+                    'SIGNPATH_ARTIFACT_CONFIGURATION_SLUG': 'art',
+                },
+                'RELEASE_PUBLISH_SCOOP': {
+                    'SCOOP_BUCKET_TOKEN': 'tok',
+                    'SCOOP_BUCKET_REPOSITORY': 'owner/bucket',
+                },
+                'RELEASE_PUBLISH_AUR': {'AUR_SSH_PRIVATE_KEY': 'key'},
+                'RELEASE_PUBLISH_DOCKERHUB': {'DOCKERHUB_USERNAME': 'user', 'DOCKERHUB_TOKEN': 'tok'},
+                'RELEASE_PUBLISH_WINGET': {'WINGET_TOKEN': 'tok'},
+                'RELEASE_PUBLISH_CHOCOLATEY': {'CHOCOLATEY_API_KEY': 'key'},
+            }
+            for flag, creds in requirements.items():
+                with self.subTest(enabled=flag):
+                    self.assertEqual(run_case({flag: 'true', **creds}).returncode, 0)
+                    for missing in creds:
+                        partial = {k: v for k, v in creds.items() if k != missing}
+                        self.assertNotEqual(run_case({flag: 'true', **partial}).returncode, 0)
 
     def test_uploaded_bytes_verified_before_rolling_release_replacement(self):
         for failure in [None, 'upload', 'download', 'remote verify', 'promotion', 'reference', 'promotion response lost']:

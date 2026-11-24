@@ -9,12 +9,12 @@ establish its authenticity.
 
 | Channel | Windows Authenticode | Checksums and publication |
 | --- | --- | --- |
-| Stable | Approved, timestamped signatures are required for the application, installer, uninstaller, and temporary setup copies. | Final SHA256 checksums are Minisign-signed before publication and downstream distribution. |
+| Stable | When Windows signing is enabled for the release (`RELEASE_SIGN_WINDOWS=true`), approved, timestamped SignPath signatures are required for the application, installer, uninstaller, and temporary setup copies. When disabled (`RELEASE_SIGN_WINDOWS=false`), release notes state that Authenticode signing is omitted. | Final SHA256 checksums are Minisign-signed before publication and downstream distribution. |
 | Nightly | Omitted for development builds. | Final checksums remain Minisign-signed. The rolling prerelease records a distinct version and full source commit. |
 
 ## Signing service and responsibilities
 
-Stable Windows signing uses SignPath with a production policy that requires human
+When Windows signing is enabled, stable Windows signing uses SignPath with a production policy that requires human
 approval. For releases sponsored through the SignPath Foundation open-source
 program, the service credit is:
 
@@ -51,20 +51,23 @@ commit. Release sources must match the embedded commit and a clean checkout.
 The frontend is built before Go compilation, and each application target is built
 once per release.
 
+When `RELEASE_SIGN_WINDOWS=true` is explicitly configured for a stable release,
 Windows application executables are signed before entering portable archives and
 installers. Inno Setup invokes signing for the installer, uninstaller, and its
 temporary executable copies. The Windows service, tray, and detached update
 worker use the same application executable, preserving its signature.
 
-After signing, packaging, and installer verification, SHA256 hashes cover the final
+After signing (when enabled), packaging, and installer verification, SHA256 hashes cover the final
 archives, installers, and `release.json`. Minisign signs the exact `checksums.txt`
 bytes. Artifact bytes are not changed after hashing. Uploaded assets are verified
-before nightly promotion; production signing and final-byte checks precede release
+before nightly promotion; production signing (when enabled) and final-byte checks precede release
 publication and downstream package or container publication.
 
-Missing configuration, failed or rejected signing, approval timeout, invalid
-signatures, failed installer checks, or incorrect final hashes stop the release.
-Automation does not substitute test keys or publish unsigned stable replacements.
+Missing or invalid feature-flag configuration, missing signing credentials when
+enabled, failed or rejected signing, approval timeout, invalid signatures, failed
+installer checks, or incorrect final hashes stop the release. Automation never
+substitutes test keys or falls back to unsigned builds when Windows signing is
+enabled.
 
 ## Verify a download
 
@@ -96,8 +99,9 @@ On Windows PowerShell:
 Get-FileHash -LiteralPath .\FILE_NAME -Algorithm SHA256
 ```
 
-For stable Windows executables, also inspect Authenticode. For a portable ZIP,
-inspect the executable after extraction; for an installer, inspect the installer:
+For stable Windows releases whose release notes state SignPath Authenticode
+signing, also inspect Authenticode. For a portable ZIP, inspect the executable
+after extraction; for an installer, inspect the installer:
 
 ```powershell
 Get-AuthenticodeSignature -LiteralPath .\FILE_NAME.exe |
@@ -106,8 +110,9 @@ Get-AuthenticodeSignature -LiteralPath .\FILE_NAME.exe |
 
 Require a valid signature and timestamp, and verify the certificate identity
 against the expected release publisher information. A valid signature from an
-unrelated publisher is not sufficient. Nightly Windows files omit Authenticode
-signing; their checksum verification still applies.
+unrelated publisher is not sufficient. Nightly Windows files and stable releases
+built with `RELEASE_SIGN_WINDOWS=false` omit Authenticode signing; their checksum
+verification still applies.
 
 ## Built-in updates and source
 

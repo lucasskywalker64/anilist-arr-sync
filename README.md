@@ -258,7 +258,7 @@ configured outside that directory.
 
 | Channel | Identity and signing                                                                                       |
 | ------- | ---------------------------------------------------------------------------------------------------------- |
-| Stable  | Semantic version from `main`; Windows executables require approved, timestamped Authenticode signatures. |
+| Stable  | Semantic version from `main`; Windows Authenticode signatures apply when enabled for the release (see release notes). |
 | Nightly | Distinct version and exact `develop` commit; Windows executables omit Authenticode signing.              |
 
 Both channels require final SHA256 checksums and a Minisign signature of
