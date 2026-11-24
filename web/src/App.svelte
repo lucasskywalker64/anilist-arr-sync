@@ -12,6 +12,8 @@
   import SystemView from './components/views/SystemView.svelte';
   import LoginModal from './components/views/LoginModal.svelte';
   import OnboardingWizard from './components/views/OnboardingWizard.svelte';
+  import Modal from './components/common/Modal.svelte';
+  import Button from './components/common/Button.svelte';
   import { api, getBaseUrl, setApiKey } from './lib/api';
   import type { AppConfig, ReviewItem, StagedAction, OverrideItem, CurrentUser, LibraryStats } from './lib/types';
 
@@ -31,6 +33,33 @@
   let reviewItems: ReviewItem[] = [];
   let stagedActions: StagedAction[] = [];
   let overrides: OverrideItem[] = [];
+
+  let settingsView: SettingsView | null = null;
+  let pendingNavigationRoute: string | null = null;
+  let savingBeforeLeave = false;
+
+  function isSettingsRoute(path: string): boolean {
+    return path === '/settings' || path.startsWith('/settings/');
+  }
+
+  function shouldGuardSettingsNavigation(nextRoute: string): boolean {
+    return isSettingsRoute(currentRoute) && !isSettingsRoute(nextRoute) && Boolean(settingsView?.hasUnsavedChanges());
+  }
+
+  function syncLocationToCurrentRoute() {
+    if (typeof window === 'undefined') return;
+    const urlBase = getBaseUrl();
+    const fullPath = `${urlBase}${currentRoute}`;
+    if (window.location.pathname !== fullPath || window.location.hash) {
+      window.history.pushState(null, '', fullPath);
+    }
+  }
+
+  function commitNavigation(path: string) {
+    currentRoute = normalizeRoute(path);
+    pendingNavigationRoute = null;
+    syncLocationToCurrentRoute();
+  }
 
   function normalizeRoute(path: string): string {
     if (!path || path === '' || path === '#') return '/';
@@ -53,17 +82,54 @@
   }
 
   function handlePopState() {
-    currentRoute = getRouteFromLocation();
+    const nextRoute = getRouteFromLocation();
+    if (savingBeforeLeave) {
+      syncLocationToCurrentRoute();
+      return;
+    }
+    if (shouldGuardSettingsNavigation(nextRoute)) {
+      pendingNavigationRoute = nextRoute;
+      syncLocationToCurrentRoute();
+      return;
+    }
+    currentRoute = nextRoute;
+    pendingNavigationRoute = null;
   }
 
   function navigate(path: string) {
-    currentRoute = normalizeRoute(path);
-    if (typeof window !== 'undefined') {
-      const urlBase = getBaseUrl();
-      const fullPath = `${urlBase}${currentRoute}`;
-      if (window.location.pathname !== fullPath) {
-        window.history.pushState(null, '', fullPath);
-      }
+    const nextRoute = normalizeRoute(path);
+    if (savingBeforeLeave) return;
+    if (shouldGuardSettingsNavigation(nextRoute)) {
+      pendingNavigationRoute = nextRoute;
+      return;
+    }
+    commitNavigation(nextRoute);
+  }
+
+  function handleKeepEditing() {
+    if (savingBeforeLeave) return;
+    pendingNavigationRoute = null;
+  }
+
+  function handleLeaveWithoutSaving() {
+    if (savingBeforeLeave || !pendingNavigationRoute) return;
+    const target = pendingNavigationRoute;
+    commitNavigation(target);
+  }
+
+  async function handleSaveAndLeave() {
+    if (savingBeforeLeave || !pendingNavigationRoute || !settingsView) return;
+    savingBeforeLeave = true;
+    let saved = false;
+    try {
+      saved = await settingsView.saveConfig();
+    } finally {
+      savingBeforeLeave = false;
+    }
+    if (saved && pendingNavigationRoute) {
+      commitNavigation(pendingNavigationRoute);
+    } else {
+      pendingNavigationRoute = null;
     }
   }
 
@@ -238,8 +304,9 @@
       <HistoryView />
     {:else if currentRoute === '/activity/blocklist' || currentRoute === '/activity/ignored'}
       <BlocklistView />
-    {:else if currentRoute.startsWith('/settings')}
+    {:else if isSettingsRoute(currentRoute)}
       <SettingsView
+        bind:this={settingsView}
         openOnboarding={currentUser?.onboardingRequired ? (config) => onboardingConfig = config : undefined}
         subTab={currentRoute === '/settings/sync'
           ? 'sync'
@@ -270,4 +337,24 @@
       />
     {/if}
   </Page>
+
+  <Modal
+    isOpen={pendingNavigationRoute !== null}
+    title="Unsaved Changes"
+    size="medium"
+    on:close={handleKeepEditing}
+  >
+    <p>You have unsaved changes in Settings. If you leave now, your unsaved changes will be lost.</p>
+    <svelte:fragment slot="footer">
+      <Button kind="default" disabled={savingBeforeLeave} on:click={handleKeepEditing}>
+        Keep editing
+      </Button>
+      <Button kind="danger" disabled={savingBeforeLeave} on:click={handleLeaveWithoutSaving}>
+        Leave without saving
+      </Button>
+      <Button kind="primary" disabled={savingBeforeLeave} on:click={handleSaveAndLeave}>
+        Save and leave
+      </Button>
+    </svelte:fragment>
+  </Modal>
 {/if}

@@ -220,3 +220,132 @@ it('disables override controls while a configuration save is pending', async () 
     expect(document.querySelector<HTMLInputElement>('#sonarr-override-country')!.disabled).toBe(false),
   );
 });
+
+it('registers beforeunload while dirty and cleans it up on save, reset, and unmount', async () => {
+  vi.mocked(api.getConfig).mockResolvedValue(baseConfig());
+  vi.mocked(api.updateConfig).mockResolvedValue({ status: 'ok' });
+
+  component = new SettingsView({ target: document.body, props: { subTab: 'general' } });
+  await vi.waitFor(() =>
+    expect([...document.querySelectorAll<HTMLInputElement>('input')].some((i) => i.value === '7171')).toBe(true),
+  );
+
+  const dispatchBeforeUnload = () => {
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+    return event;
+  };
+
+  // Clean state: should not prevent unload
+  expect(dispatchBeforeUnload().defaultPrevented).toBe(false);
+
+  // Edit port -> dirty -> should prevent unload
+  const portInput = [...document.querySelectorAll<HTMLInputElement>('input')].find((i) => i.value === '7171')!;
+  portInput.value = '7172';
+  portInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+  expect(dispatchBeforeUnload().defaultPrevented).toBe(true);
+
+  // Reset -> clean -> listener removed
+  const resetBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Reset')!;
+  resetBtn.click();
+  await tick();
+  expect(dispatchBeforeUnload().defaultPrevented).toBe(false);
+
+  // Type password and confirmation, then clear password: formPasswordConfirm alone still counts as dirty
+  const passwordInput = document.querySelector<HTMLInputElement>('input[placeholder="New password"]')!;
+  passwordInput.value = 'secret';
+  passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+  const confirmInput = document.querySelector<HTMLInputElement>('input[placeholder="Confirm new password"]')!;
+  confirmInput.value = 'secret';
+  confirmInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+  passwordInput.value = '';
+  passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+  expect(dispatchBeforeUnload().defaultPrevented).toBe(true);
+
+  // Restore matching password and save -> clean -> listener removed
+  passwordInput.value = 'secret';
+  passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+  const saveBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('Save Changes'))!;
+  saveBtn.click();
+  await vi.waitFor(() => expect(api.updateConfig).toHaveBeenCalledTimes(1));
+  await tick();
+  expect(dispatchBeforeUnload().defaultPrevented).toBe(false);
+
+  // Dirty again, then unmount -> listener removed
+  portInput.value = '7173';
+  portInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+  expect(dispatchBeforeUnload().defaultPrevented).toBe(true);
+
+  component.$destroy();
+  component = undefined;
+  expect(dispatchBeforeUnload().defaultPrevented).toBe(false);
+});
+
+it('exposes saveConfig returning true on success and false on validation or API error', async () => {
+  vi.mocked(api.getConfig).mockResolvedValue(baseConfig());
+  vi.mocked(api.updateConfig)
+    .mockRejectedValueOnce(new Error('Backend unavailable'))
+    .mockResolvedValueOnce({ status: 'ok' });
+
+  component = new SettingsView({ target: document.body, props: { subTab: 'general' } });
+  await vi.waitFor(() =>
+    expect([...document.querySelectorAll<HTMLInputElement>('input')].some((i) => i.value === '7171')).toBe(true),
+  );
+
+  // Password mismatch -> returns false, no API call, error rendered
+  const passwordInput = document.querySelector<HTMLInputElement>('input[placeholder="New password"]')!;
+  passwordInput.value = 'secret-a';
+  passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+  const confirmInput = document.querySelector<HTMLInputElement>('input[placeholder="Confirm new password"]')!;
+  confirmInput.value = 'secret-b';
+  confirmInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+
+  await expect(component.saveConfig()).resolves.toBe(false);
+  expect(api.updateConfig).not.toHaveBeenCalled();
+  expect(document.body.textContent).toContain('Passwords do not match');
+
+  // Fix password mismatch, API error -> returns false, error rendered
+  confirmInput.value = 'secret-a';
+  confirmInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+
+  await expect(component.saveConfig()).resolves.toBe(false);
+  expect(api.updateConfig).toHaveBeenCalledTimes(1);
+  expect(document.body.textContent).toContain('Backend unavailable');
+
+  // Retry succeeds -> returns true
+  await expect(component.saveConfig()).resolves.toBe(true);
+  expect(api.updateConfig).toHaveBeenCalledTimes(2);
+});
+
+it('reuses an in-flight save promise when saveConfig is called concurrently', async () => {
+  vi.mocked(api.getConfig).mockResolvedValue(baseConfig());
+  let resolveSave!: (value: { status: string }) => void;
+  vi.mocked(api.updateConfig).mockImplementation(
+    () => new Promise((resolve) => { resolveSave = resolve; }),
+  );
+
+  component = new SettingsView({ target: document.body, props: { subTab: 'general' } });
+  await vi.waitFor(() =>
+    expect([...document.querySelectorAll<HTMLInputElement>('input')].some((i) => i.value === '7171')).toBe(true),
+  );
+
+  const portInput = [...document.querySelectorAll<HTMLInputElement>('input')].find((i) => i.value === '7171')!;
+  portInput.value = '7175';
+  portInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+  const first = component.saveConfig();
+  const second = component.saveConfig();
+  expect(api.updateConfig).toHaveBeenCalledTimes(1);
+
+  resolveSave({ status: 'ok' });
+  await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+});

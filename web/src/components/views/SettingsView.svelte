@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import {
     Save,
     Sliders,
@@ -81,10 +81,58 @@
       ? "Add Notification"
       : `Add Notification - ${notifType === "DISCORD" ? "Discord" : "Webhook"}`;
 
-  $: hasPendingChanges =
-    (savedConfig
-      ? JSON.stringify(savedConfig) !== JSON.stringify(formConfig)
-      : false) || !!formPassword;
+  function computePendingChanges(
+    saved: AppConfig | null,
+    form: Partial<AppConfig>,
+    password: string,
+    passwordConfirm: string,
+  ): boolean {
+    return (
+      (saved ? JSON.stringify(saved) !== JSON.stringify(form) : false) ||
+      Boolean(password) ||
+      Boolean(passwordConfirm)
+    );
+  }
+
+  export function hasUnsavedChanges(): boolean {
+    return computePendingChanges(
+      savedConfig,
+      formConfig,
+      formPassword,
+      formPasswordConfirm,
+    );
+  }
+
+  $: hasPendingChanges = computePendingChanges(
+    savedConfig,
+    formConfig,
+    formPassword,
+    formPasswordConfirm,
+  );
+
+  let beforeUnloadRegistered = false;
+
+  function handleBeforeUnload(event: BeforeUnloadEvent) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+
+  function syncBeforeUnload(active: boolean) {
+    if (typeof window === "undefined") return;
+    if (active && !beforeUnloadRegistered) {
+      window.addEventListener("beforeunload", handleBeforeUnload);
+      beforeUnloadRegistered = true;
+    } else if (!active && beforeUnloadRegistered) {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      beforeUnloadRegistered = false;
+    }
+  }
+
+  $: syncBeforeUnload(hasPendingChanges);
+
+  onDestroy(() => {
+    syncBeforeUnload(false);
+  });
 
   function isFieldDirty(field: keyof AppConfig): boolean {
     if (!savedConfig) return false;
@@ -160,39 +208,48 @@
     }
   }
 
-  async function saveConfig() {
-    if (!hasPendingChanges || saving) return;
+  let activeSavePromise: Promise<boolean> | null = null;
+
+  export async function saveConfig(): Promise<boolean> {
+    if (activeSavePromise) return activeSavePromise;
+    if (!hasUnsavedChanges()) return false;
     if (formPassword || formPasswordConfirm) {
       if (formPassword !== formPasswordConfirm) {
         errorMsg = "Passwords do not match";
-        return;
+        return false;
       }
     }
     saving = true;
     errorMsg = "";
     successMsg = "";
-    try {
-      const payload: Partial<AppConfig> = { ...formConfig };
-      delete payload.wizardCompleted;
-      if (formPassword) {
-        payload.password = formPassword;
+    activeSavePromise = (async () => {
+      try {
+        const payload: Partial<AppConfig> = { ...formConfig };
+        delete payload.wizardCompleted;
+        if (formPassword) {
+          payload.password = formPassword;
+        }
+        const res = await api.updateConfig(payload);
+        savedConfig = JSON.parse(JSON.stringify(formConfig));
+        overridesResetToken += 1;
+        formPassword = "";
+        formPasswordConfirm = "";
+        if (res?.restartRequired) {
+          successMsg =
+            "Configuration changes saved. A service restart is required for these changes to take effect.";
+        } else {
+          successMsg = "Configuration changes saved successfully.";
+        }
+        return true;
+      } catch (e: any) {
+        errorMsg = e.message || "Failed to save configuration";
+        return false;
+      } finally {
+        saving = false;
+        activeSavePromise = null;
       }
-      const res = await api.updateConfig(payload);
-      savedConfig = JSON.parse(JSON.stringify(formConfig));
-      overridesResetToken += 1;
-      formPassword = "";
-      formPasswordConfirm = "";
-      if (res?.restartRequired) {
-        successMsg =
-          "Configuration changes saved. A service restart is required for these changes to take effect.";
-      } else {
-        successMsg = "Configuration changes saved successfully.";
-      }
-    } catch (e: any) {
-      errorMsg = e.message || "Failed to save configuration";
-    } finally {
-      saving = false;
-    }
+    })();
+    return activeSavePromise;
   }
 
   function resetConfig() {
@@ -618,7 +675,7 @@
             />
           </FormGroup>
 
-          {#if formPassword}
+          {#if formPassword || formPasswordConfirm}
             <FormGroup
               label="Password Confirmation"
               helpText="Confirm the password entered above"

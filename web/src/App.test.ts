@@ -145,3 +145,233 @@ it('offers to retry a pending setup restart after reloading', async () => {
   await vi.waitFor(() => expect(findButton('Start Initial Dry Run')?.disabled).toBe(false));
   expect(fetch.mock.calls.filter(([url]) => url.endsWith('/config'))).toHaveLength(1);
 });
+
+async function mountSettingsApp(options: {
+  onSave?: (payload: Record<string, unknown>) => Promise<Response> | Response;
+} = {}) {
+  window.history.replaceState(null, '', '/settings/general');
+  const config = {
+    wizardCompleted: true,
+    port: 7171,
+    aniListUsername: 'Viewer',
+    aniListTvStatus: 'CURRENT',
+    aniListMovieStatus: 'CURRENT',
+    sonarrUrl: 'http://sonarr',
+    sonarrApiKey: '******',
+    sonarrQualityProfileId: 7,
+    sonarrRootFolderPath: '/anime',
+    sonarrMonitorOnAdd: true,
+    sonarrSearchOnAdd: false,
+    radarrUrl: 'http://radarr',
+    radarrApiKey: '******',
+    radarrQualityProfileId: 7,
+    radarrRootFolderPath: '/anime',
+    radarrMonitorOnAdd: true,
+    radarrSearchOnAdd: false,
+  };
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/auth/user')) return Response.json({ authenticated: true, wizardCompleted: true });
+    if (url.endsWith('/config')) {
+      if (init?.method === 'PUT') {
+        const payload = JSON.parse(String(init.body));
+        return options.onSave ? await options.onSave(payload) : Response.json({ status: 'ok' });
+      }
+      return Response.json(config);
+    }
+    return Response.json([]);
+  }));
+  component = new App({ target: document.body });
+
+  const findButton = (label: string) =>
+    [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === label);
+  const findNavLink = (label: string) =>
+    [...document.querySelectorAll('aside a')].find((a) => a.textContent?.trim() === label) as HTMLAnchorElement | undefined;
+
+  await vi.waitFor(() =>
+    expect([...document.querySelectorAll<HTMLInputElement>('input')].some((i) => i.value === '7171')).toBe(true),
+  );
+  const portInput = () => [...document.querySelectorAll<HTMLInputElement>('input')].find((i) => i.value === '7171' || i.type === 'number')!;
+  return { findButton, findNavLink, portInput };
+}
+
+it('allows immediate navigation when clean, stays across Settings sub-tabs, and guards sidebar leave with keep-editing dismissals', async () => {
+  const { findButton, findNavLink, portInput } = await mountSettingsApp();
+
+  // Clean navigation leaves immediately without modal
+  findNavLink('Library')!.click();
+  await vi.waitFor(() => expect(window.location.pathname).toBe('/library'));
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+
+  // Return to Settings and edit port
+  findNavLink('Settings')!.click();
+  await vi.waitFor(() =>
+    expect([...document.querySelectorAll<HTMLInputElement>('input')].some((i) => i.value === '7171')).toBe(true),
+  );
+  const input = portInput();
+  input.value = '8080';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+
+  // Switching Settings sub-tabs while dirty does not trigger modal and preserves edits
+  findNavLink('Sync & AniList')!.click();
+  await vi.waitFor(() => expect(window.location.pathname).toBe('/settings/sync'));
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  findNavLink('General')!.click();
+  await vi.waitFor(() => expect(portInput().value).toBe('8080'));
+
+  // Clicking non-settings sidebar link opens confirmation modal
+  findNavLink('Library')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  expect(window.location.pathname).toBe('/settings/general');
+  expect(document.querySelector('[role="dialog"]')?.textContent).toMatch(/unsaved/i);
+  expect(findButton('Keep editing')).toBeDefined();
+  expect(findButton('Leave without saving')).toBeDefined();
+  expect(findButton('Save and leave')).toBeDefined();
+
+  // Keep editing button dismisses modal and keeps edits
+  findButton('Keep editing')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(window.location.pathname).toBe('/settings/general');
+  expect(portInput().value).toBe('8080');
+
+  // Escape key dismisses modal
+  findNavLink('Library')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(window.location.pathname).toBe('/settings/general');
+
+  // Close button dismisses modal
+  findNavLink('Library')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  document.querySelector<HTMLButtonElement>('[aria-label="Close modal"]')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(window.location.pathname).toBe('/settings/general');
+
+  // Backdrop click dismisses modal
+  findNavLink('Library')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  document.querySelector<HTMLElement>('.modalBackdrop')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(window.location.pathname).toBe('/settings/general');
+  expect(portInput().value).toBe('8080');
+});
+
+it('intercepts popstate and hashchange navigation, keeps URL aligned on keep editing, and navigates on leave without saving', async () => {
+  const onSave = vi.fn(() => Response.json({ status: 'ok' }));
+  const { findButton, portInput } = await mountSettingsApp({ onSave });
+
+  const input = portInput();
+  input.value = '8081';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+
+  // Simulate browser back/forward via popstate
+  window.history.replaceState(null, '', '/overrides');
+  window.dispatchEvent(new PopStateEvent('popstate'));
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  expect(window.location.pathname).toBe('/settings/general');
+
+  // Keep editing keeps URL aligned with Settings and edits intact
+  findButton('Keep editing')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(window.location.pathname).toBe('/settings/general');
+  expect(portInput().value).toBe('8081');
+
+  // Simulate hashchange navigation away from Settings
+  window.history.replaceState(null, '', '/#/library');
+  window.dispatchEvent(new HashChangeEvent('hashchange'));
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  expect(window.location.pathname).toBe('/settings/general');
+  expect(window.location.hash).toBe('');
+
+  // Leave without saving discards edits, navigates to target, and cleans up beforeunload
+  findButton('Leave without saving')!.click();
+  await vi.waitFor(() => expect(window.location.pathname).toBe('/library'));
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(onSave).not.toHaveBeenCalled();
+
+  const unloadEvent = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(unloadEvent);
+  expect(unloadEvent.defaultPrevented).toBe(false);
+});
+
+it('disables modal buttons while saving and navigates when Save and leave succeeds', async () => {
+  let resolveSave!: (res: Response) => void;
+  let savedPayload: Record<string, unknown> | undefined;
+  const { findButton, findNavLink, portInput } = await mountSettingsApp({
+    onSave: (payload) => {
+      savedPayload = payload;
+      return new Promise<Response>((resolve) => {
+        resolveSave = resolve;
+      });
+    },
+  });
+
+  const input = portInput();
+  input.value = '9090';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+
+  findNavLink('Library')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+
+  findButton('Save and leave')!.click();
+  await vi.waitFor(() => expect(findButton('Save and leave')?.disabled).toBe(true));
+  expect(findButton('Keep editing')?.disabled).toBe(true);
+  expect(findButton('Leave without saving')?.disabled).toBe(true);
+
+  // Escape while saving should not dismiss the modal
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+
+  resolveSave(Response.json({ status: 'ok' }));
+  await vi.waitFor(() => expect(window.location.pathname).toBe('/library'));
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(savedPayload).toMatchObject({ port: 9090 });
+});
+
+it('stays in Settings with edits intact and surfaces errors when Save and leave fails', async () => {
+  let shouldFailApi = true;
+  const { findButton, findNavLink } = await mountSettingsApp({
+    onSave: () =>
+      shouldFailApi
+        ? Response.json({ error: 'Config save rejected' }, { status: 500 })
+        : Response.json({ status: 'ok' }),
+  });
+
+  // Trigger password mismatch failure
+  const passwordInput = document.querySelector<HTMLInputElement>('input[placeholder="New password"]')!;
+  passwordInput.value = 'pass-1';
+  passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await vi.waitFor(() => expect(document.querySelector('input[placeholder="Confirm new password"]')).not.toBeNull());
+  const confirmInput = document.querySelector<HTMLInputElement>('input[placeholder="Confirm new password"]')!;
+  confirmInput.value = 'pass-2';
+  confirmInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+  findNavLink('Library')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  findButton('Save and leave')!.click();
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain('Passwords do not match'));
+  expect(window.location.pathname).toBe('/settings/general');
+  expect(passwordInput.value).toBe('pass-1');
+  expect(confirmInput.value).toBe('pass-2');
+
+  // Fix password mismatch, trigger API failure
+  confirmInput.value = 'pass-1';
+  confirmInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+  findNavLink('Library')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  findButton('Save and leave')!.click();
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain('Config save rejected'));
+  expect(window.location.pathname).toBe('/settings/general');
+  expect(passwordInput.value).toBe('pass-1');
+
+  // Allow API save to succeed on retry
+  shouldFailApi = false;
+  findNavLink('Library')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  findButton('Save and leave')!.click();
+
+  await vi.waitFor(() => expect(window.location.pathname).toBe('/library'));
+});
