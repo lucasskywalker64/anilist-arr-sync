@@ -88,7 +88,7 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           $required = [System.Collections.Generic.List[string]]@('MINISIGN_PUBLIC_KEY', 'MINISIGN_PRIVATE_KEY', 'MINISIGN_PASSWORD')
-          if ($env:RELEASE_PUBLISH_DOCKERHUB -eq 'true') {
+          if ($env:RELEASE_PUBLISH_DOCKERHUB -ceq 'true') {
             $required.AddRange([string[]]@('DOCKERHUB_USERNAME', 'DOCKERHUB_TOKEN'))
           }
           foreach ($name in $required) {

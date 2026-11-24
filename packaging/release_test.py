@@ -54,7 +54,7 @@ class PublicationBoundary(unittest.TestCase):
                     self.assertIn('publish_ghcr=true\n', rendered)
                     self.assertIn('publish_dockerhub=false\n', rendered)
             for flag in ['RELEASE_PUBLISH_GHCR', 'RELEASE_PUBLISH_DOCKERHUB']:
-                for bad in ['', 'yes']:
+                for bad in ['', 'yes', 'TRUE', 'FALSE']:
                     with self.subTest(flag=flag, bad=bad):
                         env = {**os.environ, 'PUBLIC_SOURCE': 'true', 'FIXTURE_DATE': '20261116',
                                'RELEASE_PUBLISH_GHCR': 'true', 'RELEASE_PUBLISH_DOCKERHUB': 'true',
@@ -119,7 +119,7 @@ class PublicationBoundary(unittest.TestCase):
             self.assertIn('sign_windows=false\n', output.read_text(encoding='utf-8'))
 
             for flag in flags:
-                for bad in [None, 'yes']:
+                for bad in [None, 'yes', 'TRUE', 'FALSE']:
                     with self.subTest(flag=flag, bad=bad):
                         self.assertNotEqual(run_case({flag: bad}).returncode, 0)
 

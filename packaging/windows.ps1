@@ -6,9 +6,9 @@ if ($env:RELEASE_MODE -eq 'production') {
     if ($env:PROCESSOR_ARCHITECTURE -ne 'ARM64') {
         throw 'Production requires the Windows ARM64 runner to execute both installer architectures'
     }
-    if ($env:RELEASE_SIGN_WINDOWS -eq 'true') {
+    if ($env:RELEASE_SIGN_WINDOWS -ceq 'true') {
         $signWindows = $true
-    } elseif ($env:RELEASE_SIGN_WINDOWS -ne 'false') {
+    } elseif ($env:RELEASE_SIGN_WINDOWS -cne 'false') {
         throw "RELEASE_SIGN_WINDOWS must be 'true' or 'false' in production mode"
     }
 }

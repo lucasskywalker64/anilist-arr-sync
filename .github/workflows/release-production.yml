@@ -82,26 +82,26 @@ jobs:
             'RELEASE_PUBLISH_CHOCOLATEY'
           )) {
             $value = [Environment]::GetEnvironmentVariable($flag)
-            if ($value -ne 'true' -and $value -ne 'false') {
+            if ($value -cne 'true' -and $value -cne 'false') {
               throw "$flag must be explicitly set to 'true' or 'false'"
             }
           }
           $required = [System.Collections.Generic.List[string]]@('MINISIGN_PUBLIC_KEY', 'MINISIGN_PRIVATE_KEY', 'MINISIGN_PASSWORD', 'PACKAGE_LICENSE')
-          if ($env:RELEASE_SIGN_WINDOWS -eq 'true') {
+          if ($env:RELEASE_SIGN_WINDOWS -ceq 'true') {
             $required.AddRange([string[]]@('SIGNPATH_API_TOKEN', 'SIGNPATH_ORGANIZATION_ID', 'SIGNPATH_PROJECT_SLUG', 'SIGNPATH_SIGNING_POLICY_SLUG', 'SIGNPATH_ARTIFACT_CONFIGURATION_SLUG'))
           }
-          if ($env:RELEASE_PUBLISH_SCOOP -eq 'true') {
+          if ($env:RELEASE_PUBLISH_SCOOP -ceq 'true') {
             $required.Add('SCOOP_BUCKET_TOKEN')
             if ($env:SCOOP_BUCKET_REPOSITORY -notmatch '^([^/]+)/([^/]+)$') { throw 'SCOOP_BUCKET_REPOSITORY must be owner/repository' }
             "SCOOP_BUCKET_OWNER=$($Matches[1])" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
             "SCOOP_BUCKET_NAME=$($Matches[2])" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           }
-          if ($env:RELEASE_PUBLISH_AUR -eq 'true') { $required.Add('AUR_SSH_PRIVATE_KEY') }
-          if ($env:RELEASE_PUBLISH_DOCKERHUB -eq 'true') {
+          if ($env:RELEASE_PUBLISH_AUR -ceq 'true') { $required.Add('AUR_SSH_PRIVATE_KEY') }
+          if ($env:RELEASE_PUBLISH_DOCKERHUB -ceq 'true') {
             $required.AddRange([string[]]@('DOCKERHUB_USERNAME', 'DOCKERHUB_TOKEN'))
           }
-          if ($env:RELEASE_PUBLISH_WINGET -eq 'true') { $required.Add('WINGET_TOKEN') }
-          if ($env:RELEASE_PUBLISH_CHOCOLATEY -eq 'true') { $required.Add('CHOCOLATEY_API_KEY') }
+          if ($env:RELEASE_PUBLISH_WINGET -ceq 'true') { $required.Add('WINGET_TOKEN') }
+          if ($env:RELEASE_PUBLISH_CHOCOLATEY -ceq 'true') { $required.Add('CHOCOLATEY_API_KEY') }
           foreach ($name in $required) {
             if (![Environment]::GetEnvironmentVariable($name)) { throw "Missing $name" }
           }
@@ -124,7 +124,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force .release | Out-Null
-          if ($env:RELEASE_SIGN_WINDOWS -eq 'true') {
+          if ($env:RELEASE_SIGN_WINDOWS -ceq 'true') {
             "AniList-Arr-Sync $env:RELEASE_VERSION from commit $env:RELEASE_COMMIT. Windows artifacts have timestamped SignPath signatures. Final checksums are Minisign-signed." | Set-Content .release/notes.md -Encoding utf8
           } else {
             "AniList-Arr-Sync $env:RELEASE_VERSION from commit $env:RELEASE_COMMIT. Windows artifacts omit Authenticode signatures for this release. Final checksums are Minisign-signed." | Set-Content .release/notes.md -Encoding utf8

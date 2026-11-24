@@ -211,8 +211,12 @@ try {
         if ((Get-Content -LiteralPath (Join-Path $app 'update-owner') -Raw).Trim() -ne $expectedOwner) { throw 'Ownership was not preserved/recreated during upgrade' }
     }
     if ($env:RELEASE_MODE -eq 'production') {
-        & "$PSScriptRoot/verify-authenticode.ps1" -Path (Join-Path $app 'anilist-arr-sync.exe')
-        & "$PSScriptRoot/verify-authenticode.ps1" -Path (Join-Path $app 'unins000.exe')
+        if ($env:RELEASE_SIGN_WINDOWS -ceq 'true') {
+            & "$PSScriptRoot/verify-authenticode.ps1" -Path (Join-Path $app 'anilist-arr-sync.exe')
+            & "$PSScriptRoot/verify-authenticode.ps1" -Path (Join-Path $app 'unins000.exe')
+        } elseif ($env:RELEASE_SIGN_WINDOWS -cne 'false') {
+            throw "RELEASE_SIGN_WINDOWS must be 'true' or 'false' in production mode"
+        }
     }
     $stage = 'prepare tray desktop'
     EnsureTrayDesktop
