@@ -349,3 +349,131 @@ it('reuses an in-flight save promise when saveConfig is called concurrently', as
   resolveSave({ status: 'ok' });
   await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
 });
+
+function findGroupControl<T extends HTMLElement>(labelText: string, selector: string): T {
+  const group = [...document.querySelectorAll('.group')].find(
+    (el) => el.querySelector('.label')?.textContent?.trim() === labelText,
+  );
+  if (!group) throw new Error(`FormGroup "${labelText}" not found`);
+  const control = group.querySelector<T>(selector);
+  if (!control) throw new Error(`Control "${selector}" in "${labelText}" not found`);
+  return control;
+}
+
+it('ignores hidden proxy and SSL sub-settings when their parent toggle is disabled', async () => {
+  vi.mocked(api.getConfig).mockResolvedValue(
+    baseConfig({ enableSsl: false, sslPort: 7272, useProxy: false, proxyHostname: 'saved.proxy', proxyPort: 8080 }),
+  );
+  vi.mocked(api.updateConfig).mockResolvedValue({ status: 'ok' });
+
+  component = new SettingsView({ target: document.body, props: { subTab: 'general' } });
+  await vi.waitFor(() =>
+    expect([...document.querySelectorAll<HTMLInputElement>('input')].some((i) => i.value === '7171')).toBe(true),
+  );
+
+  // Enable Proxy, edit hostname, then disable Proxy -> clean again, draft preserved if re-enabled
+  const useProxyCheckbox = findGroupControl<HTMLElement>('Use Proxy', '[role="checkbox"]');
+  useProxyCheckbox.click();
+  await tick();
+  const hostnameInput = findGroupControl<HTMLInputElement>('Hostname', 'input');
+  hostnameInput.value = 'draft.proxy';
+  hostnameInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+  expect(component.hasUnsavedChanges()).toBe(true);
+
+  useProxyCheckbox.click();
+  await tick();
+  expect(component.hasUnsavedChanges()).toBe(false);
+  expect(document.querySelector('[title="Field has unsaved changes"]')).toBeNull();
+
+  // Re-enabling Proxy before saving preserves typed draft and marks dirty again
+  useProxyCheckbox.click();
+  await tick();
+  expect(findGroupControl<HTMLInputElement>('Hostname', 'input').value).toBe('draft.proxy');
+  expect(component.hasUnsavedChanges()).toBe(true);
+  useProxyCheckbox.click();
+  await tick();
+  expect(component.hasUnsavedChanges()).toBe(false);
+
+  // Enable Advanced -> enable SSL -> edit SSL Port -> disable SSL -> clean again
+  const advancedBtn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('Advanced'))!;
+  advancedBtn.click();
+  await tick();
+  const enableSslCheckbox = findGroupControl<HTMLElement>('Enable SSL', '[role="checkbox"]');
+  enableSslCheckbox.click();
+  await tick();
+  const sslPortInput = findGroupControl<HTMLInputElement>('SSL Port', 'input');
+  sslPortInput.value = '7443';
+  sslPortInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+  expect(component.hasUnsavedChanges()).toBe(true);
+
+  enableSslCheckbox.click();
+  await tick();
+  expect(component.hasUnsavedChanges()).toBe(false);
+
+  // Saving an unrelated field does not leak hidden proxy or SSL edits
+  const portInput = findGroupControl<HTMLInputElement>('Port Number', 'input');
+  portInput.value = '7172';
+  portInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+  await expect(component.saveConfig()).resolves.toBe(true);
+
+  expect(api.updateConfig).toHaveBeenCalledWith(
+    expect.objectContaining({
+      port: 7172,
+      useProxy: false,
+      proxyHostname: 'saved.proxy',
+      enableSsl: false,
+      sslPort: 7272,
+    }),
+  );
+  expect(component.hasUnsavedChanges()).toBe(false);
+});
+
+it('preserves previously saved proxy sub-settings when disabling an already-enabled proxy', async () => {
+  vi.mocked(api.getConfig).mockResolvedValue(
+    baseConfig({ useProxy: true, proxyType: 'Http', proxyHostname: 'corp.proxy', proxyPort: 8080 }),
+  );
+  vi.mocked(api.updateConfig).mockResolvedValue({ status: 'ok' });
+
+  component = new SettingsView({ target: document.body, props: { subTab: 'general' } });
+  await vi.waitFor(() =>
+    expect([...document.querySelectorAll<HTMLInputElement>('input')].some((i) => i.value === 'corp.proxy')).toBe(true),
+  );
+
+  // Edit hostname, then disable proxy -> still dirty because useProxy changed from true to false
+  const hostnameInput = findGroupControl<HTMLInputElement>('Hostname', 'input');
+  hostnameInput.value = 'temp.proxy';
+  hostnameInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+
+  findGroupControl<HTMLElement>('Use Proxy', '[role="checkbox"]').click();
+  await tick();
+  expect(component.hasUnsavedChanges()).toBe(true);
+
+  await expect(component.saveConfig()).resolves.toBe(true);
+  expect(api.updateConfig).toHaveBeenCalledWith(
+    expect.objectContaining({
+      useProxy: false,
+      proxyHostname: 'corp.proxy',
+    }),
+  );
+});
+
+it('treats omitted optional proxy fields as clean after toggling Use Proxy on and off', async () => {
+  vi.mocked(api.getConfig).mockResolvedValue(baseConfig());
+  component = new SettingsView({ target: document.body, props: { subTab: 'general' } });
+  await vi.waitFor(() =>
+    expect([...document.querySelectorAll<HTMLInputElement>('input')].some((i) => i.value === '7171')).toBe(true),
+  );
+
+  const useProxyCheckbox = findGroupControl<HTMLElement>('Use Proxy', '[role="checkbox"]');
+  useProxyCheckbox.click();
+  await tick();
+  expect(component.hasUnsavedChanges()).toBe(true);
+
+  useProxyCheckbox.click();
+  await tick();
+  expect(component.hasUnsavedChanges()).toBe(false);
+});

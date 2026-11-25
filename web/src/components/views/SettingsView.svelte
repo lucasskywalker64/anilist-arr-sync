@@ -81,6 +81,60 @@
       ? "Add Notification"
       : `Add Notification - ${notifType === "DISCORD" ? "Discord" : "Webhook"}`;
 
+  const conditionalFieldGroups: ReadonlyArray<{
+    toggle: keyof AppConfig;
+    fields: ReadonlyArray<keyof AppConfig>;
+  }> = [
+    {
+      toggle: "enableSsl",
+      fields: ["sslPort"],
+    },
+    {
+      toggle: "useProxy",
+      fields: [
+        "proxyType",
+        "proxyHostname",
+        "proxyPort",
+        "proxyUsername",
+        "proxyPassword",
+        "proxyIgnoredAddresses",
+        "proxyBypassLocalAddresses",
+      ],
+    },
+  ];
+
+  function copyOrDeleteField(
+    target: Partial<AppConfig>,
+    source: AppConfig,
+    field: keyof AppConfig,
+  ) {
+    if (field in source) {
+      (target as Record<string, unknown>)[field] = source[field];
+    } else {
+      delete target[field];
+    }
+  }
+
+  function projectEffectiveConfig(
+    form: Partial<AppConfig>,
+    saved: AppConfig,
+  ): Partial<AppConfig> {
+    const effective: Partial<AppConfig> = { ...saved, ...form };
+    for (const group of conditionalFieldGroups) {
+      const formEnabled = Boolean(form[group.toggle]);
+      const savedEnabled = Boolean(saved[group.toggle]);
+      if (formEnabled === savedEnabled) {
+        copyOrDeleteField(effective, saved, group.toggle);
+      }
+      if (!formEnabled) {
+        for (const field of group.fields) {
+          copyOrDeleteField(effective, saved, field);
+        }
+      }
+    }
+    return effective;
+  }
+
   function computePendingChanges(
     saved: AppConfig | null,
     form: Partial<AppConfig>,
@@ -88,7 +142,9 @@
     passwordConfirm: string,
   ): boolean {
     return (
-      (saved ? JSON.stringify(saved) !== JSON.stringify(form) : false) ||
+      (saved
+        ? JSON.stringify(saved) !== JSON.stringify(projectEffectiveConfig(form, saved))
+        : false) ||
       Boolean(password) ||
       Boolean(passwordConfirm)
     );
@@ -136,7 +192,8 @@
 
   function isFieldDirty(field: keyof AppConfig): boolean {
     if (!savedConfig) return false;
-    return JSON.stringify(savedConfig[field]) !== JSON.stringify(formConfig[field]);
+    const effective = projectEffectiveConfig(formConfig, savedConfig);
+    return JSON.stringify(savedConfig[field]) !== JSON.stringify(effective[field]);
   }
 
   function normalizeOverridesMap(raw?: Record<string, number>): Record<string, number> {
@@ -224,13 +281,17 @@
     successMsg = "";
     activeSavePromise = (async () => {
       try {
-        const payload: Partial<AppConfig> = { ...formConfig };
+        const effectiveConfig = savedConfig
+          ? projectEffectiveConfig(formConfig, savedConfig)
+          : { ...formConfig };
+        const payload: Partial<AppConfig> = { ...effectiveConfig };
         delete payload.wizardCompleted;
         if (formPassword) {
           payload.password = formPassword;
         }
         const res = await api.updateConfig(payload);
-        savedConfig = JSON.parse(JSON.stringify(formConfig));
+        savedConfig = JSON.parse(JSON.stringify(effectiveConfig));
+        formConfig = JSON.parse(JSON.stringify(savedConfig));
         overridesResetToken += 1;
         formPassword = "";
         formPasswordConfirm = "";
@@ -734,7 +795,11 @@
 
           {#if formConfig.useProxy}
             <FormGroup label="Proxy Type" isDirty={isFieldDirty("proxyType")}>
-              <select class="formInput" bind:value={formConfig.proxyType}>
+              <select
+                class="formInput"
+                value={formConfig.proxyType || "Http"}
+                on:change={(e) => (formConfig.proxyType = e.currentTarget.value)}
+              >
                 <option value="Http">HTTP(S)</option>
                 <option value="Socks5">SOCKS5</option>
               </select>
@@ -885,8 +950,9 @@
             >
               <select
                 class="formInput"
-                bind:value={formConfig.updateMechanism}
-                on:change={() => {
+                value={formConfig.updateMechanism || "BuiltIn"}
+                on:change={(e) => {
+                  formConfig.updateMechanism = e.currentTarget.value;
                   if (formConfig.updateMechanism !== "BuiltIn") {
                     formConfig.updateAutomatically = false;
                   }
