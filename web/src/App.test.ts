@@ -526,3 +526,127 @@ it('clears a pending leave prompt when SettingsView is unmounted by a 401 and re
     vi.useRealTimers();
   }
 });
+
+it('restores Settings URL and preserves history when two Back traversals are queued rapidly', async () => {
+  window.history.replaceState(null, '', '/activity/history');
+  const config = {
+    wizardCompleted: true,
+    port: 7171,
+    aniListUsername: 'Viewer',
+    aniListTvStatus: 'CURRENT',
+    aniListMovieStatus: 'CURRENT',
+    sonarrUrl: 'http://sonarr',
+    sonarrApiKey: '******',
+    sonarrQualityProfileId: 7,
+    sonarrRootFolderPath: '/anime',
+    sonarrMonitorOnAdd: true,
+    sonarrSearchOnAdd: false,
+    radarrUrl: 'http://radarr',
+    radarrApiKey: '******',
+    radarrQualityProfileId: 7,
+    radarrRootFolderPath: '/anime',
+    radarrMonitorOnAdd: true,
+    radarrSearchOnAdd: false,
+  };
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    if (url.endsWith('/auth/user')) return Response.json({ authenticated: true, wizardCompleted: true });
+    if (url.endsWith('/config')) return Response.json(config);
+    return Response.json([]);
+  }));
+
+  // Register before App mounts so we can queue a second Back right before App's restore go(+1)
+  let queueSecondBack = false;
+  const interleaveSecondBack = () => {
+    if (queueSecondBack && window.location.pathname === '/library') {
+      queueSecondBack = false;
+      window.history.back();
+    }
+  };
+  window.addEventListener('popstate', interleaveSecondBack);
+
+  try {
+    component = new App({ target: document.body });
+
+    const findButton = (label: string) =>
+      [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === label);
+    const findNavLink = (label: string) =>
+      [...document.querySelectorAll('aside a')].find((a) => a.textContent?.trim() === label) as HTMLAnchorElement | undefined;
+
+    await vi.waitFor(() => expect(findNavLink('Library')).toBeDefined());
+    findNavLink('Library')!.click();
+    await vi.waitFor(() => expect(window.location.pathname).toBe('/library'));
+    findNavLink('Settings')!.click();
+    await vi.waitFor(() =>
+      expect([...document.querySelectorAll<HTMLInputElement>('input')].some((i) => i.value === '7171')).toBe(true),
+    );
+
+    const portInput = [...document.querySelectorAll<HTMLInputElement>('input')].find((i) => i.value === '7171')!;
+    portInput.value = '8099';
+    portInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+    // Trigger Back to /library with a second Back to /activity/history queued ahead of App's restore
+    queueSecondBack = true;
+    window.history.back();
+    await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+    await vi.waitFor(() => expect(window.location.pathname).toBe('/settings/general'));
+
+    // Keep editing stays at Settings URL with edit intact
+    findButton('Keep editing')!.click();
+    await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+    expect(window.location.pathname).toBe('/settings/general');
+    expect(portInput.value).toBe('8099');
+
+    // Trigger the same interleaved double Back and choose Leave without saving -> lands on History
+    queueSecondBack = true;
+    window.history.back();
+    await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+    await vi.waitFor(() => expect(window.location.pathname).toBe('/settings/general'));
+    findButton('Leave without saving')!.click();
+    await vi.waitFor(() => expect(window.location.pathname).toBe('/activity/history'));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  } finally {
+    window.removeEventListener('popstate', interleaveSecondBack);
+  }
+});
+
+it('completes navigation on Save and leave when an in-flight toolbar save finishes before confirmation', async () => {
+  let resolveSave!: (res: Response) => void;
+  let putCalls = 0;
+  const { findButton, findNavLink, portInput } = await mountSettingsApp({
+    onSave: () => {
+      putCalls += 1;
+      return new Promise<Response>((resolve) => {
+        resolveSave = resolve;
+      });
+    },
+  });
+
+  const input = portInput();
+  input.value = '7272';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+
+  // Start toolbar save, then open the leave prompt before it finishes
+  await vi.waitFor(() =>
+    expect(
+      [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('Save Changes'))?.disabled,
+    ).toBe(false),
+  );
+  const saveChangesBtn = [...document.querySelectorAll('button')].find((b) =>
+    b.textContent?.includes('Save Changes'),
+  )!;
+  saveChangesBtn.click();
+  await vi.waitFor(() => expect(putCalls).toBe(1));
+
+  findNavLink('Library')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+
+  // Toolbar save finishes cleanly while the modal is open
+  resolveSave(Response.json({ status: 'ok' }));
+  await vi.waitFor(() => expect(document.body.textContent).toContain('Configuration changes saved successfully.'));
+
+  // Clicking Save and leave completes navigation without issuing another PUT
+  findButton('Save and leave')!.click();
+  await vi.waitFor(() => expect(window.location.pathname).toBe('/library'));
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(putCalls).toBe(1);
+});

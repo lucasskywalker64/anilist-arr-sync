@@ -39,10 +39,13 @@
   let settingsView: SettingsView | null = null;
   let pendingSettingsView: SettingsView | null = null;
   let pendingNavigationRoute: string | null = null;
-  let pendingHistoryDelta: number | null = null;
+  let pendingHistoryTargetIndex: number | null = null;
   let savingBeforeLeave = false;
   let currentNavIndex = 0;
-  let historyTraversalActions: Array<'restore' | 'leave'> = [];
+  let lastBrowserNavIndex = 0;
+  let restoringToNavIndex: number | null = null;
+  let inFlightRestoreStep = 0;
+  let leavingToNavIndex: number | null = null;
 
   function readNavIndex(state: unknown): number | null {
     if (state && typeof state === 'object' && typeof (state as RouteHistoryState).navIndex === 'number') {
@@ -53,7 +56,7 @@
 
   function clearPendingNavigation() {
     pendingNavigationRoute = null;
-    pendingHistoryDelta = null;
+    pendingHistoryTargetIndex = null;
     pendingSettingsView = null;
   }
 
@@ -76,6 +79,7 @@
     const fullPath = `${urlBase}${currentRoute}`;
     if (window.location.pathname !== fullPath || window.location.hash) {
       currentNavIndex += 1;
+      lastBrowserNavIndex = currentNavIndex;
       window.history.pushState({ navIndex: currentNavIndex }, '', fullPath);
     }
   }
@@ -83,18 +87,33 @@
   function commitNavigation(path: string) {
     currentRoute = normalizeRoute(path);
     clearPendingNavigation();
+    restoringToNavIndex = null;
+    inFlightRestoreStep = 0;
+    leavingToNavIndex = null;
     syncLocationToCurrentRoute();
   }
 
   function completePendingNavigation() {
     if (!pendingNavigationRoute) return;
     const target = pendingNavigationRoute;
-    const delta = pendingHistoryDelta;
+    const targetIndex = pendingHistoryTargetIndex;
+    const hadInFlightRestore = inFlightRestoreStep !== 0;
     clearPendingNavigation();
-    if (delta !== null && typeof window !== 'undefined') {
+    if (targetIndex !== null && typeof window !== 'undefined') {
+      const browserIndex = readNavIndex(window.history.state) ?? lastBrowserNavIndex;
       currentRoute = target;
-      historyTraversalActions.push('leave');
-      window.history.go(delta);
+      currentNavIndex = targetIndex;
+      restoringToNavIndex = null;
+      inFlightRestoreStep = 0;
+      if (hadInFlightRestore) {
+        leavingToNavIndex = targetIndex;
+      } else if (targetIndex !== browserIndex) {
+        leavingToNavIndex = targetIndex;
+        window.history.go(targetIndex - browserIndex);
+      } else {
+        leavingToNavIndex = null;
+        lastBrowserNavIndex = targetIndex;
+      }
       return;
     }
     commitNavigation(target);
@@ -122,27 +141,70 @@
 
   function handlePopState(event?: PopStateEvent | HashChangeEvent) {
     const isPopState = event?.type === 'popstate';
-    const targetNavIndex = isPopState
-      ? readNavIndex((event as PopStateEvent).state ?? window.history.state)
-      : null;
+    const targetNavIndex = isPopState ? readNavIndex(window.history.state) : null;
 
-    if (isPopState && historyTraversalActions.length > 0) {
-      const action = historyTraversalActions.shift();
+    if (isPopState && leavingToNavIndex !== null) {
       if (targetNavIndex !== null) {
-        currentNavIndex = targetNavIndex;
+        lastBrowserNavIndex = targetNavIndex;
+        if (targetNavIndex === leavingToNavIndex) {
+          leavingToNavIndex = null;
+          currentNavIndex = targetNavIndex;
+          currentRoute = getRouteFromLocation();
+        } else {
+          window.history.go(leavingToNavIndex - targetNavIndex);
+        }
       }
-      if (action === 'leave') {
-        currentRoute = getRouteFromLocation();
+      return;
+    }
+
+    if (isPopState && restoringToNavIndex !== null) {
+      if (targetNavIndex === null) {
+        restoringToNavIndex = null;
+        inFlightRestoreStep = 0;
+        syncLocationToCurrentRoute();
+        return;
+      }
+      const actualStep = targetNavIndex - lastBrowserNavIndex;
+      lastBrowserNavIndex = targetNavIndex;
+      if (targetNavIndex === restoringToNavIndex) {
+        restoringToNavIndex = null;
+        inFlightRestoreStep = 0;
+        return;
+      }
+      if (inFlightRestoreStep !== 0 && Math.sign(actualStep) === Math.sign(inFlightRestoreStep)) {
+        const remainingStep = restoringToNavIndex - targetNavIndex;
+        inFlightRestoreStep = remainingStep;
+        window.history.go(remainingStep);
+        return;
+      }
+      const nextRoute = getRouteFromLocation();
+      if (!savingBeforeLeave && shouldGuardSettingsNavigation(nextRoute)) {
+        pendingNavigationRoute = nextRoute;
+        pendingSettingsView = settingsView;
+        pendingHistoryTargetIndex = targetNavIndex;
+      }
+      if (inFlightRestoreStep === 0) {
+        const remainingStep = restoringToNavIndex - targetNavIndex;
+        inFlightRestoreStep = remainingStep;
+        window.history.go(remainingStep);
       }
       return;
     }
 
     const nextRoute = getRouteFromLocation();
     const delta = targetNavIndex !== null ? targetNavIndex - currentNavIndex : null;
+    if (targetNavIndex !== null) {
+      lastBrowserNavIndex = targetNavIndex;
+    }
+
+    if (delta === 0 && nextRoute === currentRoute) {
+      return;
+    }
 
     if (savingBeforeLeave) {
       if (delta !== null && delta !== 0) {
-        historyTraversalActions.push('restore');
+        restoringToNavIndex = currentNavIndex;
+        inFlightRestoreStep = -delta;
         window.history.go(-delta);
       } else {
         syncLocationToCurrentRoute();
@@ -153,12 +215,13 @@
     if (shouldGuardSettingsNavigation(nextRoute)) {
       pendingNavigationRoute = nextRoute;
       pendingSettingsView = settingsView;
-      if (delta !== null && delta !== 0) {
-        pendingHistoryDelta = delta;
-        historyTraversalActions.push('restore');
+      if (delta !== null && delta !== 0 && targetNavIndex !== null) {
+        pendingHistoryTargetIndex = targetNavIndex;
+        restoringToNavIndex = currentNavIndex;
+        inFlightRestoreStep = -delta;
         window.history.go(-delta);
       } else {
-        pendingHistoryDelta = null;
+        pendingHistoryTargetIndex = null;
         syncLocationToCurrentRoute();
       }
       return;
@@ -177,7 +240,7 @@
     if (shouldGuardSettingsNavigation(nextRoute)) {
       pendingNavigationRoute = nextRoute;
       pendingSettingsView = settingsView;
-      pendingHistoryDelta = null;
+      pendingHistoryTargetIndex = null;
       return;
     }
     commitNavigation(nextRoute);
@@ -196,6 +259,10 @@
   async function handleSaveAndLeave() {
     const originView = settingsView;
     if (savingBeforeLeave || !pendingNavigationRoute || !originView) return;
+    if (!originView.hasUnsavedChanges()) {
+      completePendingNavigation();
+      return;
+    }
     savingBeforeLeave = true;
     let saved = false;
     try {
@@ -321,8 +388,10 @@
     const existingNavIndex = readNavIndex(window.history.state);
     if (existingNavIndex !== null) {
       currentNavIndex = existingNavIndex;
+      lastBrowserNavIndex = existingNavIndex;
     } else {
       currentNavIndex = 0;
+      lastBrowserNavIndex = 0;
       const baseState = window.history.state && typeof window.history.state === 'object' ? window.history.state : {};
       window.history.replaceState({ ...baseState, navIndex: currentNavIndex }, '', window.location.href);
     }
