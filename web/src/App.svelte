@@ -34,9 +34,33 @@
   let stagedActions: StagedAction[] = [];
   let overrides: OverrideItem[] = [];
 
+  type RouteHistoryState = { navIndex?: number };
+
   let settingsView: SettingsView | null = null;
+  let pendingSettingsView: SettingsView | null = null;
   let pendingNavigationRoute: string | null = null;
+  let pendingHistoryDelta: number | null = null;
   let savingBeforeLeave = false;
+  let currentNavIndex = 0;
+  let historyTraversalActions: Array<'restore' | 'leave'> = [];
+
+  function readNavIndex(state: unknown): number | null {
+    if (state && typeof state === 'object' && typeof (state as RouteHistoryState).navIndex === 'number') {
+      return (state as RouteHistoryState).navIndex!;
+    }
+    return null;
+  }
+
+  function clearPendingNavigation() {
+    pendingNavigationRoute = null;
+    pendingHistoryDelta = null;
+    pendingSettingsView = null;
+  }
+
+  $: if (pendingSettingsView && settingsView !== pendingSettingsView) {
+    clearPendingNavigation();
+    savingBeforeLeave = false;
+  }
 
   function isSettingsRoute(path: string): boolean {
     return path === '/settings' || path.startsWith('/settings/');
@@ -51,14 +75,29 @@
     const urlBase = getBaseUrl();
     const fullPath = `${urlBase}${currentRoute}`;
     if (window.location.pathname !== fullPath || window.location.hash) {
-      window.history.pushState(null, '', fullPath);
+      currentNavIndex += 1;
+      window.history.pushState({ navIndex: currentNavIndex }, '', fullPath);
     }
   }
 
   function commitNavigation(path: string) {
     currentRoute = normalizeRoute(path);
-    pendingNavigationRoute = null;
+    clearPendingNavigation();
     syncLocationToCurrentRoute();
+  }
+
+  function completePendingNavigation() {
+    if (!pendingNavigationRoute) return;
+    const target = pendingNavigationRoute;
+    const delta = pendingHistoryDelta;
+    clearPendingNavigation();
+    if (delta !== null && typeof window !== 'undefined') {
+      currentRoute = target;
+      historyTraversalActions.push('leave');
+      window.history.go(delta);
+      return;
+    }
+    commitNavigation(target);
   }
 
   function normalizeRoute(path: string): string {
@@ -81,19 +120,55 @@
     return normalizeRoute(path);
   }
 
-  function handlePopState() {
-    const nextRoute = getRouteFromLocation();
-    if (savingBeforeLeave) {
-      syncLocationToCurrentRoute();
+  function handlePopState(event?: PopStateEvent | HashChangeEvent) {
+    const isPopState = event?.type === 'popstate';
+    const targetNavIndex = isPopState
+      ? readNavIndex((event as PopStateEvent).state ?? window.history.state)
+      : null;
+
+    if (isPopState && historyTraversalActions.length > 0) {
+      const action = historyTraversalActions.shift();
+      if (targetNavIndex !== null) {
+        currentNavIndex = targetNavIndex;
+      }
+      if (action === 'leave') {
+        currentRoute = getRouteFromLocation();
+      }
       return;
     }
+
+    const nextRoute = getRouteFromLocation();
+    const delta = targetNavIndex !== null ? targetNavIndex - currentNavIndex : null;
+
+    if (savingBeforeLeave) {
+      if (delta !== null && delta !== 0) {
+        historyTraversalActions.push('restore');
+        window.history.go(-delta);
+      } else {
+        syncLocationToCurrentRoute();
+      }
+      return;
+    }
+
     if (shouldGuardSettingsNavigation(nextRoute)) {
       pendingNavigationRoute = nextRoute;
-      syncLocationToCurrentRoute();
+      pendingSettingsView = settingsView;
+      if (delta !== null && delta !== 0) {
+        pendingHistoryDelta = delta;
+        historyTraversalActions.push('restore');
+        window.history.go(-delta);
+      } else {
+        pendingHistoryDelta = null;
+        syncLocationToCurrentRoute();
+      }
       return;
     }
+
+    if (targetNavIndex !== null) {
+      currentNavIndex = targetNavIndex;
+    }
     currentRoute = nextRoute;
-    pendingNavigationRoute = null;
+    clearPendingNavigation();
   }
 
   function navigate(path: string) {
@@ -101,6 +176,8 @@
     if (savingBeforeLeave) return;
     if (shouldGuardSettingsNavigation(nextRoute)) {
       pendingNavigationRoute = nextRoute;
+      pendingSettingsView = settingsView;
+      pendingHistoryDelta = null;
       return;
     }
     commitNavigation(nextRoute);
@@ -108,28 +185,31 @@
 
   function handleKeepEditing() {
     if (savingBeforeLeave) return;
-    pendingNavigationRoute = null;
+    clearPendingNavigation();
   }
 
   function handleLeaveWithoutSaving() {
     if (savingBeforeLeave || !pendingNavigationRoute) return;
-    const target = pendingNavigationRoute;
-    commitNavigation(target);
+    completePendingNavigation();
   }
 
   async function handleSaveAndLeave() {
-    if (savingBeforeLeave || !pendingNavigationRoute || !settingsView) return;
+    const originView = settingsView;
+    if (savingBeforeLeave || !pendingNavigationRoute || !originView) return;
     savingBeforeLeave = true;
     let saved = false;
     try {
-      saved = await settingsView.saveConfig();
+      saved = await originView.saveConfig();
     } finally {
-      savingBeforeLeave = false;
+      if (settingsView === originView) {
+        savingBeforeLeave = false;
+      }
     }
-    if (saved && pendingNavigationRoute) {
-      commitNavigation(pendingNavigationRoute);
+    if (settingsView !== originView) return;
+    if (saved && !originView.hasUnsavedChanges() && pendingNavigationRoute) {
+      completePendingNavigation();
     } else {
-      pendingNavigationRoute = null;
+      clearPendingNavigation();
     }
   }
 
@@ -238,6 +318,14 @@
 
   onMount(() => {
     currentRoute = getRouteFromLocation();
+    const existingNavIndex = readNavIndex(window.history.state);
+    if (existingNavIndex !== null) {
+      currentNavIndex = existingNavIndex;
+    } else {
+      currentNavIndex = 0;
+      const baseState = window.history.state && typeof window.history.state === 'object' ? window.history.state : {};
+      window.history.replaceState({ ...baseState, navIndex: currentNavIndex }, '', window.location.href);
+    }
     window.addEventListener('popstate', handlePopState);
     window.addEventListener('hashchange', handlePopState);
     checkAuthAndBoot();

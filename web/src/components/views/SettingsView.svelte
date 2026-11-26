@@ -52,7 +52,7 @@
   let formPasswordConfirm = "";
 
   let showAdvanced = false;
-  let loading = false;
+  let loading = true;
   let saving = false;
   let errorMsg = "";
   let successMsg = "";
@@ -131,6 +131,9 @@
           copyOrDeleteField(effective, saved, field);
         }
       }
+    }
+    if (Boolean(form.useProxy) && !effective.proxyType) {
+      effective.proxyType = "Http";
     }
     return effective;
   }
@@ -268,7 +271,11 @@
   let activeSavePromise: Promise<boolean> | null = null;
 
   export async function saveConfig(): Promise<boolean> {
-    if (activeSavePromise) return activeSavePromise;
+    while (activeSavePromise) {
+      const ok = await activeSavePromise;
+      if (!ok) return false;
+      if (!hasUnsavedChanges()) return true;
+    }
     if (!hasUnsavedChanges()) return false;
     if (formPassword || formPasswordConfirm) {
       if (formPassword !== formPasswordConfirm) {
@@ -279,22 +286,34 @@
     saving = true;
     errorMsg = "";
     successMsg = "";
+    const submittedEffective = savedConfig
+      ? projectEffectiveConfig(formConfig, savedConfig)
+      : { ...formConfig };
+    const submittedEffectiveJson = JSON.stringify(submittedEffective);
+    const submittedFormJson = JSON.stringify(formConfig);
+    const submittedPassword = formPassword;
+    const submittedPasswordConfirm = formPasswordConfirm;
+
     activeSavePromise = (async () => {
       try {
-        const effectiveConfig = savedConfig
-          ? projectEffectiveConfig(formConfig, savedConfig)
-          : { ...formConfig };
-        const payload: Partial<AppConfig> = { ...effectiveConfig };
+        const payload: Partial<AppConfig> = { ...submittedEffective };
         delete payload.wizardCompleted;
-        if (formPassword) {
-          payload.password = formPassword;
+        if (submittedPassword) {
+          payload.password = submittedPassword;
         }
         const res = await api.updateConfig(payload);
-        savedConfig = JSON.parse(JSON.stringify(effectiveConfig));
-        formConfig = JSON.parse(JSON.stringify(savedConfig));
-        overridesResetToken += 1;
-        formPassword = "";
-        formPasswordConfirm = "";
+        savedConfig = JSON.parse(submittedEffectiveJson);
+        if (JSON.stringify(formConfig) === submittedFormJson) {
+          formConfig = JSON.parse(submittedEffectiveJson);
+          overridesResetToken += 1;
+        }
+        if (
+          formPassword === submittedPassword &&
+          formPasswordConfirm === submittedPasswordConfirm
+        ) {
+          formPassword = "";
+          formPasswordConfirm = "";
+        }
         if (res?.restartRequired) {
           successMsg =
             "Configuration changes saved. A service restart is required for these changes to take effect.";
@@ -548,7 +567,11 @@
         <Alert kind="success">{successMsg}</Alert>
       {/if}
 
-      {#if subTab === "general"}
+      {#if subTab !== "connect" && !savedConfig}
+        {#if loading}
+          <p role="status">Loading settings...</p>
+        {/if}
+      {:else if subTab === "general"}
         {#if openOnboarding && savedConfig && !savedConfig.wizardCompleted}
           <FieldSet legend="Service Setup">
             <Button disabled={hasPendingChanges || saving}
@@ -676,7 +699,8 @@
           >
             <select
               class="formInput"
-              bind:value={formConfig.authenticationMethod}
+              value={formConfig.authenticationMethod || "Forms"}
+              on:change={(e) => (formConfig.authenticationMethod = e.currentTarget.value as AppConfig["authenticationMethod"])}
             >
               <option value="Basic">Basic (Browser popup)</option>
               <option value="Forms">Forms (Login Page)</option>
@@ -690,7 +714,8 @@
           >
             <select
               class="formInput"
-              bind:value={formConfig.authenticationRequired}
+              value={formConfig.authenticationRequired || "DisabledForLocalAddresses"}
+              on:change={(e) => (formConfig.authenticationRequired = e.currentTarget.value as AppConfig["authenticationRequired"])}
             >
               <option value="Enabled">Enabled (All Clients)</option>
               <option value="DisabledForLocalAddresses"
@@ -880,7 +905,11 @@
             helpText="Minimum severity level recorded to disk logs"
             isDirty={isFieldDirty("logLevel")}
           >
-            <select class="formInput" bind:value={formConfig.logLevel}>
+            <select
+              class="formInput"
+              value={formConfig.logLevel || "Info"}
+              on:change={(e) => (formConfig.logLevel = e.currentTarget.value)}
+            >
               <option value="Trace">Trace</option>
               <option value="Debug">Debug</option>
               <option value="Info">Info</option>

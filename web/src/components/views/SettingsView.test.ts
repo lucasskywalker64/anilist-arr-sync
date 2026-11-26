@@ -477,3 +477,97 @@ it('treats omitted optional proxy fields as clean after toggling Use Proxy on an
   await tick();
   expect(component.hasUnsavedChanges()).toBe(false);
 });
+
+it('does not render editable config inputs before savedConfig loads or on load failure', async () => {
+  let resolveConfig!: (cfg: AppConfig) => void;
+  vi.mocked(api.getConfig).mockImplementation(
+    () => new Promise((resolve) => { resolveConfig = resolve; }),
+  );
+
+  component = new SettingsView({ target: document.body, props: { subTab: 'general' } });
+  await tick();
+  expect(document.querySelector('[role="status"]')?.textContent).toContain('Loading settings');
+  expect(document.querySelector('input')).toBeNull();
+  expect(component.hasUnsavedChanges()).toBe(false);
+
+  resolveConfig(baseConfig());
+  await vi.waitFor(() => expect(findGroupControl<HTMLInputElement>('Port Number', 'input').value).toBe('7171'));
+
+  component.$destroy();
+  component = undefined;
+
+  vi.mocked(api.getConfig).mockRejectedValue(new Error('Config unavailable'));
+  component = new SettingsView({ target: document.body, props: { subTab: 'general' } });
+  await vi.waitFor(() => expect(document.body.textContent).toContain('Config unavailable'));
+  expect(document.querySelector('input')).toBeNull();
+  expect(component.hasUnsavedChanges()).toBe(false);
+});
+
+it('preserves edits made while a save is in flight and saves the newer draft on a concurrent saveConfig call', async () => {
+  vi.mocked(api.getConfig).mockResolvedValue(baseConfig());
+  const resolvers: Array<(value: { status: string }) => void> = [];
+  vi.mocked(api.updateConfig).mockImplementation(
+    () => new Promise((resolve) => { resolvers.push(resolve); }),
+  );
+
+  component = new SettingsView({ target: document.body, props: { subTab: 'general' } });
+  await vi.waitFor(() => expect(findGroupControl<HTMLInputElement>('Port Number', 'input').value).toBe('7171'));
+
+  const portInput = findGroupControl<HTMLInputElement>('Port Number', 'input');
+  portInput.value = '7172';
+  portInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+
+  // Start initial toolbar save for 7172
+  const firstSave = component.saveConfig();
+  await vi.waitFor(() => expect(api.updateConfig).toHaveBeenCalledTimes(1));
+
+  // Edit port to 7173 while 7172 is still in flight, then invoke saveConfig again (Save and leave)
+  portInput.value = '7173';
+  portInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+  const secondSave = component.saveConfig();
+
+  // Finish 7172 save -> live draft 7173 must survive and trigger a second save for 7173
+  resolvers[0]({ status: 'ok' });
+  await expect(firstSave).resolves.toBe(true);
+  await vi.waitFor(() => expect(api.updateConfig).toHaveBeenCalledTimes(2));
+  expect(portInput.value).toBe('7173');
+  expect(api.updateConfig).toHaveBeenNthCalledWith(1, expect.objectContaining({ port: 7172 }));
+  expect(api.updateConfig).toHaveBeenNthCalledWith(2, expect.objectContaining({ port: 7173 }));
+
+  resolvers[1]({ status: 'ok' });
+  await expect(secondSave).resolves.toBe(true);
+  expect(component.hasUnsavedChanges()).toBe(false);
+});
+
+it('sends Http when Proxy is enabled over a stored empty proxyType and stays clean if disabled again', async () => {
+  vi.mocked(api.getConfig).mockResolvedValue(
+    baseConfig({ useProxy: false, proxyType: '', proxyHostname: 'proxy.local', proxyPort: 8080 }),
+  );
+  vi.mocked(api.updateConfig).mockResolvedValue({ status: 'ok' });
+
+  component = new SettingsView({ target: document.body, props: { subTab: 'general' } });
+  await vi.waitFor(() => expect(findGroupControl<HTMLInputElement>('Port Number', 'input').value).toBe('7171'));
+
+  const useProxyCheckbox = findGroupControl<HTMLElement>('Use Proxy', '[role="checkbox"]');
+  useProxyCheckbox.click();
+  await tick();
+  expect(findGroupControl<HTMLSelectElement>('Proxy Type', 'select').value).toBe('Http');
+
+  // Disabling again without saving returns to clean
+  useProxyCheckbox.click();
+  await tick();
+  expect(component.hasUnsavedChanges()).toBe(false);
+
+  // Re-enabling and saving sends proxyType: 'Http' matching the displayed select option
+  useProxyCheckbox.click();
+  await tick();
+  await expect(component.saveConfig()).resolves.toBe(true);
+  expect(api.updateConfig).toHaveBeenCalledWith(
+    expect.objectContaining({
+      useProxy: true,
+      proxyType: 'Http',
+    }),
+  );
+});
