@@ -7,7 +7,7 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [v1.0.0] - 2026-11-27
+## [v1.0.1] - 2026-11-27
 
 Initial stable release of AniList-Arr-Sync.
 
@@ -34,5 +34,5 @@ Initial stable release of AniList-Arr-Sync.
   installer with service and console-free tray modes (plus optional app-data
   removal during uninstall), and Linux container images.
 
-[Unreleased]: https://github.com/lucasskywalker64/anilist-arr-sync/compare/v1.0.0...HEAD
-[v1.0.0]: https://github.com/lucasskywalker64/anilist-arr-sync/releases/tag/v1.0.0
+[Unreleased]: https://github.com/lucasskywalker64/anilist-arr-sync/compare/v1.0.1...HEAD
+[v1.0.1]: https://github.com/lucasskywalker64/anilist-arr-sync/releases/tag/v1.0.1
