@@ -294,7 +294,7 @@ class PublicationBoundary(unittest.TestCase):
     def test_nightly_classifies_added_modified_and_deleted_build_inputs(self):
         module = self.module()
         cases = {
-            'README.md': False, 'docs/release-contract.md': False, 'AGENTS.md': False,
+            'README.md': False, 'CHANGELOG.md': False, 'docs/release-contract.md': False, 'AGENTS.md': False,
             '.agents/skills/example/SKILL.md': False, 'internal/server/AGENTS.md': False,
             'internal/server/api_test.go': False, 'internal/server/testdata/response.json': False,
             'internal/server/testdata/runtime.spec.go': False,
@@ -438,6 +438,75 @@ class PublicationBoundary(unittest.TestCase):
                     else:
                         self.assertEqual(module.nightly_guard('b'*40), failure is not None)
                     self.assertEqual(verifier.call_count, 1 if failure == 'signature' else 2 if failure == 'tag' else 3)
+
+    def test_extract_changelog_returns_matching_version_and_trims_reference_links(self):
+        module = self.module()
+        changelog = textwrap.dedent("""\
+            # Changelog
+
+            ## [Unreleased]
+
+            ## [v1.1.0] - 2026-12-01
+
+            ### Fixed
+            - Fixed retry backoff.
+
+            ## [v1.0.0] - 2026-11-27
+
+            ### Added
+            - Initial release.
+
+            [Unreleased]: https://github.com/lucasskywalker64/anilist-arr-sync/compare/v1.1.0...HEAD
+            [v1.1.0]: https://github.com/lucasskywalker64/anilist-arr-sync/compare/v1.0.0...v1.1.0
+            [v1.0.0]: https://github.com/lucasskywalker64/anilist-arr-sync/releases/tag/v1.0.0
+        """)
+        self.assertEqual(module.extract_changelog(changelog, 'v1.1.0'), '### Fixed\n- Fixed retry backoff.')
+        self.assertEqual(module.extract_changelog(changelog, 'v1.0.0'), '### Added\n- Initial release.')
+        self.assertEqual(module.extract_changelog('## v1.0.0\n\n- Plain heading.\n', 'v1.0.0'), '- Plain heading.')
+
+    def test_extract_changelog_fails_closed_on_missing_empty_duplicate_or_prerelease_headings(self):
+        module = self.module()
+        cases = [
+            ('missing', '# Changelog\n\n## [v1.0.0] - 2026-11-27\n\n- Init.\n', 'v2.0.0'),
+            ('prerelease-mismatch', '# Changelog\n\n## [v1.0.0-rc.1] - 2026-11-27\n\n- RC.\n', 'v1.0.0'),
+            ('empty', '# Changelog\n\n## [v1.0.0] - 2026-11-27\n\n## [v0.9.0]\n\n- Old.\n', 'v1.0.0'),
+            ('only-links', '# Changelog\n\n## [v1.0.0]\n\n[v1.0.0]: https://example.com\n', 'v1.0.0'),
+            ('duplicate', '# Changelog\n\n## [v1.0.0]\n\n- One.\n\n## [v1.0.0]\n\n- Two.\n', 'v1.0.0'),
+        ]
+        for label, text, version in cases:
+            with self.subTest(case=label):
+                with self.assertRaises(ValueError):
+                    module.extract_changelog(text, version)
+
+    def test_render_and_write_release_notes_combine_changelog_with_signing_and_policy_footer(self):
+        module = self.module()
+        commit = 'a' * 40
+        with tempfile.TemporaryDirectory() as temp:
+            changelog = Path(temp, 'CHANGELOG.md')
+            output = Path(temp, '.release/notes.md')
+            changelog.write_text('# Changelog\n\n## [v1.0.0] - 2026-11-27\n\n### Added\n- First release.\n', encoding='utf-8')
+            for sign_flag, expected_signing in [
+                ('true', 'Windows artifacts have timestamped SignPath signatures.'),
+                ('false', 'Windows artifacts omit Authenticode signatures for this release.'),
+            ]:
+                with self.subTest(sign_windows=sign_flag):
+                    env = {'RELEASE_VERSION': 'v1.0.0', 'RELEASE_COMMIT': commit, 'RELEASE_SIGN_WINDOWS': sign_flag}
+                    with patch.dict(os.environ, env, clear=False):
+                        module.write_release_notes(output_path=output, changelog_path=changelog)
+                    rendered = output.read_text(encoding='utf-8')
+                    self.assertTrue(rendered.startswith('### Added\n- First release.\n\n---\n\n'))
+                    self.assertIn(expected_signing, rendered)
+                    self.assertIn(f'/archive/{commit}.tar.gz', rendered)
+                    self.assertIn(f'/blob/{commit}/CODE_SIGNING.md', rendered)
+                    self.assertIn(f'/blob/{commit}/PRIVACY.md', rendered)
+                    self.assertIn(f'/blob/{commit}/SECURITY.md', rendered)
+
+            with patch.dict(os.environ, {'RELEASE_VERSION': 'v1.0.0', 'RELEASE_COMMIT': commit, 'RELEASE_SIGN_WINDOWS': 'yes'}, clear=False):
+                with self.assertRaises(ValueError):
+                    module.write_release_notes(output_path=output, changelog_path=changelog)
+
+            with self.assertRaises(ValueError):
+                module.render_release_notes('v1.0.0', commit, False, changelog_path=Path(temp, 'missing.md'))
 
 
 if __name__ == '__main__':
