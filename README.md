@@ -16,6 +16,7 @@ and your existing download and library settings stay under your control.
 | [Installation](#install-and-run)
 | [Features](#features)
 | [Report a problem](https://github.com/lucasskywalker64/anilist-arr-sync/issues)
+| [Privacy](PRIVACY.md)
 
 [![Dashboard overview showing synchronization status, review queue, and staged actions](.github/images/dashboard.png)](.github/images/dashboard.png)
 
@@ -93,6 +94,14 @@ On Windows, extract the ZIP and start the executable from PowerShell:
 .\anilist-arr-sync.exe --bind-address 127.0.0.1
 ```
 
+Launching the Windows executable without arguments opens a visible console;
+closing it shuts down the application. Installed tray shortcuts use `--tray`
+and run without a console window. Command-line launches reuse the calling
+terminal and preserve redirected output. Windows shells
+can return immediately for GUI executables. For scripts that need to wait and
+read the exit code, use `Start-Process -Wait -PassThru` in PowerShell or
+`start /wait "" anilist-arr-sync.exe --sync` in cmd.exe.
+
 On Linux, extract the archive and run:
 
 ```sh
@@ -111,17 +120,30 @@ before making the dashboard available remotely.
 
 ### Windows installer
 
-The installer requires administrator privileges. Service mode starts the
-application with Windows. Desktop mode starts the tray application at sign-in;
-the signed-in desktop account must itself be an administrator. Desktop
-installation rejects elevation using a different administrator's account.
+The installer requires administrator privileges. On **Select Additional Tasks**,
+you can create a desktop icon and choose whether the app starts at boot as a
+Windows service, at sign-in as a tray app, or only when you start it manually.
+Manual startup runs the same tray app from the Start menu or desktop shortcut.
+Installing the tray app requires the signed-in account to be an administrator.
+The desktop icon opens the dashboard in either mode. If the service is stopped,
+Windows may prompt for administrator approval to start it. In tray mode, the
+icon starts the app if needed.
+
+On the final page, **Start AniList-Arr-Sync** is checked by default. Click
+**Finish** to start the selected mode and open the dashboard. Clear the box
+to skip the immediate launch. Fresh silent installs also skip the immediate
+launch. Silent upgrades resume a Windows service that was already running.
+
 Double-click the tray icon to open the dashboard, or use its right-click menu to
 open the dashboard or quit.
 
 Both modes retain data in `%ProgramData%\AniList-Arr-Sync` by default. Upgrades
 preserve the data location and package-manager ownership. Use Windows Installed
 Apps or the generated uninstaller to remove an installer-based installation.
-Uninstalling preserves user data.
+Uninstalling preserves local application data by default, with an opt-in option
+during interactive uninstall (or `/DELETEAPPDATA` for unattended uninstall) to
+permanently remove the recorded local data directory without affecting Sonarr,
+Radarr, or AniList.
 
 ### Container
 
@@ -237,7 +259,7 @@ configured outside that directory.
 
 | Channel | Identity and signing                                                                                       |
 | ------- | ---------------------------------------------------------------------------------------------------------- |
-| Stable  | Semantic version from `main`; Windows executables require approved, timestamped Authenticode signatures. |
+| Stable  | Semantic version from `main`; Windows Authenticode signatures apply when enabled for the release (see release notes). |
 | Nightly | Distinct version and exact `develop` commit; Windows executables omit Authenticode signing.              |
 
 Both channels require final SHA256 checksums and a Minisign signature of
@@ -269,11 +291,14 @@ and build instructions.
 The frontend is embedded in the executable. Build it before compiling the Go
 application so the executable includes the current dashboard.
 
-With GNU Make installed, `make build` creates the application executable.
-`make all` builds it and runs frontend tests, Go race tests, typechecking,
-license-notice verification, and Go lint checks. See the
+With GNU Make installed, `make build` creates the application executable and
+`make help` lists every individual target. `make all` builds the app and runs
+frontend tests, Go race tests, typechecking, license-notice verification, Go
+format/lint checks, packaging tests, and (on Windows) the installer build and
+non-admin process tests. Run `make verify-elevated` in an Administrator shell to
+also run the elevated Windows installer lifecycle tests. See the
 [Make targets and prerequisites](SOURCE.md#build-and-run-a-modified-version)
-for individual checks and cleanup. The equivalent development checks can also
+for details and cleanup. The equivalent development checks can also
 be run directly:
 
 ```sh
@@ -295,6 +320,14 @@ Release builds support `CGO_ENABLED=0` and embed their version, full commit, and
 build date. The trusted Minisign public-key line is supplied with
 `-X main.updatePublicKey=PUBLIC_KEY_LINE`; private signing material is not a build
 input to the application.
+
+## Credits
+
+- [Fribb/anime-lists](https://github.com/Fribb/anime-lists) for community anime
+  ID mappings used to match AniList entries with TVDB and TMDB.
+- [AniList](https://anilist.co/) for the GraphQL API and anime metadata.
+- [Sonarr](https://sonarr.tv/) and [Radarr](https://radarr.video/) for media
+  management APIs and Servarr interface conventions.
 
 ## License and source
 

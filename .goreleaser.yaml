@@ -18,6 +18,7 @@ builds:
     ldflags:
       - >-
         -s -w
+        {{ if eq .Os "windows" }}-H windowsgui{{ end }}
         -X main.version={{ .Env.RELEASE_VERSION }}
         -X main.commit={{ .Env.RELEASE_COMMIT }}
         -X main.date={{ .Date }}
@@ -69,11 +70,11 @@ scoops:
     homepage: https://github.com/lucasskywalker64/anilist-arr-sync
     description: Synchronize AniList with Sonarr and Radarr
     license: '{{ .Env.PACKAGE_LICENSE }}'
-    skip_upload: '{{ ne .Env.RELEASE_MODE "production" }}'
+    skip_upload: '{{ if eq .Env.RELEASE_MODE "production" }}{{ ne .Env.RELEASE_PUBLISH_SCOOP "true" }}{{ else }}true{{ end }}'
     repository:
-      owner: '{{ if eq .Env.RELEASE_MODE "production" }}{{ .Env.SCOOP_BUCKET_OWNER }}{{ else }}lucasskywalker64{{ end }}'
-      name: '{{ if eq .Env.RELEASE_MODE "production" }}{{ .Env.SCOOP_BUCKET_NAME }}{{ else }}anilist-arr-sync{{ end }}'
-      token: '{{ .Env.SCOOP_BUCKET_TOKEN }}'
+      owner: '{{ if eq .Env.RELEASE_MODE "production" }}{{ if eq .Env.RELEASE_PUBLISH_SCOOP "true" }}{{ .Env.SCOOP_BUCKET_OWNER }}{{ else }}lucasskywalker64{{ end }}{{ else }}lucasskywalker64{{ end }}'
+      name: '{{ if eq .Env.RELEASE_MODE "production" }}{{ if eq .Env.RELEASE_PUBLISH_SCOOP "true" }}{{ .Env.SCOOP_BUCKET_NAME }}{{ else }}anilist-arr-sync{{ end }}{{ else }}anilist-arr-sync{{ end }}'
+      token: '{{ if eq .Env.RELEASE_MODE "production" }}{{ if eq .Env.RELEASE_PUBLISH_SCOOP "true" }}{{ .Env.SCOOP_BUCKET_TOKEN }}{{ end }}{{ end }}'
     pre_install:
       - '[IO.File]::WriteAllText((Join-Path $dir ''update-owner''), ''scoop'', [Text.UTF8Encoding]::new($false))'
 
@@ -83,10 +84,10 @@ aurs:
     homepage: https://github.com/lucasskywalker64/anilist-arr-sync
     description: Synchronize AniList with Sonarr and Radarr
     license: '{{ .Env.PACKAGE_LICENSE }}'
-    skip_upload: '{{ ne .Env.RELEASE_MODE "production" }}'
+    skip_upload: '{{ if eq .Env.RELEASE_MODE "production" }}{{ ne .Env.RELEASE_PUBLISH_AUR "true" }}{{ else }}true{{ end }}'
     url_template: 'https://github.com/lucasskywalker64/anilist-arr-sync/releases/download/{{ .Env.RELEASE_VERSION }}/{{ .ArtifactName }}'
     git_url: ssh://aur@aur.archlinux.org/anilist-arr-sync-bin.git
-    private_key: '{{ .Env.AUR_SSH_PRIVATE_KEY }}'
+    private_key: '{{ if eq .Env.RELEASE_MODE "production" }}{{ if eq .Env.RELEASE_PUBLISH_AUR "true" }}{{ .Env.AUR_SSH_PRIVATE_KEY }}{{ end }}{{ end }}'
     package: |-
       install -Dm755 ./anilist-arr-sync "${pkgdir}/opt/anilist-arr-sync/anilist-arr-sync"
       printf 'aur\n' > "${pkgdir}/opt/anilist-arr-sync/update-owner"

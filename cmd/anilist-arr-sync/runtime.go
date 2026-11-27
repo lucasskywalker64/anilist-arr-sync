@@ -228,15 +228,19 @@ func (r *appRuntime) shutdown(ctx context.Context) error {
 }
 
 func (r *appRuntime) browserURL() string {
-	host := r.listenerCfg.BindAddress
+	return dashboardURL(r.listenerCfg)
+}
+
+func dashboardURL(cfg config.Config) string {
+	host := cfg.BindAddress
 	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "localhost"
 	}
-	scheme, port := "http", r.listenerCfg.Port
-	if r.listenerCfg.EnableSsl {
-		scheme, port = "https", r.listenerCfg.SslPort
+	scheme, port := "http", cfg.Port
+	if cfg.EnableSsl {
+		scheme, port = "https", cfg.SslPort
 	}
-	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/" + strings.Trim(r.listenerCfg.URLBase, "/")
+	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/" + strings.Trim(cfg.URLBase, "/")
 }
 
 func (r *appRuntime) healthURL() string {

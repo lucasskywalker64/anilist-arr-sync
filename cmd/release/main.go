@@ -27,8 +27,7 @@ import (
 
 var targets = []struct{ os, arch string }{{"linux", "amd64"}, {"linux", "arm64"}, {"windows", "amd64"}, {"windows", "arm64"}}
 var stable = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
-var nightly = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]+\.[0-9a-f]+$`)
-var bootstrap = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+-bootstrap\.[0-9]+$`)
+var nightly = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[1-9][0-9]*$`)
 var sha = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 func main() {
@@ -44,11 +43,9 @@ func identity() (updater.Identity, error) {
 	switch os.Getenv("RELEASE_MODE") {
 	case "production":
 		valid = stable.MatchString(id.Version)
-	case "bootstrap":
-		valid = bootstrap.MatchString(id.Version)
 	case "nightly":
 		id.Channel = "develop"
-		valid = nightly.MatchString(id.Version) && strings.HasSuffix(id.Version, "."+id.Commit)
+		valid = nightly.MatchString(id.Version)
 	case "fixture":
 		valid = stable.MatchString(id.Version)
 	}
@@ -56,6 +53,20 @@ func identity() (updater.Identity, error) {
 		return id, errors.New("invalid release mode, version, or full commit identity")
 	}
 	return id, nil
+}
+
+func windowsSigningRequired() (bool, error) {
+	if os.Getenv("RELEASE_MODE") != "production" {
+		return false, nil
+	}
+	switch os.Getenv("RELEASE_SIGN_WINDOWS") {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, errors.New("RELEASE_SIGN_WINDOWS must be 'true' or 'false' in production mode")
+	}
 }
 
 func publicKey() (minisign.PublicKey, error) {
@@ -194,6 +205,10 @@ func archiveBinary(path, platform string) ([]byte, error) {
 
 func verifyBinaries(dir string, id updater.Identity) error {
 	key := os.Getenv("MINISIGN_PUBLIC_KEY")
+	signWindows, err := windowsSigningRequired()
+	if err != nil {
+		return err
+	}
 	for _, target := range targets {
 		name, _ := updater.ArchiveName(id.Version, target.os, target.arch)
 		data, err := archiveBinary(filepath.Join(dir, name), target.os)
@@ -216,7 +231,7 @@ func verifyBinaries(dir string, id updater.Identity) error {
 				return fmt.Errorf("missing binary identity/trust input in %s", name)
 			}
 		}
-		if target.os == "windows" && runtime.GOOS == "windows" && os.Getenv("RELEASE_MODE") == "production" {
+		if target.os == "windows" && runtime.GOOS == "windows" && signWindows {
 			if err := verifyAuthenticode(data); err != nil {
 				return err
 			}
@@ -250,6 +265,10 @@ func run(args []string) error {
 		return err
 	}
 	id, err := identity()
+	if err != nil {
+		return err
+	}
+	signWindows, err := windowsSigningRequired()
 	if err != nil {
 		return err
 	}
@@ -336,9 +355,11 @@ func run(args []string) error {
 		}
 		if os.Getenv("RELEASE_MODE") == "production" {
 			for _, arch := range []string{"amd64", "arm64"} {
-				command := exec.Command("pwsh", "-NoProfile", "-File", "packaging/verify-authenticode.ps1", "-Path", filepath.Join(dir, installerName(id.Version, arch)))
-				if err := command.Run(); err != nil {
-					return errors.New("final installer Authenticode verification failed")
+				if signWindows {
+					command := exec.Command("pwsh", "-NoProfile", "-File", "packaging/verify-authenticode.ps1", "-Path", filepath.Join(dir, installerName(id.Version, arch)))
+					if err := command.Run(); err != nil {
+						return errors.New("final installer Authenticode verification failed")
+					}
 				}
 				receipt, err := os.ReadFile(filepath.Join(".release", "installer-verified-"+arch))
 				if err != nil {

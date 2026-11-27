@@ -103,14 +103,14 @@ func (o *Orchestrator) SetNotifier(n Notifier) {
 func (o *Orchestrator) UpdateConfig(cfg config.Config) {
 	o.stateMu.Lock()
 	defer o.stateMu.Unlock()
-	o.cfg = &cfg
+	o.cfg = cfg.Clone()
 }
 
 // UpdateServarrConfig installs the configuration and its clients together for future work.
 func (o *Orchestrator) UpdateServarrConfig(cfg config.Config, sonarr *servarr.SonarrClient, radarr *servarr.RadarrClient) {
 	o.stateMu.Lock()
 	defer o.stateMu.Unlock()
-	o.cfg, o.sonarr, o.radarr = &cfg, sonarr, radarr
+	o.cfg, o.sonarr, o.radarr = cfg.Clone(), sonarr, radarr
 }
 
 func (o *Orchestrator) snapshot() *Orchestrator {
@@ -130,10 +130,9 @@ func New(
 	sonarr *servarr.SonarrClient,
 	radarr *servarr.RadarrClient,
 ) *Orchestrator {
-	cfgCopy := *cfg
 	return &Orchestrator{
 		db:       db,
-		cfg:      &cfgCopy,
+		cfg:      cfg.Clone(),
 		al:       al,
 		sonarr:   sonarr,
 		radarr:   radarr,
@@ -191,9 +190,9 @@ func (o *Orchestrator) runSync(ctx context.Context, trigger TriggerType, dryRun 
 	defer o.running.Store(false)
 	run := o.snapshot()
 	if dryRun {
-		cfg := *run.cfg
+		cfg := run.cfg.Clone()
 		cfg.FirstRunDryRun = true
-		run.cfg = &cfg
+		run.cfg = cfg
 	}
 	return run.sync(ctx, trigger)
 }
@@ -521,7 +520,7 @@ func (o *Orchestrator) dispatchRadarr(ctx context.Context, entry anilist.MediaLi
 		Title:               title,
 		TMDBID:              res.TargetID,
 		Year:                year,
-		QualityProfileID:    o.cfg.RadarrQualityProfileID,
+		QualityProfileID:    o.cfg.ResolveRadarrQualityProfileID(entry.Media.CountryOfOrigin),
 		RootFolderPath:      o.cfg.RadarrRootFolderPath,
 		Monitored:           o.cfg.RadarrMonitorOnAdd,
 		MinimumAvailability: "announced",
@@ -666,7 +665,7 @@ func (o *Orchestrator) dispatchSonarrWithDryRun(ctx context.Context, entry anili
 		addReq := servarr.AddSeriesRequest{
 			Title:            title,
 			TVDBID:           res.TargetID,
-			QualityProfileID: o.cfg.SonarrQualityProfileID,
+			QualityProfileID: o.cfg.ResolveSonarrQualityProfileID(entry.Media.CountryOfOrigin),
 			RootFolderPath:   o.cfg.SonarrRootFolderPath,
 			SeriesType:       o.cfg.SonarrSeriesType,
 			Monitored:        monitorOnAdd,
@@ -1268,12 +1267,13 @@ func resolveOverrideEpisodes(episodes []servarr.Episode, seasonNumber int, numbe
 }
 
 func (o *Orchestrator) reviewMissingEpisodes(ctx context.Context, entry anilist.MediaListEntry, report *SyncReport) {
+	countryOfOrigin := strings.ToUpper(strings.TrimSpace(entry.Media.CountryOfOrigin))
 	err := o.db.Write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO review_queue (anilist_id, media_type, title_romaji, title_english, reason, status, candidates_json)
-			SELECT ?, 'SERIES', ?, ?, 'MISSING_OVERRIDE_EPISODES', 'PENDING', '[]'
+			INSERT INTO review_queue (anilist_id, media_type, title_romaji, title_english, reason, status, candidates_json, country_of_origin)
+			SELECT ?, 'SERIES', ?, ?, 'MISSING_OVERRIDE_EPISODES', 'PENDING', '[]', ?
 			WHERE NOT EXISTS (SELECT 1 FROM review_queue WHERE anilist_id = ? AND status = 'PENDING');
-		`, entry.Media.ID, entry.Media.Title.Romaji, entry.Media.Title.English, entry.Media.ID)
+		`, entry.Media.ID, entry.Media.Title.Romaji, entry.Media.Title.English, countryOfOrigin, entry.Media.ID)
 		if err != nil {
 			return err
 		}
@@ -1511,13 +1511,14 @@ func (o *Orchestrator) upsertSyncedMedia(
 		if seasons != "" {
 			seasonsVal = &seasons
 		}
+		countryOfOrigin := strings.ToUpper(strings.TrimSpace(entry.Media.CountryOfOrigin))
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO synced_media (
 				anilist_id, media_type, format, title_romaji, title_english,
 				release_year, poster_url, anilist_status, target_service,
 				tvdb_id, tmdb_id, arr_title, monitored_status, seasons, sonarr_followup_pending,
-				last_synced_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+				country_of_origin, last_synced_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 			ON CONFLICT(anilist_id) DO UPDATE SET
 				media_type = excluded.media_type,
 				format = excluded.format,
@@ -1533,11 +1534,12 @@ func (o *Orchestrator) upsertSyncedMedia(
 				monitored_status = excluded.monitored_status,
 				seasons = CASE WHEN excluded.monitored_status = 'IGNORED' THEN synced_media.seasons ELSE excluded.seasons END,
 				sonarr_followup_pending = excluded.sonarr_followup_pending,
+				country_of_origin = COALESCE(NULLIF(excluded.country_of_origin, ''), synced_media.country_of_origin),
 				last_synced_at = CURRENT_TIMESTAMP,
 				updated_at = CURRENT_TIMESTAMP;
 		`, entry.Media.ID, mediaType, entry.Media.Format, romaji, eng,
 			year, poster, string(entry.Status), targetService,
-			tvdbID, tmdbID, arrTitleVal, monitoredStatus, seasonsVal, pendingSonarrFollowup,
+			tvdbID, tmdbID, arrTitleVal, monitoredStatus, seasonsVal, pendingSonarrFollowup, countryOfOrigin,
 		)
 		return err
 	})

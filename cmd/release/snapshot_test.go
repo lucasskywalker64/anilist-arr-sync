@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"debug/pe"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -55,15 +56,17 @@ func TestSnapshot(t *testing.T) {
 	for _, name := range []string{"SIGNPATH_API_TOKEN", "GITHUB_TOKEN", "SCOOP_BUCKET_TOKEN", "AUR_SSH_PRIVATE_KEY", "DOCKERHUB_TOKEN"} {
 		t.Setenv(name, "")
 	}
-	for _, mode := range []string{"fixture", "nightly", "bootstrap"} {
+	for _, mode := range []string{"nightly", "fixture"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Setenv("RELEASE_MODE", mode)
+			// Installer behavior is shared across these modes. Exercise its full
+			// lifecycle once; retain artifact and native-health checks for every mode.
+			if mode != "fixture" {
+				t.Setenv("RELEASE_INSTALL_TEST", "")
+			}
 			version := "v0.0.1"
 			if mode == "nightly" {
-				version += "-nightly.20261112010101." + os.Getenv("RELEASE_COMMIT")
-			}
-			if mode == "bootstrap" {
-				version += "-bootstrap.1"
+				version += "-nightly.20261116.123"
 			}
 			t.Setenv("RELEASE_VERSION", version)
 			id, err := identity()
@@ -139,6 +142,22 @@ func verifyUpdaterArtifacts(t *testing.T, id updater.Identity, public string) {
 	}))
 	defer server.Close()
 	for _, target := range targets {
+		if target.os == "windows" {
+			name, _ := updater.ArchiveName(id.Version, target.os, target.arch)
+			data, err := archiveBinary(filepath.Join(targetDir, name), target.os)
+			if err != nil {
+				t.Fatal(err)
+			}
+			binary, err := pe.NewFile(bytes.NewReader(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			header, ok := binary.OptionalHeader.(*pe.OptionalHeader64)
+			if !ok || header.Subsystem != pe.IMAGE_SUBSYSTEM_WINDOWS_GUI {
+				t.Fatalf("windows/%s release executable can create a console window", target.arch)
+			}
+			_ = binary.Close()
+		}
 		for _, tampered := range []bool{false, true} {
 			t.Run(target.os+"/"+target.arch+"/tampered="+map[bool]string{false: "no", true: "yes"}[tampered], func(t *testing.T) {
 				dir := t.TempDir()
@@ -196,11 +215,10 @@ func verifyUpdaterArtifacts(t *testing.T, id updater.Identity, public string) {
 					return nil
 				}
 				err = e.Apply(context.Background())
-				rejected := tampered || strings.Contains(id.Version, "-bootstrap.")
-				if rejected && (err == nil || launched) {
+				if tampered && (err == nil || launched) {
 					t.Fatal("tampered final archive passed updater")
 				}
-				if !rejected && (err != nil || !launched) {
+				if !tampered && (err != nil || !launched) {
 					t.Fatalf("final artifact rejected: %v", err)
 				}
 			})

@@ -3,12 +3,14 @@
   export let size: 'small' | 'medium' | 'large' = 'medium';
   export let type: 'button' | 'submit' | 'reset' = 'button';
   export let disabled = false;
+  export let ariaLabel: string | undefined = undefined;
 </script>
 
 <button
   {type}
   class="btn {kind} {size}"
   {disabled}
+  aria-label={ariaLabel}
   on:click
 >
   <slot />

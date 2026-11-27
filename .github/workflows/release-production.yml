@@ -2,17 +2,6 @@ name: Production release
 on:
   push:
     tags: ['v*.*.*']
-  workflow_dispatch:
-    inputs:
-      bootstrap:
-        description: 'Explicit one-time unsigned Windows bootstrap prerelease'
-        type: boolean
-        required: true
-        default: false
-      bootstrap_tag:
-        description: 'Existing main tag vMAJOR.MINOR.PATCH-bootstrap.N'
-        type: string
-        required: true
 permissions:
   contents: read
 concurrency:
@@ -20,7 +9,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-')
+    if: '!contains(github.ref_name, ''-'')'
     # ARM Windows executes arm64 natively and amd64 through Windows emulation.
     # Both installer lifecycles must pass inside post-build hooks, before hashes.
     runs-on: windows-11-arm
@@ -30,11 +19,22 @@ jobs:
       contents: write
       actions: read
     outputs:
-      mode: ${{ steps.identity.outputs.mode }}
       version: ${{ steps.identity.outputs.version }}
       commit: ${{ steps.identity.outputs.commit }}
+      sign_windows: ${{ steps.identity.outputs.sign_windows }}
+      publish_ghcr: ${{ steps.identity.outputs.publish_ghcr }}
+      publish_dockerhub: ${{ steps.identity.outputs.publish_dockerhub }}
+      publish_winget: ${{ steps.identity.outputs.publish_winget }}
+      publish_chocolatey: ${{ steps.identity.outputs.publish_chocolatey }}
     env:
       MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+      RELEASE_SIGN_WINDOWS: ${{ vars.RELEASE_SIGN_WINDOWS }}
+      RELEASE_PUBLISH_GHCR: ${{ vars.RELEASE_PUBLISH_GHCR }}
+      RELEASE_PUBLISH_DOCKERHUB: ${{ vars.RELEASE_PUBLISH_DOCKERHUB }}
+      RELEASE_PUBLISH_SCOOP: ${{ vars.RELEASE_PUBLISH_SCOOP }}
+      RELEASE_PUBLISH_AUR: ${{ vars.RELEASE_PUBLISH_AUR }}
+      RELEASE_PUBLISH_WINGET: ${{ vars.RELEASE_PUBLISH_WINGET }}
+      RELEASE_PUBLISH_CHOCOLATEY: ${{ vars.RELEASE_PUBLISH_CHOCOLATEY }}
       SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
       SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
       SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
@@ -45,16 +45,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap_tag || github.ref }}
+          ref: ${{ github.ref }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Select and validate production or explicit bootstrap
+      - name: Validate release identity, feature flags, and credentials
         id: identity
         shell: pwsh
         env:
-          EVENT: ${{ github.event_name }}
-          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap_tag || github.ref_name }}
-          BOOTSTRAP: ${{ inputs.bootstrap }}
+          TAG: ${{ github.ref_name }}
           PUBLIC_SOURCE: ${{ !github.event.repository.private }}
           MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
@@ -68,47 +66,66 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:PUBLIC_SOURCE -ne 'true') { throw 'Release source must remain publicly accessible' }
-          $mode = 'production'
-          if ($env:EVENT -eq 'workflow_dispatch') {
-            if ($env:BOOTSTRAP -ne 'true' -or $env:TAG -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-bootstrap\.[1-9][0-9]*$') { throw 'Select bootstrap explicitly with a bootstrap prerelease tag' }
-            $mode = 'bootstrap'
-          } elseif ($env:TAG -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
-            throw 'Automatic production requires a stable semantic version tag'
+          if ($env:TAG -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw 'Production release requires a stable semantic version tag'
           }
           git merge-base --is-ancestor HEAD origin/main
           if ($LASTEXITCODE -ne 0) { throw 'Release commit must belong to main' }
           $commit = (git rev-parse HEAD).Trim()
-          foreach ($line in @("RELEASE_MODE=$mode", "RELEASE_VERSION=$env:TAG", "RELEASE_COMMIT=$commit")) { $line | Out-File $env:GITHUB_ENV -Append -Encoding utf8 }
-          foreach ($line in @("mode=$mode", "version=$env:TAG", "commit=$commit")) { $line | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8 }
-          foreach ($name in @('MINISIGN_PUBLIC_KEY', 'MINISIGN_PRIVATE_KEY', 'MINISIGN_PASSWORD')) {
-            if (![Environment]::GetEnvironmentVariable($name)) { throw "Missing $name" }
-          }
-          if ($mode -eq 'production') {
-            foreach ($name in @('SIGNPATH_API_TOKEN', 'SIGNPATH_ORGANIZATION_ID', 'SIGNPATH_PROJECT_SLUG', 'SIGNPATH_SIGNING_POLICY_SLUG', 'SIGNPATH_ARTIFACT_CONFIGURATION_SLUG', 'SCOOP_BUCKET_TOKEN', 'AUR_SSH_PRIVATE_KEY', 'DOCKERHUB_USERNAME', 'DOCKERHUB_TOKEN', 'WINGET_TOKEN', 'CHOCOLATEY_API_KEY', 'PACKAGE_LICENSE')) {
-              if (![Environment]::GetEnvironmentVariable($name)) { throw "Missing $name" }
+          foreach ($flag in @(
+            'RELEASE_SIGN_WINDOWS',
+            'RELEASE_PUBLISH_GHCR',
+            'RELEASE_PUBLISH_DOCKERHUB',
+            'RELEASE_PUBLISH_SCOOP',
+            'RELEASE_PUBLISH_AUR',
+            'RELEASE_PUBLISH_WINGET',
+            'RELEASE_PUBLISH_CHOCOLATEY'
+          )) {
+            $value = [Environment]::GetEnvironmentVariable($flag)
+            if ($value -cne 'true' -and $value -cne 'false') {
+              throw "$flag must be explicitly set to 'true' or 'false'"
             }
+          }
+          $required = [System.Collections.Generic.List[string]]@('MINISIGN_PUBLIC_KEY', 'MINISIGN_PRIVATE_KEY', 'MINISIGN_PASSWORD', 'PACKAGE_LICENSE')
+          if ($env:RELEASE_SIGN_WINDOWS -ceq 'true') {
+            $required.AddRange([string[]]@('SIGNPATH_API_TOKEN', 'SIGNPATH_ORGANIZATION_ID', 'SIGNPATH_PROJECT_SLUG', 'SIGNPATH_SIGNING_POLICY_SLUG', 'SIGNPATH_ARTIFACT_CONFIGURATION_SLUG'))
+          }
+          if ($env:RELEASE_PUBLISH_SCOOP -ceq 'true') {
+            $required.Add('SCOOP_BUCKET_TOKEN')
             if ($env:SCOOP_BUCKET_REPOSITORY -notmatch '^([^/]+)/([^/]+)$') { throw 'SCOOP_BUCKET_REPOSITORY must be owner/repository' }
             "SCOOP_BUCKET_OWNER=$($Matches[1])" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
             "SCOOP_BUCKET_NAME=$($Matches[2])" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           }
+          if ($env:RELEASE_PUBLISH_AUR -ceq 'true') { $required.Add('AUR_SSH_PRIVATE_KEY') }
+          if ($env:RELEASE_PUBLISH_DOCKERHUB -ceq 'true') {
+            $required.AddRange([string[]]@('DOCKERHUB_USERNAME', 'DOCKERHUB_TOKEN'))
+          }
+          if ($env:RELEASE_PUBLISH_WINGET -ceq 'true') { $required.Add('WINGET_TOKEN') }
+          if ($env:RELEASE_PUBLISH_CHOCOLATEY -ceq 'true') { $required.Add('CHOCOLATEY_API_KEY') }
+          foreach ($name in $required) {
+            if (![Environment]::GetEnvironmentVariable($name)) { throw "Missing $name" }
+          }
+          foreach ($line in @('RELEASE_MODE=production', "RELEASE_VERSION=$env:TAG", "RELEASE_COMMIT=$commit")) {
+            $line | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          }
+          foreach ($line in @(
+            "version=$env:TAG",
+            "commit=$commit",
+            "sign_windows=$env:RELEASE_SIGN_WINDOWS",
+            "publish_ghcr=$env:RELEASE_PUBLISH_GHCR",
+            "publish_dockerhub=$env:RELEASE_PUBLISH_DOCKERHUB",
+            "publish_winget=$env:RELEASE_PUBLISH_WINGET",
+            "publish_chocolatey=$env:RELEASE_PUBLISH_CHOCOLATEY"
+          )) {
+            $line | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
       - uses: ./.github/actions/release-tools
-      - name: Enforce one-time bootstrap exception
-        if: env.RELEASE_MODE == 'bootstrap'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python packaging/release.py bootstrap-guard
       - name: Write release notes
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force .release | Out-Null
-          if ($env:RELEASE_MODE -eq 'bootstrap') {
-            '[bootstrap-unsigned] One-time onboarding prerelease. Windows application, installer, and uninstaller are NOT Authenticode-signed. Checksums ARE Minisign-signed. No containers or package-manager publication.' | Set-Content .release/notes.md -Encoding utf8
-          } else {
-            "AniList-Arr-Sync $env:RELEASE_VERSION from commit $env:RELEASE_COMMIT. Windows artifacts have timestamped SignPath signatures. Final checksums are Minisign-signed." | Set-Content .release/notes.md -Encoding utf8
-          }
-          "`nLicense: AGPL-3.0-only. No warranty.`n`n[Exact application source](https://github.com/lucasskywalker64/anilist-arr-sync/archive/$env:RELEASE_COMMIT.tar.gz). [Dependency source and build instructions](https://github.com/lucasskywalker64/anilist-arr-sync/blob/$env:RELEASE_COMMIT/SOURCE.md)." | Add-Content .release/notes.md -Encoding utf8
-          "`n[Code signing policy](https://github.com/lucasskywalker64/anilist-arr-sync/blob/$env:RELEASE_COMMIT/CODE_SIGNING.md) | [Privacy policy](https://github.com/lucasskywalker64/anilist-arr-sync/blob/$env:RELEASE_COMMIT/PRIVACY.md)" | Add-Content .release/notes.md -Encoding utf8
-      - name: Build once, wait for SignPath approvals, test installers, hash, sign, and publish
+          python packaging/release.py release-notes
+          if ($LASTEXITCODE -ne 0) { throw 'Release notes generation failed' }
+      - name: Build once, sign when enabled, test installers, hash, and publish
         uses: ./.github/actions/production-release
         env:
           MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
@@ -126,7 +143,7 @@ jobs:
           retention-days: 7
   containers:
     needs: release
-    if: needs.release.outputs.mode == 'production'
+    if: needs.release.outputs.publish_ghcr == 'true' || needs.release.outputs.publish_dockerhub == 'true'
     uses: ./.github/workflows/release-containers.yml
     permissions:
       contents: read
@@ -136,10 +153,13 @@ jobs:
       version: ${{ needs.release.outputs.version }}
       commit: ${{ needs.release.outputs.commit }}
       artifact: production-final
+      sign_windows: ${{ needs.release.outputs.sign_windows }}
+      publish_ghcr: ${{ needs.release.outputs.publish_ghcr == 'true' }}
+      publish_dockerhub: ${{ needs.release.outputs.publish_dockerhub == 'true' }}
     secrets: inherit
   packages:
     needs: release
-    if: needs.release.outputs.mode == 'production'
+    if: needs.release.outputs.publish_winget == 'true' || needs.release.outputs.publish_chocolatey == 'true'
     runs-on: windows-latest
     permissions:
       contents: read
@@ -147,6 +167,7 @@ jobs:
       RELEASE_MODE: production
       RELEASE_VERSION: ${{ needs.release.outputs.version }}
       RELEASE_COMMIT: ${{ needs.release.outputs.commit }}
+      RELEASE_SIGN_WINDOWS: ${{ needs.release.outputs.sign_windows }}
       MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
       PACKAGE_LICENSE: AGPL-3.0-only
     steps:
@@ -173,6 +194,7 @@ jobs:
           python packaging/manifests.py .release/published
           if ($LASTEXITCODE -ne 0) { throw 'Manifest generation failed' }
       - name: Install and run WinGet manifest validator
+        if: needs.release.outputs.publish_winget == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -188,6 +210,7 @@ jobs:
           if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation(?:,|$)') { throw 'Untrusted WinGet tool' }
           if ((Get-FileHash .release-tools/wingetcreate.exe -Algorithm SHA256).Hash -ne '63d980ba79e97042395bd6eb5992c2db9e01e9e7a8a22958a95c288f27310413') { throw 'Unexpected WinGet tool bytes' }
       - name: Submit WinGet manifests
+        if: needs.release.outputs.publish_winget == 'true'
         shell: pwsh
         env:
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
@@ -196,6 +219,7 @@ jobs:
           & .release-tools/wingetcreate.exe submit .release/winget --token $env:WINGET_TOKEN
           if ($LASTEXITCODE -ne 0) { throw 'WinGet submission failed' }
       - name: Pack and submit Chocolatey
+        if: needs.release.outputs.publish_chocolatey == 'true'
         shell: pwsh
         env:
           CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}

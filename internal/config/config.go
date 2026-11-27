@@ -5,9 +5,11 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +17,9 @@ import (
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/anilist"
 	"github.com/lucasskywalker64/anilist-arr-sync/internal/servarr"
 )
+
+// CountryQualityProfiles maps ISO 3166-1 alpha-2 country codes to Servarr quality profile IDs.
+type CountryQualityProfiles map[string]int
 
 // Config represents the application configuration matching Servarr conventions.
 type Config struct {
@@ -77,21 +82,23 @@ type Config struct {
 	AniListIncludeUnreleased bool   `xml:"AniListIncludeUnreleased"`
 
 	// Radarr
-	RadarrURL              string `xml:"RadarrUrl"`
-	RadarrAPIKey           string `xml:"RadarrApiKey"`
-	RadarrQualityProfileID int    `xml:"RadarrQualityProfileId"`
-	RadarrRootFolderPath   string `xml:"RadarrRootFolderPath"`
-	RadarrMonitorOnAdd     bool   `xml:"RadarrMonitorOnAdd"`
-	RadarrSearchOnAdd      bool   `xml:"RadarrSearchOnAdd"`
+	RadarrURL                     string                 `xml:"RadarrUrl"`
+	RadarrAPIKey                  string                 `xml:"RadarrApiKey"`
+	RadarrQualityProfileID        int                    `xml:"RadarrQualityProfileId"`
+	RadarrQualityProfileOverrides CountryQualityProfiles `xml:"RadarrQualityProfileOverrides,omitempty"`
+	RadarrRootFolderPath          string                 `xml:"RadarrRootFolderPath"`
+	RadarrMonitorOnAdd            bool                   `xml:"RadarrMonitorOnAdd"`
+	RadarrSearchOnAdd             bool                   `xml:"RadarrSearchOnAdd"`
 
 	// Sonarr
-	SonarrURL              string `xml:"SonarrUrl"`
-	SonarrAPIKey           string `xml:"SonarrApiKey"`
-	SonarrQualityProfileID int    `xml:"SonarrQualityProfileId"`
-	SonarrRootFolderPath   string `xml:"SonarrRootFolderPath"`
-	SonarrSeriesType       string `xml:"SonarrSeriesType"`
-	SonarrMonitorOnAdd     bool   `xml:"SonarrMonitorOnAdd"`
-	SonarrSearchOnAdd      bool   `xml:"SonarrSearchOnAdd"`
+	SonarrURL                     string                 `xml:"SonarrUrl"`
+	SonarrAPIKey                  string                 `xml:"SonarrApiKey"`
+	SonarrQualityProfileID        int                    `xml:"SonarrQualityProfileId"`
+	SonarrQualityProfileOverrides CountryQualityProfiles `xml:"SonarrQualityProfileOverrides,omitempty"`
+	SonarrRootFolderPath          string                 `xml:"SonarrRootFolderPath"`
+	SonarrSeriesType              string                 `xml:"SonarrSeriesType"`
+	SonarrMonitorOnAdd            bool                   `xml:"SonarrMonitorOnAdd"`
+	SonarrSearchOnAdd             bool                   `xml:"SonarrSearchOnAdd"`
 
 	// Sync
 	TagName             string  `xml:"TagName"`
@@ -174,6 +181,93 @@ func NewDefault() *Config {
 		DeleteWatched:              false,
 		FirstRunDryRun:             true,
 	}
+}
+
+// Clone returns a deep copy of the configuration including override maps.
+func (c *Config) Clone() *Config {
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	cp.RadarrQualityProfileOverrides = maps.Clone(c.RadarrQualityProfileOverrides)
+	cp.SonarrQualityProfileOverrides = maps.Clone(c.SonarrQualityProfileOverrides)
+	return &cp
+}
+
+// NormalizeCountryCode trims and uppercases an ISO 3166-1 alpha-2 country code.
+// It returns the normalized code and whether it is a valid 2-letter ASCII code.
+func NormalizeCountryCode(code string) (string, bool) {
+	normalized := strings.ToUpper(strings.TrimSpace(code))
+	if len(normalized) != 2 {
+		return normalized, false
+	}
+	if normalized[0] < 'A' || normalized[0] > 'Z' || normalized[1] < 'A' || normalized[1] > 'Z' {
+		return normalized, false
+	}
+	return normalized, true
+}
+
+// ResolveRadarrQualityProfileID returns the configured Radarr quality profile override
+// for countryOfOrigin, falling back to RadarrQualityProfileID when unmatched or empty.
+func (c *Config) ResolveRadarrQualityProfileID(countryOfOrigin string) int {
+	return resolveQualityProfileID(c.RadarrQualityProfileID, c.RadarrQualityProfileOverrides, countryOfOrigin)
+}
+
+// ResolveSonarrQualityProfileID returns the configured Sonarr quality profile override
+// for countryOfOrigin, falling back to SonarrQualityProfileID when unmatched or empty.
+func (c *Config) ResolveSonarrQualityProfileID(countryOfOrigin string) int {
+	return resolveQualityProfileID(c.SonarrQualityProfileID, c.SonarrQualityProfileOverrides, countryOfOrigin)
+}
+
+func resolveQualityProfileID(defaultID int, overrides CountryQualityProfiles, countryOfOrigin string) int {
+	code := strings.ToUpper(strings.TrimSpace(countryOfOrigin))
+	if code == "" || len(overrides) == 0 {
+		return defaultID
+	}
+	if id, ok := overrides[code]; ok && id > 0 {
+		return id
+	}
+	for k, id := range overrides {
+		if id > 0 && strings.EqualFold(strings.TrimSpace(k), code) {
+			return id
+		}
+	}
+	return defaultID
+}
+
+func normalizeQualityProfileOverrides(field string, overrides CountryQualityProfiles) (CountryQualityProfiles, error) {
+	if len(overrides) == 0 {
+		return nil, nil
+	}
+	keys := make([]string, 0, len(overrides))
+	for k := range overrides {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+
+	normalized := make(CountryQualityProfiles, len(overrides))
+	var errs []error
+	for _, rawKey := range keys {
+		code, ok := NormalizeCountryCode(rawKey)
+		if !ok {
+			errs = append(errs, fmt.Errorf("%s contains invalid country code %q (expected 2-letter ASCII code)", field, rawKey))
+			continue
+		}
+		if _, exists := normalized[code]; exists {
+			errs = append(errs, fmt.Errorf("%s contains duplicate country code %q", field, code))
+			continue
+		}
+		profileID := overrides[rawKey]
+		if profileID <= 0 {
+			errs = append(errs, fmt.Errorf("%s[%s] quality profile ID must be greater than 0, got %d", field, code, profileID))
+			continue
+		}
+		normalized[code] = profileID
+	}
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	return normalized, nil
 }
 
 // SyncConfigured reports whether AniList and at least one Servarr connection are configured.
@@ -261,6 +355,17 @@ func (c *Config) Validate() error {
 	case "anime", "standard":
 	default:
 		check(false, "SonarrSeriesType must be anime or standard, got %q", c.SonarrSeriesType)
+	}
+
+	if normalized, err := normalizeQualityProfileOverrides("RadarrQualityProfileOverrides", c.RadarrQualityProfileOverrides); err != nil {
+		errs = append(errs, err)
+	} else {
+		c.RadarrQualityProfileOverrides = normalized
+	}
+	if normalized, err := normalizeQualityProfileOverrides("SonarrQualityProfileOverrides", c.SonarrQualityProfileOverrides); err != nil {
+		errs = append(errs, err)
+	} else {
+		c.SonarrQualityProfileOverrides = normalized
 	}
 
 	for _, selection := range []struct{ field, value string }{

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -365,7 +366,7 @@ func TestConfigRejectsUnusableRuntimeSettings(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.xml")
 			cfg := config.NewDefault()
 			cfg.APIKey = "key"
-			original := *cfg
+			original := *cfg.Clone()
 			if err := config.Save(path, cfg); err != nil {
 				t.Fatal(err)
 			}
@@ -381,7 +382,7 @@ func TestConfigRejectsUnusableRuntimeSettings(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if *persisted != original || srv.Config() != original {
+			if !reflect.DeepEqual(*persisted, original) || !reflect.DeepEqual(srv.Config(), original) {
 				t.Fatal("invalid settings changed the saved or running configuration")
 			}
 		})
@@ -706,6 +707,116 @@ func TestBackupAndRestoreEndpoints(t *testing.T) {
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected restore to return 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestConfigAPI_QualityProfileOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.xml")
+	cfg := config.NewDefault()
+	cfg.AuthenticationRequired = "DisabledForLocalAddresses"
+	cfg.APIKey = "override-key"
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := NewServer(cfg, path, nil, nil, nil)
+	handler := srv.Handler()
+
+	// 1. GET returns empty override maps by default
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+		req.RemoteAddr = "127.0.0.1:1234"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /api/v1/config status = %d, want 200", rec.Code)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		sonarrOverrides, ok := body["sonarrQualityProfileOverrides"].(map[string]any)
+		if !ok || len(sonarrOverrides) != 0 {
+			t.Fatalf("expected empty sonarrQualityProfileOverrides object, got %#v", body["sonarrQualityProfileOverrides"])
+		}
+		radarrOverrides, ok := body["radarrQualityProfileOverrides"].(map[string]any)
+		if !ok || len(radarrOverrides) != 0 {
+			t.Fatalf("expected empty radarrQualityProfileOverrides object, got %#v", body["radarrQualityProfileOverrides"])
+		}
+	}
+
+	// 2. PUT normalizes country codes, persists to XML, and updates runtime config
+	{
+		body := `{"sonarrQualityProfileOverrides":{"cn":4,"kr":5},"radarrQualityProfileOverrides":{"tw":6}}`
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewBufferString(body))
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set("X-Api-Key", "override-key")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("PUT /api/v1/config status = %d: %s", rec.Code, rec.Body.String())
+		}
+
+		persisted, err := config.Load(path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantSonarr := config.CountryQualityProfiles{"CN": 4, "KR": 5}
+		wantRadarr := config.CountryQualityProfiles{"TW": 6}
+		if !reflect.DeepEqual(persisted.SonarrQualityProfileOverrides, wantSonarr) {
+			t.Errorf("persisted SonarrQualityProfileOverrides = %+v, want %+v", persisted.SonarrQualityProfileOverrides, wantSonarr)
+		}
+		if !reflect.DeepEqual(persisted.RadarrQualityProfileOverrides, wantRadarr) {
+			t.Errorf("persisted RadarrQualityProfileOverrides = %+v, want %+v", persisted.RadarrQualityProfileOverrides, wantRadarr)
+		}
+		if !reflect.DeepEqual(srv.Config().SonarrQualityProfileOverrides, wantSonarr) {
+			t.Errorf("runtime SonarrQualityProfileOverrides = %+v, want %+v", srv.Config().SonarrQualityProfileOverrides, wantSonarr)
+		}
+	}
+
+	// 3. Invalid override payloads return 400 and leave saved config intact
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"invalid country length", `{"sonarrQualityProfileOverrides":{"CHN":4}}`},
+		{"non-positive profile id", `{"sonarrQualityProfileOverrides":{"CN":0}}`},
+		{"fractional profile id", `{"radarrQualityProfileOverrides":{"CN":2.5}}`},
+		{"wrong value type", `{"radarrQualityProfileOverrides":{"CN":"4"}}`},
+		{"wrong container type", `{"sonarrQualityProfileOverrides":["CN"]}`},
+		{"duplicate normalized keys", `{"sonarrQualityProfileOverrides":{"cn":4,"CN":5}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewBufferString(tc.body))
+			req.RemoteAddr = "127.0.0.1:1234"
+			req.Header.Set("X-Api-Key", "override-key")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("%s: status = %d, want 400 (%s)", tc.name, rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	// 4. Clearing overrides with empty object persists empty overrides
+	{
+		body := `{"sonarrQualityProfileOverrides":{},"radarrQualityProfileOverrides":{}}`
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewBufferString(body))
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set("X-Api-Key", "override-key")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("clearing overrides failed: %d %s", rec.Code, rec.Body.String())
+		}
+		persisted, err := config.Load(path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(persisted.SonarrQualityProfileOverrides) != 0 || len(persisted.RadarrQualityProfileOverrides) != 0 {
+			t.Errorf("expected empty overrides after clear, got sonarr=%+v radarr=%+v",
+				persisted.SonarrQualityProfileOverrides, persisted.RadarrQualityProfileOverrides)
 		}
 	}
 }

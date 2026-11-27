@@ -1,7 +1,6 @@
-param([Parameter(Mandatory)][string]$Installer, [ValidateSet('amd64', 'arm64')][string]$Arch, [string]$PreviousInstaller)
+param([Parameter(Mandatory)][string]$Installer, [ValidateSet('amd64', 'arm64')][string]$Arch)
 $ErrorActionPreference = 'Stop'
 $Installer = (Resolve-Path -LiteralPath $Installer).Path
-if ($PreviousInstaller) { $PreviousInstaller = (Resolve-Path -LiteralPath $PreviousInstaller).Path }
 $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
 if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Installer lifecycle tests require an administrator token' }
 # Refuse to upgrade an existing real installation or overwrite its shortcuts.
@@ -10,7 +9,16 @@ foreach ($identity in @('AniList-Arr-Sync', 'AniList-Arr-Sync-amd64', 'AniList-A
     if (Test-Path -LiteralPath $key) { throw 'Existing installation blocks isolated installer verification' }
 }
 $startup = Join-Path ([Environment]::GetFolderPath('Startup')) 'AniList-Arr-Sync.lnk'
-if (Test-Path -LiteralPath $startup) { throw 'Existing startup shortcut blocks isolated installer verification' }
+$desktop = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'AniList-Arr-Sync'
+if (Test-Path -LiteralPath @($startup, "$desktop.lnk", "$desktop.url") | Where-Object { $_ }) {
+    throw 'Existing shortcuts block isolated installer verification'
+}
+$defaultData = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'AniList-Arr-Sync'
+if (Test-Path -LiteralPath $defaultData) {
+    throw 'Existing default application data blocks isolated installer verification'
+}
+$createdDefaultData = $false
+$lastInstallerLog = $null
 $releaseRoot = (Resolve-Path .release).Path
 $root = Join-Path $releaseRoot ('install-test-' + [Guid]::NewGuid().ToString('N'))
 $app = Join-Path $root 'app'
@@ -97,7 +105,6 @@ function EnsureTrayDesktop {
 function StartTray {
     $start = [Diagnostics.ProcessStartInfo]::new((Join-Path $app 'anilist-arr-sync.exe'))
     $start.UseShellExecute = $false
-    $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
     foreach ($argument in @('--tray', '--no-browser', '--data-dir', $data, '--config', (Join-Path $data 'config.xml'))) { $start.ArgumentList.Add($argument) }
@@ -106,15 +113,23 @@ function StartTray {
     $script:trayError = $tray.StandardError.ReadToEndAsync()
 }
 
-function Install([string]$Owner, [string]$Type = 'service', [string]$Package = $Installer) {
-    $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/TYPE=$Type", "/SERVICENAME=$service", "/DIR=`"$app`"", "/DATADIR=`"$data`"", "/GROUP=`"$group`"")
+function Install([string]$Owner, [string]$Type = 'service', [string]$Tasks, [string]$DataDir = $data) {
+    $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/SERVICENAME=$service", "/DIR=`"$app`"", "/GROUP=`"$group`"")
+    if ($DataDir) { $arguments += "/DATADIR=`"$DataDir`"" }
+    if ($Type) { $arguments += "/TYPE=$Type" }
+    if ($Tasks) { $arguments += "/TASKS=$Tasks" }
     if ($Owner) { $arguments += "/UPDATEOWNER=$Owner" }
-    InvokeInstallerProcess $Package $arguments
+    InvokeInstallerProcess $Installer $arguments
+}
+
+function Uninstall([string[]]$ExtraArguments = @()) {
+    InvokeInstallerProcess (Join-Path $app 'unins000.exe') (@('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') + $ExtraArguments)
 }
 
 function InvokeInstallerProcess([string]$File, [string[]]$Arguments, [int]$TimeoutMilliseconds = 120000) {
     New-Item -ItemType Directory -Path $root -Force | Out-Null
     $log = Join-Path $root ('installer-' + [Guid]::NewGuid().ToString('N') + '.log')
+    $script:lastInstallerLog = $log
     Write-Host "[$stage] Starting $([IO.Path]::GetFileName($File))"
     # Inno's launcher can exit while its temporary uninstaller is still running.
     # Keep PowerShell's process-tree wait inside a bounded supervisor process.
@@ -144,7 +159,9 @@ function AssertInstalledArchitecture([string]$Expected) {
     $bytes = [IO.File]::ReadAllBytes((Join-Path $app 'anilist-arr-sync.exe'))
     $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3c) + 4)
     $wanted = if ($Expected -eq 'arm64') { 0xaa64 } else { 0x8664 }
-    if ($machine -ne $wanted) { throw 'Architecture replacement retained the wrong executable' }
+    if ($machine -ne $wanted) { throw 'Installer wrote the wrong executable architecture' }
+    $subsystem = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3c) + 24 + 68)
+    if ($subsystem -ne 2) { throw 'Installed executable can create a console window' }
     $entries = @(Get-ChildItem 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall' | Where-Object PSChildName -Like 'AniList-Arr-Sync*_is1')
     if ($entries.Count -ne 1 -or $entries[0].PSChildName -ne 'AniList-Arr-Sync_is1') { throw 'Installer did not preserve one shared installation identity' }
 }
@@ -171,13 +188,21 @@ try {
     $listener.Stop()
     $stage = 'initial service install'
     Install ''
-    WaitHealthy
     AssertInstalledArchitecture $Arch
     if (Test-Path -LiteralPath (Join-Path $app 'update-owner')) { throw 'Direct installer created an ownership marker' }
     $registered = Get-CimInstance Win32_Service -Filter "Name='$service'"
     if ($registered.ServiceType -ne 'Own Process' -or !$registered.PathName.Contains((Join-Path $app 'anilist-arr-sync.exe')) -or !$registered.PathName.Contains($data) -or !$registered.PathName.Contains('--config')) {
         throw 'Service registration lost its type, executable, or persistent absolute paths'
     }
+    if ($registered.State -ne 'Stopped' -or $registered.StartMode -ne 'Auto') {
+        throw 'Fresh silent install must leave the service stopped and configured for automatic startup'
+    }
+    $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut("$desktop.lnk")
+    if ($shortcut.TargetPath -ne (Join-Path $app 'anilist-arr-sync.exe') -or !$shortcut.Arguments.Contains('--open-service-dashboard') -or !$shortcut.Arguments.Contains($service) -or !$shortcut.Arguments.Contains($data)) {
+        throw 'Service desktop icon lost the installed launcher, service name, or dashboard config path'
+    }
+    Start-Service -Name $service
+    WaitHealthy
     foreach ($owner in 'winget', 'chocolatey', '') {
         $stage = "service upgrade (owner=$owner)"
         Install $owner
@@ -185,20 +210,13 @@ try {
         $expectedOwner = if ($owner) { $owner } else { 'chocolatey' }
         if ((Get-Content -LiteralPath (Join-Path $app 'update-owner') -Raw).Trim() -ne $expectedOwner) { throw 'Ownership was not preserved/recreated during upgrade' }
     }
-    if ($PreviousInstaller) {
-        $stage = 'replace installer architecture and restore it'
-        $previousArch = if ($Arch -eq 'amd64') { 'arm64' } else { 'amd64' }
-        Install '' -Package $PreviousInstaller
-        WaitHealthy
-        AssertInstalledArchitecture $previousArch
-        Install ''
-        WaitHealthy
-        AssertInstalledArchitecture $Arch
-        if ((Get-Content -LiteralPath (Join-Path $app 'update-owner') -Raw).Trim() -ne 'chocolatey') { throw 'Architecture replacement lost package-manager ownership' }
-    }
     if ($env:RELEASE_MODE -eq 'production') {
-        & "$PSScriptRoot/verify-authenticode.ps1" -Path (Join-Path $app 'anilist-arr-sync.exe')
-        & "$PSScriptRoot/verify-authenticode.ps1" -Path (Join-Path $app 'unins000.exe')
+        if ($env:RELEASE_SIGN_WINDOWS -ceq 'true') {
+            & "$PSScriptRoot/verify-authenticode.ps1" -Path (Join-Path $app 'anilist-arr-sync.exe')
+            & "$PSScriptRoot/verify-authenticode.ps1" -Path (Join-Path $app 'unins000.exe')
+        } elseif ($env:RELEASE_SIGN_WINDOWS -cne 'false') {
+            throw "RELEASE_SIGN_WINDOWS must be 'true' or 'false' in production mode"
+        }
     }
     $stage = 'prepare tray desktop'
     EnsureTrayDesktop
@@ -207,6 +225,18 @@ try {
     if (Get-Service -Name $service -ErrorAction SilentlyContinue) { throw 'Desktop mode retained the Windows service' }
     $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($startup)
     if ($shortcut.TargetPath -ne (Join-Path $app 'anilist-arr-sync.exe') -or !$shortcut.Arguments.Contains('--tray') -or !$shortcut.Arguments.Contains($data)) { throw 'Desktop startup shortcut lost tray/data arguments' }
+    $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut("$desktop.lnk")
+    if ($shortcut.TargetPath -ne (Join-Path $app 'anilist-arr-sync.exe') -or !$shortcut.Arguments.Contains('--tray --open-dashboard') -or !$shortcut.Arguments.Contains($data) -or (Test-Path -LiteralPath "$desktop.url")) {
+        throw 'Tray desktop icon lost the installed launcher, browser option, or dashboard config path'
+    }
+    $stage = 'switch to manual startup with no desktop icon'
+    Install '' '' 'manual'
+    if (Get-Service -Name $service -ErrorAction SilentlyContinue) { throw 'Manual mode installed a Windows service' }
+    if (Test-Path -LiteralPath @($startup, "$desktop.lnk", "$desktop.url") | Where-Object { $_ }) {
+        throw 'Manual mode retained a startup or desktop shortcut'
+    }
+    $stage = 'restore desktop installation'
+    Install '' 'desktop'
     $stage = 'tray startup'
     StartTray
     WaitHealthy
@@ -232,14 +262,143 @@ try {
     StartTray
     WaitHealthy
     $stage = 'uninstall with active tray'
-    $uninstaller = Join-Path $app 'unins000.exe'
-    InvokeInstallerProcess $uninstaller @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
+    Uninstall
     if (!$tray.WaitForExit(30000)) { throw 'Uninstall left the tray runtime running' }
+    $tray = $null; $trayOutput = $null; $trayError = $null
     if (Test-Path -LiteralPath (Join-Path $app 'update-owner')) { throw 'Uninstall retained ownership marker' }
     if (Test-Path -LiteralPath (Join-Path $app 'anilist-arr-sync.exe')) { throw 'Uninstall retained executable' }
     if (Test-Path -LiteralPath $startup) { throw 'Uninstall retained startup shortcut' }
+    if (Test-Path -LiteralPath @("$desktop.lnk", "$desktop.url") | Where-Object { $_ }) { throw 'Uninstall retained desktop shortcut' }
     if (Test-Path -LiteralPath 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\AniList-Arr-Sync_is1') { throw 'Uninstall retained the shared installation record' }
     if (!(Test-Path -LiteralPath (Join-Path $data 'config.xml'))) { throw 'Uninstall deleted persistent user data' }
+
+    # External storage/backups and link targets outside the chosen data directory must always survive.
+    $outsideBackups = Join-Path $root 'outside-backups'
+    $outsideLinkTarget = Join-Path $root 'outside-link-target'
+    New-Item -ItemType Directory -Path $outsideBackups, (Join-Path $outsideLinkTarget 'nested') -Force | Out-Null
+    $outsideBackupFile = Join-Path $outsideBackups 'external-backup.zip'
+    $outsideTargetFile = Join-Path $outsideLinkTarget 'nested\must-survive.txt'
+    Set-Content -LiteralPath $outsideBackupFile -Value 'external backup'
+    Set-Content -LiteralPath $outsideTargetFile -Value 'outside junction target'
+
+    # Opted-in deletion for a custom DATADIR must stop an active tray first, resolve installation.ini
+    # before it is removed, delete the custom data directory, and avoid following links outside it.
+    $stage = 'reinstall for opted-in custom data deletion'
+    Install '' '' 'manual' $data
+    New-Item -ItemType Directory -Path (Join-Path $data 'backups') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $data 'backups\local-backup.zip') -Value 'local backup'
+    New-Item -ItemType Junction -Path (Join-Path $data 'external-link') -Target $outsideLinkTarget | Out-Null
+    New-Item -ItemType SymbolicLink -Path (Join-Path $data 'external-file-link.zip') -Target $outsideBackupFile | Out-Null
+    StartTray
+    WaitHealthy
+    $stage = 'opted-in uninstall deleting custom data directory with active tray'
+    Uninstall @('/DELETEAPPDATA')
+    if (!$tray.WaitForExit(30000)) { throw 'Opted-in uninstall left the tray runtime running' }
+    $tray = $null; $trayOutput = $null; $trayError = $null
+    if (Test-Path -LiteralPath $data) { throw 'Opted-in uninstall left custom data directory behind' }
+    if (!(Test-Path -LiteralPath $outsideBackupFile)) { throw 'Opted-in uninstall deleted external backup outside data directory' }
+    if (!(Test-Path -LiteralPath $outsideTargetFile)) { throw 'Opted-in uninstall followed directory junction outside data directory' }
+
+    # Opted-in deletion must also stop and remove a running Windows service before deleting data.
+    $stage = 'reinstall service for opted-in deletion'
+    Install '' 'service' '' $data
+    Start-Service -Name $service
+    WaitHealthy
+    $stage = 'opted-in uninstall deleting custom data directory with active service'
+    Uninstall @('/DELETEAPPDATA=1')
+    if (Get-Service -Name $service -ErrorAction SilentlyContinue) { throw 'Opted-in uninstall retained the Windows service' }
+    if (Test-Path -LiteralPath $data) { throw 'Opted-in service uninstall left custom data directory behind' }
+    if (!(Test-Path -LiteralPath $outsideBackupFile)) { throw 'Opted-in service uninstall touched files outside data directory' }
+
+    # Default data location (%ProgramData%\AniList-Arr-Sync): silent/default preservation, then opted-in deletion.
+    $stage = 'install using default data location'
+    $createdDefaultData = $true
+    Install '' '' 'manual' ''
+    if (!(Test-Path -LiteralPath $defaultData)) { throw 'Installer did not create the default data directory' }
+    New-Item -ItemType Directory -Path (Join-Path $defaultData 'backups') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $defaultData 'config.xml') -Value '<config/>'
+    Set-Content -LiteralPath (Join-Path $defaultData 'backups\default-backup.zip') -Value 'default backup'
+    $stage = 'default silent uninstall preserves default data location'
+    Uninstall
+    if (!(Test-Path -LiteralPath (Join-Path $defaultData 'config.xml')) -or !(Test-Path -LiteralPath (Join-Path $defaultData 'backups\default-backup.zip'))) {
+        throw 'Silent uninstall deleted default application data without explicit opt-in'
+    }
+    $stage = 'reinstall for explicit preserve parameter'
+    Install '' '' 'manual' ''
+    Uninstall @('/DELETEAPPDATA=0')
+    if (!(Test-Path -LiteralPath (Join-Path $defaultData 'config.xml'))) {
+        throw 'Uninstall with /DELETEAPPDATA=0 deleted default application data'
+    }
+    $stage = 'reinstall for missing installation.ini refusal'
+    Install '' '' 'manual' ''
+    Remove-Item -LiteralPath (Join-Path $app 'installation.ini') -Force
+    Uninstall @('/DELETEAPPDATA')
+    if (!(Test-Path -LiteralPath (Join-Path $defaultData 'config.xml'))) {
+        throw 'Uninstall assumed default data directory when installation.ini was missing'
+    }
+    $missingIniLog = Get-Content -LiteralPath $lastInstallerLog -Raw
+    if (!$missingIniLog.Contains('not deleted')) {
+        throw 'Uninstall log did not report refusal when installation.ini was missing'
+    }
+    $stage = 'reinstall for opted-in default data deletion'
+    Install '' '' 'manual' ''
+    $stage = 'opted-in uninstall deleting default data location'
+    Uninstall @('/DELETEAPPDATA=1')
+    if (Test-Path -LiteralPath $defaultData) { throw 'Opted-in uninstall left default data directory behind' }
+    if (!(Test-Path -LiteralPath $outsideBackupFile)) { throw 'Default data deletion touched files outside data directory' }
+
+    # Reject unsafe deletion targets and report the path left behind without deleting anything unsafe.
+    $unsafeLinkReal = Join-Path $root 'unsafe-link-real'
+    $unsafeLink = Join-Path $root 'unsafe-link'
+    New-Item -ItemType Directory -Path (Join-Path $unsafeLinkReal 'sub') -Force | Out-Null
+    $unsafeLinkSentinel = Join-Path $unsafeLinkReal 'keep.txt'
+    $unsafeSubSentinel = Join-Path $unsafeLinkReal 'sub\keep-sub.txt'
+    Set-Content -LiteralPath $unsafeLinkSentinel -Value 'must survive'
+    Set-Content -LiteralPath $unsafeSubSentinel -Value 'must survive sub'
+    New-Item -ItemType Junction -Path $unsafeLink -Target $unsafeLinkReal | Out-Null
+    $unsafeSeedData = Join-Path $root 'unsafe-seed-data'
+    $appSentinel = Join-Path $app 'keep-in-app.txt'
+    $otherProfile = Join-Path (Split-Path $env:USERPROFILE -Parent) 'Default'
+    foreach ($unsafeCase in @(
+        @{ Name = 'drive root'; Path = 'C:\'; MustExist = 'C:\' },
+        @{ Name = 'shared ProgramData'; Path = $env:ProgramData; MustExist = $env:ProgramData },
+        @{ Name = 'Windows directory'; Path = $env:SystemRoot; MustExist = $env:SystemRoot },
+        @{ Name = 'other user profile'; Path = $otherProfile; MustExist = $otherProfile },
+        @{ Name = 'installation directory'; Path = $app; MustExist = $appSentinel; CreateSentinel = $true },
+        @{ Name = 'parent of installation directory'; Path = $root; MustExist = $outsideBackupFile },
+        @{ Name = 'junction target'; Path = $unsafeLink; MustExist = $unsafeLinkSentinel },
+        @{ Name = 'parent junction traversal'; Path = (Join-Path $unsafeLink 'sub'); MustExist = $unsafeSubSentinel }
+    )) {
+        $stage = "reject unsafe deletion target ($($unsafeCase.Name))"
+        Install '' '' 'manual' $unsafeSeedData
+        if ($unsafeCase.CreateSentinel) { Set-Content -LiteralPath $appSentinel -Value 'must survive' }
+        Set-Content -LiteralPath (Join-Path $app 'installation.ini') -Value "[Installation]`r`nServiceName=$service`r`nDataDir=$($unsafeCase.Path)`r`n"
+        Uninstall @('/DELETEAPPDATA')
+        if (!(Test-Path -LiteralPath $unsafeCase.MustExist)) { throw "Unsafe target ($($unsafeCase.Name)) was deleted" }
+        if ($unsafeCase.CreateSentinel -and (Test-Path -LiteralPath $appSentinel)) { Remove-Item -LiteralPath $appSentinel -Force }
+        $logText = Get-Content -LiteralPath $lastInstallerLog -Raw
+        if (!$logText.Contains($unsafeCase.Path) -or !$logText.Contains('not deleted')) {
+            throw "Uninstall log did not clearly report refusal for $($unsafeCase.Name): $($unsafeCase.Path)"
+        }
+    }
+
+    # Report deletion failures clearly, including the path left behind.
+    $stage = 'report deletion failure with locked file'
+    $lockedData = Join-Path $root 'locked-data'
+    Install '' '' 'manual' $lockedData
+    $lockedFile = Join-Path $lockedData 'locked.db'
+    Set-Content -LiteralPath $lockedFile -Value 'locked'
+    $lockStream = [IO.File]::Open($lockedFile, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    try {
+        Uninstall @('/DELETEAPPDATA')
+    } finally {
+        $lockStream.Dispose()
+    }
+    if (!(Test-Path -LiteralPath $lockedData)) { throw 'Locked data directory unexpectedly disappeared' }
+    $lockedLogText = Get-Content -LiteralPath $lastInstallerLog -Raw
+    if (!$lockedLogText.Contains($lockedData) -or !$lockedLogText.Contains('Could not')) {
+        throw "Uninstall log did not report deletion failure and left-behind path: $lockedData"
+    }
 } catch {
     Write-Host "Installer fixture failed: mode=$env:RELEASE_MODE, arch=$Arch, stage=$stage"
     Write-Host $_.ScriptStackTrace
@@ -263,10 +422,21 @@ try {
     }
     if (Test-Path -LiteralPath (Join-Path $app 'unins000.exe')) {
         $stage = 'cleanup uninstall'
-        InvokeInstallerProcess (Join-Path $app 'unins000.exe') @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
+        Uninstall
+    }
+    if ($createdDefaultData -and (Test-Path -LiteralPath $defaultData)) {
+        Remove-Item -LiteralPath $defaultData -Recurse -Force
     }
     # Delete only the uniquely created fixture tree beneath this workspace.
     $resolved = [IO.Path]::GetFullPath($root)
     if ([IO.Path]::GetDirectoryName($resolved) -ne $releaseRoot -or [IO.Path]::GetFileName($resolved) -notlike 'install-test-*') { throw 'Unsafe fixture cleanup target' }
-    if (Test-Path -LiteralPath $resolved) { Remove-Item -LiteralPath $resolved -Recurse -Force }
+    if (Test-Path -LiteralPath $resolved) {
+        Get-ChildItem -LiteralPath $resolved -Recurse -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint } |
+            ForEach-Object {
+                if ($_.PSIsContainer) { [IO.Directory]::Delete($_.FullName, $false) }
+                else { [IO.File]::Delete($_.FullName) }
+            }
+        Remove-Item -LiteralPath $resolved -Recurse -Force
+    }
 }

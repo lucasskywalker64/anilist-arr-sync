@@ -1,5 +1,10 @@
 name: Release tools and embedded frontend
 description: Install pinned OSS packaging tools, then build the embedded frontend
+inputs:
+  frontend-artifact:
+    description: Frontend artifact built and license-checked by this workflow
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -16,18 +21,83 @@ runs:
         $setup = Get-Process WWAHost -ErrorAction SilentlyContinue | Where-Object SessionId -eq $session
         Write-Host "Completing desktop setup in session $session ($(@($setup).Count) privacy setup processes)"
         $setup | Stop-Process -Force
+    - name: Locate pinned Go toolchain
+      id: go-toolchain
+      shell: pwsh
+      run: |
+        $module = Get-Content go.mod -Raw
+        if ($module -notmatch '(?m)^go ([0-9]+\.[0-9]+\.[0-9]+)\s*$') { throw 'Expected an exact Go version in go.mod' }
+        $version = $Matches[1]
+        $architecture = $env:RUNNER_ARCH.ToLowerInvariant()
+        $path = Join-Path $env:RUNNER_TOOL_CACHE "go/$version/$architecture"
+        # setup-go installs on D: and links from C: on hosted Windows runners
+        # with both drives. Cache the payload and recreate links after restore.
+        $physicalPath = $path
+        if ($env:RUNNER_ENVIRONMENT -eq 'github-hosted' -and $path.StartsWith('C:', [StringComparison]::OrdinalIgnoreCase) -and (Test-Path 'D:\')) {
+          $physicalPath = 'D:' + $path.Substring(2)
+        }
+        "version=$version" >> $env:GITHUB_OUTPUT
+        "path=$path" >> $env:GITHUB_OUTPUT
+        "physical-path=$physicalPath" >> $env:GITHUB_OUTPUT
+    - name: Restore Go toolchain
+      id: toolchain-cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ steps.go-toolchain.outputs.physical-path }}
+          ${{ steps.go-toolchain.outputs.physical-path }}.complete
+        key: release-go-toolchain-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-toolchain.outputs.version }}
+    - name: Register restored Go toolchain
+      if: steps.toolchain-cache.outputs.cache-hit == 'true'
+      shell: pwsh
+      env:
+        GO_CACHE_LOGICAL: ${{ steps.go-toolchain.outputs.path }}
+        GO_CACHE_PHYSICAL: ${{ steps.go-toolchain.outputs.physical-path }}
+      run: |
+        if ($env:GO_CACHE_LOGICAL -ne $env:GO_CACHE_PHYSICAL) {
+          if (!(Test-Path -LiteralPath $env:GO_CACHE_LOGICAL)) {
+            New-Item -ItemType Directory -Path (Split-Path $env:GO_CACHE_LOGICAL) -Force | Out-Null
+            New-Item -ItemType Junction -Path $env:GO_CACHE_LOGICAL -Target $env:GO_CACHE_PHYSICAL | Out-Null
+          }
+          if (!(Test-Path -LiteralPath "$env:GO_CACHE_LOGICAL.complete")) {
+            New-Item -ItemType File -Path "$env:GO_CACHE_LOGICAL.complete" | Out-Null
+          }
+        }
     - uses: actions/setup-go@v5
+      id: go
       with:
         go-version-file: go.mod
+        cache: false
+    - name: Locate Go caches
+      id: go-cache
+      shell: pwsh
+      run: |
+        "build=$(go env GOCACHE)" >> $env:GITHUB_OUTPUT
+        "modules=$(go env GOMODCACHE)" >> $env:GITHUB_OUTPUT
+        "commit=$(git rev-parse HEAD)" >> $env:GITHUB_OUTPUT
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ${{ steps.go-cache.outputs.build }}
+          ${{ steps.go-cache.outputs.modules }}
+        key: release-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ steps.go-cache.outputs.commit }}
+        restore-keys: |
+          release-go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}-
     - uses: actions/setup-node@v4
       with:
         node-version: '24'
-        cache: npm
+        cache: ${{ inputs.frontend-artifact == '' && 'npm' || '' }}
         cache-dependency-path: web/package-lock.json
     - uses: actions/setup-python@v5
       with:
         python-version: '3.13'
+    - uses: actions/download-artifact@v4
+      if: inputs.frontend-artifact != ''
+      with:
+        name: ${{ inputs.frontend-artifact }}
+        path: web/dist
     - name: Build and typecheck embedded UI
+      if: inputs.frontend-artifact == ''
       shell: pwsh
       working-directory: web
       run: |
@@ -38,6 +108,7 @@ runs:
         npm run build
         if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed' }
     - name: Check audited runtime licenses and notices
+      if: inputs.frontend-artifact == ''
       shell: pwsh
       run: |
         python packaging/licenses.py --check
@@ -61,14 +132,14 @@ runs:
         if ($tool.ExitCode -ne 0) { throw 'Inno Setup installation failed' }
         "${env:ProgramFiles}\Inno Setup 7" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
     - name: Install signing bridge dependencies
-      if: env.RELEASE_MODE == 'production'
+      if: env.RELEASE_MODE == 'production' && env.RELEASE_SIGN_WINDOWS == 'true'
       working-directory: packaging
       shell: pwsh
       run: |
         npm ci --ignore-scripts --no-audit --no-fund
         if ($LASTEXITCODE -ne 0) { throw 'Signing bridge installation failed' }
     - name: Install pinned official SignPath connector
-      if: env.RELEASE_MODE == 'production'
+      if: env.RELEASE_MODE == 'production' && env.RELEASE_SIGN_WINDOWS == 'true'
       uses: actions/checkout@v4
       with:
         repository: SignPath/github-action-submit-signing-request

@@ -12,6 +12,8 @@ import (
 var trayUser32 = windows.NewLazySystemDLL("user32.dll")
 var trayShell32 = windows.NewLazySystemDLL("shell32.dll")
 
+const trayWindowClass = "AniListArrSyncTray"
+
 type trayClass struct {
 	size, style                        uint32
 	callback                           uintptr
@@ -47,7 +49,11 @@ type trayIcon struct {
 
 // startTray hosts the icon on its own Windows message-loop thread. The same
 // signed executable runs the service, tray, and detached update worker.
-func startTray(url func() string, quit func()) (func(), error) {
+func startTray(configPath string, url func() string, quit func()) (func(), error) {
+	title, err := windows.UTF16PtrFromString(configPath)
+	if err != nil {
+		return nil, err
+	}
 	type result struct {
 		window uintptr
 		err    error
@@ -118,7 +124,7 @@ func startTray(url func() string, quit func()) (func(), error) {
 			value, _, _ := defWindow.Call(hwnd, uintptr(message), wparam, lparam)
 			return value
 		})
-		name, _ := windows.UTF16PtrFromString("AniListArrSyncTray")
+		name, _ := windows.UTF16PtrFromString(trayWindowClass)
 		var instance windows.Handle
 		if err := windows.GetModuleHandleEx(0, nil, &instance); err != nil {
 			ready <- result{err: err}
@@ -134,7 +140,7 @@ func startTray(url func() string, quit func()) (func(), error) {
 		defer func() {
 			_, _, _ = trayUser32.NewProc("UnregisterClassW").Call(uintptr(unsafe.Pointer(name)), uintptr(instance))
 		}()
-		window, _, err := trayUser32.NewProc("CreateWindowExW").Call(0, uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(name)), 0, 0, 0, 0, 0, 0, 0, uintptr(instance), 0)
+		window, _, err := trayUser32.NewProc("CreateWindowExW").Call(0, uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(title)), 0, 0, 0, 0, 0, 0, 0, uintptr(instance), 0)
 		if window == 0 {
 			ready <- result{err: fmt.Errorf("create tray window: %w", err)}
 			return
@@ -171,4 +177,30 @@ func startTray(url func() string, quit func()) (func(), error) {
 		_, _, _ = trayUser32.NewProc("PostMessageW").Call(r.window, 0x8002, 0, 0)
 		<-done
 	}, nil
+}
+
+func openExistingTrayDashboard(configPath string) (bool, error) {
+	pid, err := trayDashboardProcessID(configPath)
+	if err != nil || pid == 0 {
+		return false, err
+	}
+	return true, openInstalledDashboard(configPath, pid)
+}
+
+func trayDashboardProcessID(configPath string) (uint32, error) {
+	title, err := windows.UTF16PtrFromString(configPath)
+	if err != nil {
+		return 0, err
+	}
+	name, _ := windows.UTF16PtrFromString(trayWindowClass)
+	window, _, _ := trayUser32.NewProc("FindWindowW").Call(uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(title)))
+	if window == 0 {
+		return 0, nil
+	}
+	var pid uint32
+	thread, _, err := trayUser32.NewProc("GetWindowThreadProcessId").Call(window, uintptr(unsafe.Pointer(&pid)))
+	if thread == 0 {
+		return 0, fmt.Errorf("identify the running tray app: %w", err)
+	}
+	return pid, nil
 }

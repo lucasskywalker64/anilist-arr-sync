@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import {
     Save,
     Sliders,
@@ -25,6 +25,7 @@
   import Alert from "../common/Alert.svelte";
   import Label from "../common/Label.svelte";
   import AniListStatusPicker from "./AniListStatusPicker.svelte";
+  import CountryProfileOverrides from "./CountryProfileOverrides.svelte";
   import { api } from "../../lib/api";
   import type { AppConfig, NotificationItem, ServarrConnectionOptions } from "../../lib/types";
 
@@ -33,13 +34,15 @@
 
   const servarrServices = [
     { kind: "sonarr", name: "Sonarr", versions: "v3/v4", port: 8989, url: "sonarrUrl", key: "sonarrApiKey",
-      profile: "sonarrQualityProfileId", folder: "sonarrRootFolderPath", monitor: "sonarrMonitorOnAdd", search: "sonarrSearchOnAdd" },
+      profile: "sonarrQualityProfileId", overrides: "sonarrQualityProfileOverrides", folder: "sonarrRootFolderPath", monitor: "sonarrMonitorOnAdd", search: "sonarrSearchOnAdd" },
     { kind: "radarr", name: "Radarr", versions: "v3/v4/v5", port: 7878, url: "radarrUrl", key: "radarrApiKey",
-      profile: "radarrQualityProfileId", folder: "radarrRootFolderPath", monitor: "radarrMonitorOnAdd", search: "radarrSearchOnAdd" },
+      profile: "radarrQualityProfileId", overrides: "radarrQualityProfileOverrides", folder: "radarrRootFolderPath", monitor: "radarrMonitorOnAdd", search: "radarrSearchOnAdd" },
   ] as const;
   type ServarrService = (typeof servarrServices)[number];
+
   let servarrOptions: Partial<Record<ServarrService["kind"], ServarrConnectionOptions>> = {};
   let testingServarr: ServarrService["kind"] | null = null;
+  let overridesResetToken = 0;
 
   let savedConfig: AppConfig | null = null;
   let formConfig: Partial<AppConfig> = {};
@@ -49,7 +52,7 @@
   let formPasswordConfirm = "";
 
   let showAdvanced = false;
-  let loading = false;
+  let loading = true;
   let saving = false;
   let errorMsg = "";
   let successMsg = "";
@@ -78,14 +81,130 @@
       ? "Add Notification"
       : `Add Notification - ${notifType === "DISCORD" ? "Discord" : "Webhook"}`;
 
-  $: hasPendingChanges =
-    (savedConfig
-      ? JSON.stringify(savedConfig) !== JSON.stringify(formConfig)
-      : false) || !!formPassword;
+  const conditionalFieldGroups: ReadonlyArray<{
+    toggle: keyof AppConfig;
+    fields: ReadonlyArray<keyof AppConfig>;
+  }> = [
+    {
+      toggle: "enableSsl",
+      fields: ["sslPort"],
+    },
+    {
+      toggle: "useProxy",
+      fields: [
+        "proxyType",
+        "proxyHostname",
+        "proxyPort",
+        "proxyUsername",
+        "proxyPassword",
+        "proxyIgnoredAddresses",
+        "proxyBypassLocalAddresses",
+      ],
+    },
+  ];
+
+  function copyOrDeleteField(
+    target: Partial<AppConfig>,
+    source: AppConfig,
+    field: keyof AppConfig,
+  ) {
+    if (field in source) {
+      (target as Record<string, unknown>)[field] = source[field];
+    } else {
+      delete target[field];
+    }
+  }
+
+  function projectEffectiveConfig(
+    form: Partial<AppConfig>,
+    saved: AppConfig,
+  ): Partial<AppConfig> {
+    const effective: Partial<AppConfig> = { ...saved, ...form };
+    for (const group of conditionalFieldGroups) {
+      const formEnabled = Boolean(form[group.toggle]);
+      const savedEnabled = Boolean(saved[group.toggle]);
+      if (formEnabled === savedEnabled) {
+        copyOrDeleteField(effective, saved, group.toggle);
+      }
+      if (!formEnabled) {
+        for (const field of group.fields) {
+          copyOrDeleteField(effective, saved, field);
+        }
+      }
+    }
+    if (Boolean(form.useProxy) && !effective.proxyType) {
+      effective.proxyType = "Http";
+    }
+    return effective;
+  }
+
+  function computePendingChanges(
+    saved: AppConfig | null,
+    form: Partial<AppConfig>,
+    password: string,
+    passwordConfirm: string,
+  ): boolean {
+    return (
+      (saved
+        ? JSON.stringify(saved) !== JSON.stringify(projectEffectiveConfig(form, saved))
+        : false) ||
+      Boolean(password) ||
+      Boolean(passwordConfirm)
+    );
+  }
+
+  export function hasUnsavedChanges(): boolean {
+    return computePendingChanges(
+      savedConfig,
+      formConfig,
+      formPassword,
+      formPasswordConfirm,
+    );
+  }
+
+  $: hasPendingChanges = computePendingChanges(
+    savedConfig,
+    formConfig,
+    formPassword,
+    formPasswordConfirm,
+  );
+
+  let beforeUnloadRegistered = false;
+
+  function handleBeforeUnload(event: BeforeUnloadEvent) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+
+  function syncBeforeUnload(active: boolean) {
+    if (typeof window === "undefined") return;
+    if (active && !beforeUnloadRegistered) {
+      window.addEventListener("beforeunload", handleBeforeUnload);
+      beforeUnloadRegistered = true;
+    } else if (!active && beforeUnloadRegistered) {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      beforeUnloadRegistered = false;
+    }
+  }
+
+  $: syncBeforeUnload(hasPendingChanges);
+
+  onDestroy(() => {
+    syncBeforeUnload(false);
+  });
 
   function isFieldDirty(field: keyof AppConfig): boolean {
     if (!savedConfig) return false;
-    return savedConfig[field] !== formConfig[field];
+    const effective = projectEffectiveConfig(formConfig, savedConfig);
+    return JSON.stringify(savedConfig[field]) !== JSON.stringify(effective[field]);
+  }
+
+  function normalizeOverridesMap(raw?: Record<string, number>): Record<string, number> {
+    if (!raw) return {};
+    const entries = Object.entries(raw)
+      .map(([country, id]) => [country.trim().toUpperCase(), id] as const)
+      .sort(([a], [b]) => a.localeCompare(b));
+    return Object.fromEntries(entries);
   }
 
   let notifRequestId = 0;
@@ -118,7 +237,12 @@
     loading = true;
     errorMsg = "";
     try {
-      savedConfig = await api.getConfig();
+      const loaded = await api.getConfig();
+      savedConfig = {
+        ...loaded,
+        sonarrQualityProfileOverrides: normalizeOverridesMap(loaded.sonarrQualityProfileOverrides),
+        radarrQualityProfileOverrides: normalizeOverridesMap(loaded.radarrQualityProfileOverrides),
+      };
       formConfig = JSON.parse(JSON.stringify(savedConfig));
     } catch (e: any) {
       errorMsg = e.message || "Failed to load configuration";
@@ -135,7 +259,7 @@
     try {
       const options = await api.testServarr(service.kind, url, key === "******" ? "" : key);
       if (formConfig[service.url]?.trim() === url && (formConfig[service.key]?.trim() ?? "") === key) {
-        servarrOptions[service.kind] = options;
+        servarrOptions = { ...servarrOptions, [service.kind]: options };
       }
     } catch (err) {
       errorMsg = err instanceof Error ? err.message : `Could not load ${service.name} options.`;
@@ -144,44 +268,75 @@
     }
   }
 
-  async function saveConfig() {
-    if (!hasPendingChanges || saving) return;
+  let activeSavePromise: Promise<boolean> | null = null;
+
+  export async function saveConfig(): Promise<boolean> {
+    while (activeSavePromise) {
+      const ok = await activeSavePromise;
+      if (!ok) return false;
+      if (!hasUnsavedChanges()) return true;
+    }
+    if (!hasUnsavedChanges()) return false;
     if (formPassword || formPasswordConfirm) {
       if (formPassword !== formPasswordConfirm) {
         errorMsg = "Passwords do not match";
-        return;
+        return false;
       }
     }
     saving = true;
     errorMsg = "";
     successMsg = "";
-    try {
-      const payload: Partial<AppConfig> = { ...formConfig };
-      delete payload.wizardCompleted;
-      if (formPassword) {
-        payload.password = formPassword;
+    const submittedEffective = savedConfig
+      ? projectEffectiveConfig(formConfig, savedConfig)
+      : { ...formConfig };
+    const submittedEffectiveJson = JSON.stringify(submittedEffective);
+    const submittedFormJson = JSON.stringify(formConfig);
+    const submittedPassword = formPassword;
+    const submittedPasswordConfirm = formPasswordConfirm;
+
+    activeSavePromise = (async () => {
+      try {
+        const payload: Partial<AppConfig> = { ...submittedEffective };
+        delete payload.wizardCompleted;
+        if (submittedPassword) {
+          payload.password = submittedPassword;
+        }
+        const res = await api.updateConfig(payload);
+        savedConfig = JSON.parse(submittedEffectiveJson);
+        if (JSON.stringify(formConfig) === submittedFormJson) {
+          formConfig = JSON.parse(submittedEffectiveJson);
+          overridesResetToken += 1;
+        }
+        if (
+          formPassword === submittedPassword &&
+          formPasswordConfirm === submittedPasswordConfirm
+        ) {
+          formPassword = "";
+          formPasswordConfirm = "";
+        }
+        if (res?.restartRequired) {
+          successMsg =
+            "Configuration changes saved. A service restart is required for these changes to take effect.";
+        } else {
+          successMsg = "Configuration changes saved successfully.";
+        }
+        return true;
+      } catch (e: any) {
+        errorMsg = e.message || "Failed to save configuration";
+        return false;
+      } finally {
+        saving = false;
+        activeSavePromise = null;
       }
-      const res = await api.updateConfig(payload);
-      savedConfig = JSON.parse(JSON.stringify(formConfig));
-      formPassword = "";
-      formPasswordConfirm = "";
-      if (res?.restartRequired) {
-        successMsg =
-          "Configuration changes saved. A service restart is required for these changes to take effect.";
-      } else {
-        successMsg = "Configuration changes saved successfully.";
-      }
-    } catch (e: any) {
-      errorMsg = e.message || "Failed to save configuration";
-    } finally {
-      saving = false;
-    }
+    })();
+    return activeSavePromise;
   }
 
   function resetConfig() {
     if (savedConfig) {
       formConfig = JSON.parse(JSON.stringify(savedConfig));
       servarrOptions = {};
+      overridesResetToken += 1;
       formPassword = "";
       formPasswordConfirm = "";
     }
@@ -412,7 +567,11 @@
         <Alert kind="success">{successMsg}</Alert>
       {/if}
 
-      {#if subTab === "general"}
+      {#if subTab !== "connect" && !savedConfig}
+        {#if loading}
+          <p role="status">Loading settings...</p>
+        {/if}
+      {:else if subTab === "general"}
         {#if openOnboarding && savedConfig && !savedConfig.wizardCompleted}
           <FieldSet legend="Service Setup">
             <Button disabled={hasPendingChanges || saving}
@@ -540,7 +699,8 @@
           >
             <select
               class="formInput"
-              bind:value={formConfig.authenticationMethod}
+              value={formConfig.authenticationMethod || "Forms"}
+              on:change={(e) => (formConfig.authenticationMethod = e.currentTarget.value as AppConfig["authenticationMethod"])}
             >
               <option value="Basic">Basic (Browser popup)</option>
               <option value="Forms">Forms (Login Page)</option>
@@ -554,7 +714,8 @@
           >
             <select
               class="formInput"
-              bind:value={formConfig.authenticationRequired}
+              value={formConfig.authenticationRequired || "DisabledForLocalAddresses"}
+              on:change={(e) => (formConfig.authenticationRequired = e.currentTarget.value as AppConfig["authenticationRequired"])}
             >
               <option value="Enabled">Enabled (All Clients)</option>
               <option value="DisabledForLocalAddresses"
@@ -600,7 +761,7 @@
             />
           </FormGroup>
 
-          {#if formPassword}
+          {#if formPassword || formPasswordConfirm}
             <FormGroup
               label="Password Confirmation"
               helpText="Confirm the password entered above"
@@ -659,7 +820,11 @@
 
           {#if formConfig.useProxy}
             <FormGroup label="Proxy Type" isDirty={isFieldDirty("proxyType")}>
-              <select class="formInput" bind:value={formConfig.proxyType}>
+              <select
+                class="formInput"
+                value={formConfig.proxyType || "Http"}
+                on:change={(e) => (formConfig.proxyType = e.currentTarget.value)}
+              >
                 <option value="Http">HTTP(S)</option>
                 <option value="Socks5">SOCKS5</option>
               </select>
@@ -740,7 +905,11 @@
             helpText="Minimum severity level recorded to disk logs"
             isDirty={isFieldDirty("logLevel")}
           >
-            <select class="formInput" bind:value={formConfig.logLevel}>
+            <select
+              class="formInput"
+              value={formConfig.logLevel || "Info"}
+              on:change={(e) => (formConfig.logLevel = e.currentTarget.value)}
+            >
               <option value="Trace">Trace</option>
               <option value="Debug">Debug</option>
               <option value="Info">Info</option>
@@ -810,8 +979,9 @@
             >
               <select
                 class="formInput"
-                bind:value={formConfig.updateMechanism}
-                on:change={() => {
+                value={formConfig.updateMechanism || "BuiltIn"}
+                on:change={(e) => {
+                  formConfig.updateMechanism = e.currentTarget.value;
                   if (formConfig.updateMechanism !== "BuiltIn") {
                     formConfig.updateAutomatically = false;
                   }
@@ -1036,6 +1206,12 @@
           </FormGroup>
         </FieldSet>
       {:else if subTab === "servarr"}
+        <datalist id="anilist-country-codes">
+          <option value="CN">China</option>
+          <option value="KR">South Korea</option>
+          <option value="JP">Japan</option>
+          <option value="TW">Taiwan</option>
+        </datalist>
         {#each servarrServices as service}
           {@const options = servarrOptions[service.kind]}
           <FieldSet legend={service.name}>
@@ -1068,6 +1244,18 @@
                   bind:value={formConfig[service.profile]} />
               {/if}
             </FormGroup>
+            <CountryProfileOverrides
+              serviceKind={service.kind}
+              serviceName={service.name}
+              overrides={formConfig[service.overrides] ?? {}}
+              qualityProfiles={options?.qualityProfiles ?? []}
+              isDirty={isFieldDirty(service.overrides)}
+              disabled={saving}
+              resetToken={overridesResetToken}
+              on:change={(e) => {
+                formConfig = { ...formConfig, [service.overrides]: e.detail };
+              }}
+            />
             <FormGroup label="Root Folder" forId={`${service.kind}-settings-folder`} isDirty={isFieldDirty(service.folder)}>
               {#if options?.rootFolders?.length}
                 <select id={`${service.kind}-settings-folder`} class="formInput"

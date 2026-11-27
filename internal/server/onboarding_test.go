@@ -135,9 +135,18 @@ func TestOnboardingConfig(t *testing.T) {
 		"radarrUrl":"http://radarr:7878","radarrApiKey":"radarr-secret","radarrQualityProfileId":11,"radarrRootFolderPath":"/movies","radarrMonitorOnAdd":false,
 		"sonarrSearchOnAdd":true,"radarrSearchOnAdd":true,"syncIntervalHours":8,"firstRunDryRun":true
 	}`
-	for _, key := range []string{"SYNC__FIRSTRUNDRYRUN", "SONARR__SEARCHONADD", "RADARR__SEARCHONADD"} {
-		t.Run("conflicting environment override/"+key, func(t *testing.T) {
-			t.Setenv("ANILIST_SYNC__"+key, "false")
+	for _, tc := range []struct {
+		key   string
+		value string
+	}{
+		{"SYNC__FIRSTRUNDRYRUN", "false"},
+		{"SONARR__SEARCHONADD", "false"},
+		{"RADARR__SEARCHONADD", "false"},
+		{"SONARR__QUALITYPROFILEOVERRIDES__CN", "4"},
+		{"RADARR__QUALITYPROFILEOVERRIDES__KR", "6"},
+	} {
+		t.Run("conflicting environment override/"+tc.key, func(t *testing.T) {
+			t.Setenv("ANILIST_SYNC__"+tc.key, tc.value)
 			if res := update(setup); res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "environment variables override") {
 				t.Fatalf("setup under a conflicting environment override: %d %s", res.Code, res.Body)
 			}

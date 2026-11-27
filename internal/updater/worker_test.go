@@ -368,7 +368,7 @@ func TestWorkerRecovery(t *testing.T) {
 			p := fixturePlan(t)
 			if failure == "commit" {
 				p.Expected.Channel = "develop"
-				p.Expected.Version = "v1.1.0-nightly.20261111010000.bbbbbbb"
+				p.Expected.Version = "v1.1.0-nightly.20261116.123"
 			}
 			f := &fixtureControl{plan: p, failure: failure}
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

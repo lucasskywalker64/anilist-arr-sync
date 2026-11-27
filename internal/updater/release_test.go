@@ -215,7 +215,7 @@ func TestReleaseVerification(t *testing.T) {
 	for _, branch := range []string{"main", "develop"} {
 		id := newBuild
 		if branch == "develop" {
-			id = Identity{Version: "v1.2.0-nightly.20261111010000.bbbbbbb", Commit: newBuild.Commit, Channel: branch}
+			id = Identity{Version: "v1.2.0-nightly.20261116.123", Commit: newBuild.Commit, Channel: branch}
 		}
 		for _, platform := range []string{"linux", "windows"} {
 			for _, arch := range []string{"amd64", "arm64"} {
@@ -304,7 +304,7 @@ func TestReleaseVerification(t *testing.T) {
 }
 
 func TestChannelIsolationAndNightlyCooldown(t *testing.T) {
-	id := Identity{Version: "v1.2.0-nightly.20261111010000.bbbbbbb", Commit: newBuild.Commit, Channel: "develop"}
+	id := Identity{Version: "v1.2.0-nightly.20261116.123", Commit: newBuild.Commit, Channel: "develop"}
 	f := newFixture(t, id, "linux", "amd64", []byte("new"))
 	e := fixtureEngine(t, f, "linux", "amd64")
 	status, err := e.Status(context.Background())

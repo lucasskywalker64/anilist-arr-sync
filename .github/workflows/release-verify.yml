@@ -7,7 +7,7 @@ on:
       - 'LICENSE'
       - 'SOURCE.md'
       - 'THIRD_PARTY_NOTICES.txt'
-      - 'license.go'
+      - 'legal.go'
       - 'packaging/**'
       - 'cmd/**'
       - '**/*.go'
@@ -21,7 +21,49 @@ on:
 permissions:
   contents: read
 jobs:
+  publication:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify publication failure paths
+        run: python -m unittest discover -s packaging -p '*_test.py'
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build and typecheck embedded UI
+        working-directory: web
+        run: |
+          npm ci
+          npm run check
+          npm run build
+      - name: Check audited runtime licenses and notices
+        run: python packaging/licenses.py --check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-frontend
+          path: web/dist/*
+          if-no-files-found: error
+          retention-days: 3
   snapshot:
+    needs: frontend
     strategy:
       fail-fast: false
       matrix:
@@ -38,6 +80,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/release-tools
+        with:
+          frontend-artifact: release-frontend
       - name: Verify installer process failure paths
         shell: pwsh
         run: ./packaging/test-installer-process.ps1
@@ -48,8 +92,6 @@ jobs:
         run: |
           $arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'amd64' }
           ./packaging/test-chocolatey.ps1 -ExpectedArchitecture $arch
-      - name: Verify publication failure paths
-        run: python -m unittest discover -s packaging -p '*_test.py'
       - name: Verify production action command boundaries
         run: node --test packaging/production.test.cjs
       - uses: actions/upload-artifact@v4
@@ -93,7 +135,7 @@ jobs:
           identity = json.loads(Path('.release/final/release.json').read_text())
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write('MINISIGN_PUBLIC_KEY=' + Path('.release/fixture-public-key.txt').read_text().strip() + '\n')
-              output.write('RELEASE_MODE=bootstrap\nRELEASE_VERSION=' + identity['version'] + '\nRELEASE_COMMIT=' + identity['commit'] + '\n')
+              output.write('RELEASE_MODE=fixture\nRELEASE_VERSION=' + identity['version'] + '\nRELEASE_COMMIT=' + identity['commit'] + '\n')
           PY
       - name: Verify both container architectures without publication
         env:
