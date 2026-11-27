@@ -508,6 +508,11 @@ class PublicationBoundary(unittest.TestCase):
             with self.assertRaises(ValueError):
                 module.render_release_notes('v1.0.0', commit, False, changelog_path=Path(temp, 'missing.md'))
 
+    def test_goreleaser_secret_templates_use_direct_env_references(self):
+        config = (Path(__file__).resolve().parents[1] / '.goreleaser.yaml').read_text(encoding='utf-8')
+        self.assertIn("token: '{{ .Env.SCOOP_BUCKET_TOKEN }}'", config)
+        self.assertIn("private_key: '{{ .Env.AUR_SSH_PRIVATE_KEY }}'", config)
+
 
 if __name__ == '__main__':
     unittest.main()
