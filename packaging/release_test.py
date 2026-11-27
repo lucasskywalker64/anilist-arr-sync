@@ -302,7 +302,7 @@ class PublicationBoundary(unittest.TestCase):
             'packaging/release_test.py': False, 'packaging/production.test.cjs': False,
             'packaging/test-installer.ps1': False, 'packaging/README.md': False,
             '.github/workflows/release-verify.yml': False,
-            'license.go': True, 'cmd/anilist-arr-sync/main.go': True,
+            'legal.go': True, 'cmd/anilist-arr-sync/main.go': True,
             'runtime.spec.go': True, 'cmd/anilist-arr-sync/runtime.spec.go': True,
             'internal/server/runtime.test.go': True, 'internal/server/test-runtime.go': True,
             'internal/server/api.go': True, 'internal/storage/migrations/001.sql': True,

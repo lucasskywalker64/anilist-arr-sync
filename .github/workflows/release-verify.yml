@@ -7,7 +7,7 @@ on:
       - 'LICENSE'
       - 'SOURCE.md'
       - 'THIRD_PARTY_NOTICES.txt'
-      - 'license.go'
+      - 'legal.go'
       - 'packaging/**'
       - 'cmd/**'
       - '**/*.go'
