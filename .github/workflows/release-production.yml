@@ -123,14 +123,8 @@ jobs:
       - name: Write release notes
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force .release | Out-Null
-          if ($env:RELEASE_SIGN_WINDOWS -ceq 'true') {
-            "AniList-Arr-Sync $env:RELEASE_VERSION from commit $env:RELEASE_COMMIT. Windows artifacts have timestamped SignPath signatures. Final checksums are Minisign-signed." | Set-Content .release/notes.md -Encoding utf8
-          } else {
-            "AniList-Arr-Sync $env:RELEASE_VERSION from commit $env:RELEASE_COMMIT. Windows artifacts omit Authenticode signatures for this release. Final checksums are Minisign-signed." | Set-Content .release/notes.md -Encoding utf8
-          }
-          "`nLicense: AGPL-3.0-only. No warranty.`n`n[Exact application source](https://github.com/lucasskywalker64/anilist-arr-sync/archive/$env:RELEASE_COMMIT.tar.gz). [Dependency source and build instructions](https://github.com/lucasskywalker64/anilist-arr-sync/blob/$env:RELEASE_COMMIT/SOURCE.md)." | Add-Content .release/notes.md -Encoding utf8
-          "`n[Code signing policy](https://github.com/lucasskywalker64/anilist-arr-sync/blob/$env:RELEASE_COMMIT/CODE_SIGNING.md) | [Privacy policy](https://github.com/lucasskywalker64/anilist-arr-sync/blob/$env:RELEASE_COMMIT/PRIVACY.md)" | Add-Content .release/notes.md -Encoding utf8
+          python packaging/release.py release-notes
+          if ($LASTEXITCODE -ne 0) { throw 'Release notes generation failed' }
       - name: Build once, sign when enabled, test installers, hash, and publish
         uses: ./.github/actions/production-release
         env:

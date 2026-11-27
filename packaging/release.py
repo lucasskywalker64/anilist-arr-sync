@@ -220,16 +220,79 @@ def publish_nightly(directory, version, commit, command=run):
             print('Nightly published; previous backup release retained because cleanup failed.')
 
 
+def extract_changelog(text, version):
+    heading = re.compile(rf'^##\s+\[?{re.escape(version)}\]?(?:\s+-\s+.*|\s*)$')
+    next_section = re.compile(r'^##\s+')
+    link_ref = re.compile(r'^\[[^\]]+\]:\s+\S+')
+    lines = text.splitlines()
+    matches = [index for index, line in enumerate(lines) if heading.match(line)]
+    if not matches:
+        raise ValueError(f'Missing changelog section for {version}')
+    if len(matches) > 1:
+        raise ValueError(f'Duplicate changelog section for {version}')
+    section = []
+    for line in lines[matches[0] + 1:]:
+        if next_section.match(line):
+            break
+        section.append(line)
+    while section and (not section[-1].strip() or link_ref.match(section[-1])):
+        section.pop()
+    body = '\n'.join(section).strip()
+    if not body:
+        raise ValueError(f'Empty changelog section for {version}')
+    return body
+
+
+def render_release_notes(version, commit, sign_windows, changelog_path=Path('CHANGELOG.md')):
+    if not changelog_path.is_file():
+        raise ValueError(f'Missing changelog file: {changelog_path}')
+    body = extract_changelog(changelog_path.read_text(encoding='utf-8'), version)
+    if sign_windows:
+        signing = (f'AniList-Arr-Sync {version} from commit {commit}. '
+                   'Windows artifacts have timestamped SignPath signatures. '
+                   'Final checksums are Minisign-signed.')
+    else:
+        signing = (f'AniList-Arr-Sync {version} from commit {commit}. '
+                   'Windows artifacts omit Authenticode signatures for this release. '
+                   'Final checksums are Minisign-signed.')
+    return (
+        f'{body}\n\n---\n\n'
+        f'{signing}\n\n'
+        'License: AGPL-3.0-only. No warranty.\n\n'
+        f'[Exact application source](https://github.com/{REPOSITORY}/archive/{commit}.tar.gz). '
+        f'[Dependency source and build instructions](https://github.com/{REPOSITORY}/blob/{commit}/SOURCE.md).\n\n'
+        f'[Code signing policy](https://github.com/{REPOSITORY}/blob/{commit}/CODE_SIGNING.md) | '
+        f'[Privacy policy](https://github.com/{REPOSITORY}/blob/{commit}/PRIVACY.md) | '
+        f'[Security policy](https://github.com/{REPOSITORY}/blob/{commit}/SECURITY.md)\n'
+    )
+
+
+def write_release_notes(output_path=Path('.release/notes.md'), changelog_path=Path('CHANGELOG.md')):
+    sign_flag = os.environ.get('RELEASE_SIGN_WINDOWS', '')
+    if sign_flag not in ('true', 'false'):
+        raise ValueError("RELEASE_SIGN_WINDOWS must be 'true' or 'false'")
+    notes = render_release_notes(
+        os.environ['RELEASE_VERSION'],
+        os.environ['RELEASE_COMMIT'],
+        sign_flag == 'true',
+        changelog_path=changelog_path,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(notes, encoding='utf-8')
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('operation', choices=['nightly-guard', 'publish-nightly'])
+    parser.add_argument('operation', choices=['nightly-guard', 'publish-nightly', 'release-notes'])
     args = parser.parse_args()
     if args.operation == 'nightly-guard':
         value = 'true' if nightly_guard(os.environ['RELEASE_COMMIT']) else 'false'
         with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
             output.write('changed=' + value + '\n')
-    else:
+    elif args.operation == 'publish-nightly':
         publish_nightly(Path('.release/final'), os.environ['RELEASE_VERSION'], os.environ['RELEASE_COMMIT'])
+    else:
+        write_release_notes()
 
 
 if __name__ == '__main__':
