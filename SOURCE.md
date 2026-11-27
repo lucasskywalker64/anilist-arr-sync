@@ -101,7 +101,7 @@ Keep the license, copyright, and dependency notices. Provide corresponding sourc
 for the version you distribute, including its changes and necessary build scripts.
 A modified version used over a network must prominently offer its corresponding
 source, without charge, to users interacting with it. Preserve a working source
-offer when changing the UI, and update `Repository` in `license.go` to your own
+offer when changing the UI, and update `Repository` in `legal.go` to your own
 public source repository and embed the actual modified commit. The source links
 must lead to your running version, not the original project's unchanged code.
 

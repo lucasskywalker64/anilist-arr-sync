@@ -16,6 +16,7 @@ and your existing download and library settings stay under your control.
 | [Installation](#install-and-run)
 | [Features](#features)
 | [Report a problem](https://github.com/lucasskywalker64/anilist-arr-sync/issues)
+| [Privacy](PRIVACY.md)
 
 [![Dashboard overview showing synchronization status, review queue, and staged actions](.github/images/dashboard.png)](.github/images/dashboard.png)
 
