@@ -321,6 +321,14 @@ build date. The trusted Minisign public-key line is supplied with
 `-X main.updatePublicKey=PUBLIC_KEY_LINE`; private signing material is not a build
 input to the application.
 
+## Credits
+
+- [Fribb/anime-lists](https://github.com/Fribb/anime-lists) for community anime
+  ID mappings used to match AniList entries with TVDB and TMDB.
+- [AniList](https://anilist.co/) for the GraphQL API and anime metadata.
+- [Sonarr](https://sonarr.tv/) and [Radarr](https://radarr.video/) for media
+  management APIs and Servarr interface conventions.
+
 ## License and source
 
 Copyright (C) 2026 AniList-Arr-Sync contributors. The project's original code is

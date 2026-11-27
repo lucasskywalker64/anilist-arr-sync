@@ -33,7 +33,7 @@ the browser's site-data controls.
 | Destination                                     | Purpose and information involved                                                                                                     |
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | AniList                                         | Query the configured username's anime lists and media metadata through its API.                                                      |
-| GitHub Raw, Fribb anime-lists                   | Download community mappings used to match titles across services.                                                                    |
+| GitHub Raw, [Fribb/anime-lists](https://github.com/Fribb/anime-lists) | Download community mappings used to match titles across services.                                                                    |
 | Configured Sonarr and Radarr servers            | Read library and profile data and apply synchronization choices using the configured API credentials.                                |
 | Configured Discord or generic webhook endpoints | Send selected notifications, which can include titles, media identifiers, synchronization results, and error details.                |
 | GitHub API and release hosting                  | Discover releases and fetch update metadata and assets when update checks or installation are requested or enabled.                  |
