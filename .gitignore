@@ -15,8 +15,9 @@
 /packaging/node_modules/
 /packaging/__pycache__/
 
-# Local editor settings
+# Local editor settings and scratch notes
 /.vscode/
+/docs/scratch/
 
 # OS generated files
 .DS_Store
